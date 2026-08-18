@@ -1,0 +1,143 @@
+name: Vercel production candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Prepare a review artifact or deploy an approved artifact
+        required: true
+        default: prepare
+        type: choice
+        options:
+          - prepare
+          - deploy
+      reviewed_commit_sha:
+        description: Exact independently reviewed main commit
+        required: true
+        type: string
+      candidate_manifest_sha256:
+        description: Exact independently reviewed candidate manifest SHA-256
+        required: true
+        type: string
+      prepared_run_id:
+        description: Prepare workflow run ID (required only for deploy)
+        required: false
+        type: string
+      prebuilt_artifact_manifest_sha256:
+        description: Reviewed prebuilt artifact SHA-256 (required only for deploy)
+        required: false
+        type: string
+      target_fingerprint:
+        description: Approved non-secret target fingerprint (required only for deploy)
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  production-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out reviewed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.reviewed_commit_sha }}
+          fetch-depth: 0
+
+      - name: Validate reviewed inputs
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+          PREBUILT_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
+          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
+        run: |
+          set -euo pipefail
+          [[ "$REVIEWED_COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$REVIEWED_COMMIT_SHA" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor HEAD origin/main
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          if [[ "$OPERATION" == "deploy" ]]; then
+            [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$PREBUILT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+            [[ "$TARGET_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]]
+          fi
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@58.9.2
+
+      - name: Prepare reviewed prebuilt artifact
+        if: inputs.operation == 'prepare'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          FLIGHT_MAP_APPROVED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          FLIGHT_MAP_DEPLOY_PREPARE_ONLY: "true"
+        run: npm run deploy:production
+
+      - name: Upload artifact for independent review
+        if: inputs.operation == 'prepare'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vercel-prebuilt-${{ inputs.reviewed_commit_sha }}
+          path: |
+            .vercel/output/**
+            artifacts/release-evidence/airport-catalog/candidate-*.json
+            artifacts/release-evidence/vercel-prebuilt-artifact/manifest-*.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Download independently reviewed artifact
+        if: inputs.operation == 'deploy'
+        uses: actions/download-artifact@v4
+        with:
+          name: vercel-prebuilt-${{ inputs.reviewed_commit_sha }}
+          path: .
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.prepared_run_id }}
+
+      - name: Restore fixed Vercel project linkage
+        if: inputs.operation == 'deploy'
+        shell: bash
+        run: |
+          mkdir -p .vercel
+          printf '%s\n' '{"projectId":"prj_1XEu7EWNl1Eekl3TKQ6FnKnGznv8","orgId":"team_qymLK9gugmE5lSs2mxC5XqRY"}' > .vercel/project.json
+
+      - name: Deploy exact immutable production candidate
+        if: inputs.operation == 'deploy'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          FLIGHT_MAP_APPROVED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          FLIGHT_MAP_APPROVED_PREBUILT_ARTIFACT_MANIFEST_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
+          FLIGHT_MAP_TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
+          FLIGHT_MAP_USE_EXISTING_PREBUILT: "true"
+        run: npm run deploy:production
+
+      - name: Upload redacted deployment evidence
+        if: inputs.operation == 'deploy'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vercel-production-candidate-evidence
+          path: |
+            artifacts/release-evidence/vercel-deployment/production-candidate-*.json
+            data/private/release-approvals/vercel-provider-expectation-*.json
+          if-no-files-found: error
+          retention-days: 14

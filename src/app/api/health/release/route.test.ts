@@ -10,7 +10,8 @@ import { GET } from "./route";
 
 const challenge = "c".repeat(43);
 const runtime = {
-  schemaVersion: 4,
+  schemaVersion: 5,
+  deploymentMethod: "vercel-cli-prebuilt",
   releasePhase: "control-plane",
   deploymentId: "dpl_12345678",
   deploymentUrl: "https://candidate.vercel.app",
@@ -20,8 +21,8 @@ const runtime = {
   targetEnvironment: "production",
   gitProvider: "github",
   gitRepoOwner: "giffdev",
-  gitRepoName: "flight-map",
-  gitRepoId: "123456",
+  gitRepoName: "waypointer",
+  gitRepoId: "1338617639",
   gitCommitRef: "main",
   gitCommitSha: "0".repeat(40),
   sourceManifestSha256: "1".repeat(64),

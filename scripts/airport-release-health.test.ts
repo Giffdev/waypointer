@@ -31,8 +31,9 @@ const expectedCodes: Record<string, string> = {
 function expectationFixture(): ProviderReleaseExpectation {
   const fileContents = "{}\n";
   const core = {
-    schemaVersion: 4 as const,
-    proofMode: "vercel-api-source-and-oidc" as const,
+    schemaVersion: 5 as const,
+    proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
+    deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
     projectId: RELEASE_DEPLOYMENT_TRUST.projectId,
     orgId: RELEASE_DEPLOYMENT_TRUST.orgId,
@@ -43,17 +44,21 @@ function expectationFixture(): ProviderReleaseExpectation {
     releasePhase: "database-released" as const,
     deploymentId: "dpl_12345678",
     deploymentUrl: "https://flight-map-abc123.vercel.app",
-    gitSource: {
+    priorAliasDeploymentId: "dpl_87654321",
+    sourceCommit: {
       type: "github" as const,
       owner: RELEASE_DEPLOYMENT_TRUST.gitRepoOwner,
       repo: RELEASE_DEPLOYMENT_TRUST.gitRepoName,
-      repoId: "123456",
+      repoId: RELEASE_DEPLOYMENT_TRUST.gitRepoId,
       ref: "main",
       commitSha: "0".repeat(40),
     },
     sourceManifestSha256: "1".repeat(64),
     deploymentSource: {
       manifestSha256: "2".repeat(64),
+    },
+    prebuiltArtifact: {
+      manifestSha256: "a".repeat(64),
       files: [
         {
           path: "package.json",
@@ -89,12 +94,13 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
     VERCEL_URL: new URL(expectation.deploymentUrl).hostname,
     VERCEL_PROJECT_ID: expectation.projectId,
     VERCEL_PROJECT_PRODUCTION_URL: expectation.productionAlias,
-    VERCEL_GIT_PROVIDER: "github",
-    VERCEL_GIT_REPO_OWNER: expectation.gitSource.owner,
-    VERCEL_GIT_REPO_SLUG: expectation.gitSource.repo,
-    VERCEL_GIT_REPO_ID: expectation.gitSource.repoId,
-    VERCEL_GIT_COMMIT_REF: expectation.gitSource.ref,
-    VERCEL_GIT_COMMIT_SHA: expectation.gitSource.commitSha,
+    FLIGHT_MAP_DEPLOYMENT_METHOD: expectation.deploymentMethod,
+    FLIGHT_MAP_GIT_PROVIDER: "github",
+    FLIGHT_MAP_GIT_REPO_OWNER: expectation.sourceCommit.owner,
+    FLIGHT_MAP_GIT_REPO_NAME: expectation.sourceCommit.repo,
+    FLIGHT_MAP_GIT_REPO_ID: expectation.sourceCommit.repoId,
+    FLIGHT_MAP_GIT_COMMIT_REF: expectation.sourceCommit.ref,
+    FLIGHT_MAP_GIT_COMMIT_SHA: expectation.sourceCommit.commitSha,
     FLIGHT_MAP_RELEASE_PHASE: "database-released",
     FLIGHT_MAP_SOURCE_MANIFEST_SHA256:
       expectation.sourceManifestSha256,
@@ -131,7 +137,7 @@ function providerFetchFor(expectation: ProviderReleaseExpectation) {
         {
           name: "package.json",
           type: "file",
-          uid: expectation.deploymentSource.files[0]!.sha1,
+          uid: expectation.prebuiltArtifact.files[0]!.sha1,
           mode: 33188,
         },
       ]);
@@ -149,14 +155,7 @@ function providerFetchFor(expectation: ProviderReleaseExpectation) {
       target: "production",
       readyState: "READY",
       aliases: [expectation.productionAlias],
-      gitSource: {
-        type: "github",
-        org: expectation.gitSource.owner,
-        repo: expectation.gitSource.repo,
-        repoId: Number(expectation.gitSource.repoId),
-        ref: expectation.gitSource.ref,
-        sha: expectation.gitSource.commitSha,
-      },
+      gitSource: null,
     });
   });
 }

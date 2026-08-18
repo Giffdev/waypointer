@@ -2,6 +2,8 @@ import Link from "next/link";
 import { AuthShell } from "@/components/auth/auth-shell";
 import { FirebaseRedirectHandler } from "@/components/auth/firebase-redirect-handler";
 
+export const dynamic = "force-dynamic";
+
 export default function FirebaseCallbackPage() {
   return (
     <AuthShell

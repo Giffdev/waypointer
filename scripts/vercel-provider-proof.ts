@@ -14,10 +14,10 @@ import {
 import {
   canonicalJson,
   sha256Bytes,
-  type CandidateFileEntry,
 } from "./airport-release-provenance.ts";
 import { requireRepositoryPath } from "./airport-release-safety.ts";
 import { AirportCatalogSafetyError } from "./postgres-diagnostics.ts";
+import type { VercelPrebuiltArtifactFile } from "./vercel-prebuilt-artifact.ts";
 
 export const RELEASE_DEPLOYMENT_TRUST = {
   platform: "vercel",
@@ -30,6 +30,8 @@ export const RELEASE_DEPLOYMENT_TRUST = {
   gitProvider: "github",
   gitRepoOwner: "giffdev",
   gitRepoName: "waypointer",
+  gitRepoId: "1338617639",
+  gitRef: "main",
 } as const;
 
 const PROVIDER_QUERY_MAX_MS = 5 * 60 * 1_000;
@@ -43,8 +45,9 @@ const OIDC_JWKS = createRemoteJWKSet(
 );
 
 export interface ProviderReleaseExpectation {
-  schemaVersion: 4;
-  proofMode: "vercel-api-source-and-oidc";
+  schemaVersion: 5;
+  proofMode: "vercel-cli-prebuilt-provider-oidc-alias";
+  deploymentMethod: "vercel-cli-prebuilt";
   platform: "vercel";
   projectId: string;
   orgId: string;
@@ -55,7 +58,8 @@ export interface ProviderReleaseExpectation {
   releasePhase: ReleasePhase;
   deploymentId: string;
   deploymentUrl: string;
-  gitSource: {
+  priorAliasDeploymentId: string;
+  sourceCommit: {
     type: "github";
     owner: string;
     repo: string;
@@ -66,7 +70,10 @@ export interface ProviderReleaseExpectation {
   sourceManifestSha256: string;
   deploymentSource: {
     manifestSha256: string;
-    files: CandidateFileEntry[];
+  };
+  prebuiltArtifact: {
+    manifestSha256: string;
+    files: readonly VercelPrebuiltArtifactFile[];
   };
   candidateManifestSha256: string;
   approvedAirportCandidateSha256: string;
@@ -223,7 +230,9 @@ export function providerReleaseExpectationSha256(
   return sha256Bytes(canonicalJson(expectation));
 }
 
-function validateDeploymentSourceFiles(files: CandidateFileEntry[]): void {
+function validateDeploymentSourceFiles(
+  files: readonly VercelPrebuiltArtifactFile[],
+): void {
   if (
     files.length === 0 ||
     files.some(
@@ -253,10 +262,12 @@ function validateExpectation(
   const hasDatabaseEvidence =
     validSha256(expectation.catalogChecksum) &&
     validSha256(expectation.databaseEvidenceSha256);
-  validateDeploymentSourceFiles(expectation.deploymentSource?.files ?? []);
+  validateDeploymentSourceFiles(expectation.prebuiltArtifact?.files ?? []);
   if (
-    expectation.schemaVersion !== 4 ||
-    expectation.proofMode !== "vercel-api-source-and-oidc" ||
+    expectation.schemaVersion !== 5 ||
+    expectation.proofMode !==
+      "vercel-cli-prebuilt-provider-oidc-alias" ||
+    expectation.deploymentMethod !== "vercel-cli-prebuilt" ||
     expectation.platform !== RELEASE_DEPLOYMENT_TRUST.platform ||
     expectation.projectId !== RELEASE_DEPLOYMENT_TRUST.projectId ||
     expectation.orgId !== RELEASE_DEPLOYMENT_TRUST.orgId ||
@@ -268,17 +279,23 @@ function validateExpectation(
     expectation.releasePhase !== requiredPhase ||
     !/^dpl_[A-Za-z0-9]{8,256}$/.test(expectation.deploymentId) ||
     !validDeploymentUrl(expectation.deploymentUrl) ||
-    expectation.gitSource?.type !==
+    !/^dpl_[A-Za-z0-9]{8,256}$/.test(
+      expectation.priorAliasDeploymentId,
+    ) ||
+    expectation.priorAliasDeploymentId === expectation.deploymentId ||
+    expectation.sourceCommit?.type !==
       RELEASE_DEPLOYMENT_TRUST.gitProvider ||
-    expectation.gitSource.owner !==
+    expectation.sourceCommit.owner !==
       RELEASE_DEPLOYMENT_TRUST.gitRepoOwner ||
-    expectation.gitSource.repo !==
+    expectation.sourceCommit.repo !==
       RELEASE_DEPLOYMENT_TRUST.gitRepoName ||
-    !/^[A-Za-z0-9_.:-]{1,128}$/.test(expectation.gitSource.repoId) ||
-    !/^[A-Za-z0-9._/-]{1,256}$/.test(expectation.gitSource.ref) ||
-    !validCommitSha(expectation.gitSource.commitSha) ||
+    expectation.sourceCommit.repoId !==
+      RELEASE_DEPLOYMENT_TRUST.gitRepoId ||
+    expectation.sourceCommit.ref !== RELEASE_DEPLOYMENT_TRUST.gitRef ||
+    !validCommitSha(expectation.sourceCommit.commitSha) ||
     !validSha256(expectation.sourceManifestSha256) ||
     !validSha256(expectation.deploymentSource.manifestSha256) ||
+    !validSha256(expectation.prebuiltArtifact.manifestSha256) ||
     !validSha256(expectation.candidateManifestSha256) ||
     !validSha256(expectation.approvedAirportCandidateSha256) ||
     !validSha256(expectation.targetFingerprint) ||
@@ -399,7 +416,7 @@ function verifyProviderSource(
   const providerFiles = flattenProviderFileTree(entries).sort((left, right) =>
     left.path.localeCompare(right.path),
   );
-  const expectedFiles = expectation.deploymentSource.files;
+  const expectedFiles = expectation.prebuiltArtifact.files;
   if (
     providerFiles.length !== expectedFiles.length ||
     providerFiles.some(
@@ -418,24 +435,11 @@ function verifyProviderSource(
   );
 }
 
-function sameGitSource(
-  actual: VercelDeploymentResponse["gitSource"],
-  expected: ProviderReleaseExpectation["gitSource"],
-): boolean {
-  return Boolean(
-    actual?.type === expected.type &&
-      actual.org === expected.owner &&
-      actual.repo === expected.repo &&
-      String(actual.repoId ?? "") === expected.repoId &&
-      actual.ref === expected.ref &&
-      actual.sha?.toLowerCase() === expected.commitSha,
-  );
-}
-
 export async function verifyVercelProductionDeployment(
   expectation: ProviderReleaseExpectation,
   token: string,
   fetchImplementation: typeof fetch,
+  aliasMode: "immutable-candidate" | "production-alias" = "production-alias",
 ): Promise<ProviderDeploymentVerification> {
   validateExpectation(expectation, expectation.releasePhase);
   const deploymentUrl = deploymentOrigin(expectation);
@@ -516,6 +520,10 @@ export async function verifyVercelProductionDeployment(
   const aliasAfter =
     await providerRequest<VercelAliasResponse>(aliasUrl);
   const aliases = deployment.aliases ?? deployment.alias ?? [];
+  const expectedAliasDeploymentId =
+    aliasMode === "production-alias"
+      ? expectation.deploymentId
+      : expectation.priorAliasDeploymentId;
   const sameDeployment =
     deploymentByHost.id === deployment.id &&
     deploymentByHost.projectId === deployment.projectId &&
@@ -523,12 +531,12 @@ export async function verifyVercelProductionDeployment(
     deploymentByHost.url === deployment.url &&
     deploymentByHost.target === deployment.target &&
     deploymentByHost.readyState === deployment.readyState &&
-    sameGitSource(deploymentByHost.gitSource, expectation.gitSource);
+    deploymentByHost.gitSource == null;
   if (
     aliasBefore.alias !== expectation.productionAlias ||
     aliasAfter.alias !== expectation.productionAlias ||
-    aliasBefore.deploymentId !== expectation.deploymentId ||
-    aliasAfter.deploymentId !== expectation.deploymentId ||
+    aliasBefore.deploymentId !== expectedAliasDeploymentId ||
+    aliasAfter.deploymentId !== expectedAliasDeploymentId ||
     aliasBefore.projectId !== RELEASE_DEPLOYMENT_TRUST.projectId ||
     aliasAfter.projectId !== RELEASE_DEPLOYMENT_TRUST.projectId ||
     aliasBefore.redirect != null ||
@@ -544,9 +552,10 @@ export async function verifyVercelProductionDeployment(
     deployment.target !== RELEASE_DEPLOYMENT_TRUST.environment ||
     deployment.readyState !== "READY" ||
     deployment.url !== deploymentUrl.hostname ||
-    !aliases.includes(expectation.productionAlias) ||
+    (aliasMode === "production-alias") !==
+      aliases.includes(expectation.productionAlias) ||
     !sameDeployment ||
-    !sameGitSource(deployment.gitSource, expectation.gitSource)
+    deployment.gitSource != null
   ) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
@@ -567,7 +576,8 @@ export async function verifyVercelProductionDeployment(
     deploymentId: deployment.id,
     deploymentUrl: deploymentUrl.origin,
     environment: deployment.target,
-    gitSource: expectation.gitSource,
+    aliasMode,
+    sourceCommit: expectation.sourceCommit,
     orgId: deployment.ownerId,
     projectId: deployment.projectId,
     projectName: deployment.name,
@@ -581,7 +591,7 @@ export async function verifyVercelProductionDeployment(
     deploymentOrigin: deploymentUrl,
     aliasOrigin,
     deploymentId: expectation.deploymentId,
-    commitSha: expectation.gitSource.commitSha,
+    commitSha: expectation.sourceCommit.commitSha,
     providerSourceSha256,
     requestStartedAt,
     requestCompletedAt,
@@ -652,7 +662,8 @@ function runtimeClaimsMatch(
   expectation: ProviderReleaseExpectation,
 ): boolean {
   return Boolean(
-    claims.schemaVersion === 4 &&
+    claims.schemaVersion === 5 &&
+      claims.deploymentMethod === expectation.deploymentMethod &&
       releaseRuntimeClaimsSha256(
         Object.fromEntries(
           Object.entries(claims).filter(
@@ -667,12 +678,12 @@ function runtimeClaimsMatch(
       claims.productionUrl === expectation.productionAlias &&
       claims.environment === expectation.environment &&
       claims.targetEnvironment === expectation.environment &&
-      claims.gitProvider === expectation.gitSource.type &&
-      claims.gitRepoOwner === expectation.gitSource.owner &&
-      claims.gitRepoName === expectation.gitSource.repo &&
-      claims.gitRepoId === expectation.gitSource.repoId &&
-      claims.gitCommitRef === expectation.gitSource.ref &&
-      claims.gitCommitSha === expectation.gitSource.commitSha &&
+      claims.gitProvider === expectation.sourceCommit.type &&
+      claims.gitRepoOwner === expectation.sourceCommit.owner &&
+      claims.gitRepoName === expectation.sourceCommit.repo &&
+      claims.gitRepoId === expectation.sourceCommit.repoId &&
+      claims.gitCommitRef === expectation.sourceCommit.ref &&
+      claims.gitCommitSha === expectation.sourceCommit.commitSha &&
       claims.sourceManifestSha256 === expectation.sourceManifestSha256 &&
       claims.deploymentSourceManifestSha256 ===
         expectation.deploymentSource.manifestSha256 &&
@@ -690,10 +701,11 @@ function runtimeClaimsMatch(
   );
 }
 
-export async function verifyReleaseEndpoint(
+async function verifyReleaseEndpointAtOrigin(
   expectation: ProviderReleaseExpectation,
   sessionCookie: string,
   options: ReleaseEndpointOptions,
+  aliasMode: "immutable-candidate" | "production-alias",
 ): Promise<ReleaseEndpointEvidence> {
   validateExpectation(expectation, expectation.releasePhase);
   if (!validHealthSessionCookie(sessionCookie)) {
@@ -703,6 +715,7 @@ export async function verifyReleaseEndpoint(
     expectation,
     options.vercelApiToken,
     options.providerFetch ?? fetch,
+    aliasMode,
   );
   const challenge =
     options.challenge ?? randomBytes(32).toString("base64url");
@@ -710,14 +723,18 @@ export async function verifyReleaseEndpoint(
     throw new AirportCatalogSafetyError("health-check-failed");
   }
   const fetchImplementation = options.applicationFetch ?? fetch;
-  const releaseUrl = new URL("/api/health/release", verified.aliasOrigin);
+  const releaseOrigin =
+    aliasMode === "production-alias"
+      ? verified.aliasOrigin
+      : verified.deploymentOrigin;
+  const releaseUrl = new URL("/api/health/release", releaseOrigin);
   releaseUrl.searchParams.set("challenge", challenge);
   const releaseResponse = await fetchImplementation(releaseUrl, {
     redirect: "manual",
     cache: "no-store",
     headers: {
       cookie: sessionCookie,
-      origin: verified.aliasOrigin.origin,
+      origin: releaseOrigin.origin,
       "cache-control": "no-cache, no-store",
       pragma: "no-cache",
     },
@@ -752,6 +769,7 @@ export async function verifyReleaseEndpoint(
     expectation,
     options.vercelApiToken,
     options.providerFetch ?? fetch,
+    aliasMode,
   );
   if (
     verifiedAfter.deploymentId !== verified.deploymentId ||
@@ -767,9 +785,9 @@ export async function verifyReleaseEndpoint(
     status: releasePayload.status,
   };
   return {
-    origin: verified.aliasOrigin.origin,
+    origin: releaseOrigin.origin,
     deploymentId: expectation.deploymentId,
-    commitSha: expectation.gitSource.commitSha,
+    commitSha: expectation.sourceCommit.commitSha,
     sourceManifestSha256: expectation.sourceManifestSha256,
     deploymentSourceManifestSha256:
       expectation.deploymentSource.manifestSha256,
@@ -777,7 +795,10 @@ export async function verifyReleaseEndpoint(
     approvedAirportCandidateSha256:
       expectation.approvedAirportCandidateSha256,
     productionAlias: expectation.productionAlias,
-    aliasDeploymentId: verifiedAfter.deploymentId,
+    aliasDeploymentId:
+      aliasMode === "production-alias"
+        ? verifiedAfter.deploymentId
+        : expectation.priorAliasDeploymentId,
     expectationSha256: expectation.expectationSha256,
     runtimeClaimsSha256: releasePayload.runtime.runtimeClaimsSha256,
     providerSourceSha256: verified.providerSourceSha256,
@@ -797,4 +818,30 @@ export async function verifyReleaseEndpoint(
     responseSha256: sha256Bytes(canonicalJson(responseRecord)),
     verifiedAt: new Date().toISOString(),
   };
+}
+
+export async function verifyImmutableReleaseCandidate(
+  expectation: ProviderReleaseExpectation,
+  sessionCookie: string,
+  options: ReleaseEndpointOptions,
+): Promise<ReleaseEndpointEvidence> {
+  return verifyReleaseEndpointAtOrigin(
+    expectation,
+    sessionCookie,
+    options,
+    "immutable-candidate",
+  );
+}
+
+export async function verifyReleaseEndpoint(
+  expectation: ProviderReleaseExpectation,
+  sessionCookie: string,
+  options: ReleaseEndpointOptions,
+): Promise<ReleaseEndpointEvidence> {
+  return verifyReleaseEndpointAtOrigin(
+    expectation,
+    sessionCookie,
+    options,
+    "production-alias",
+  );
 }

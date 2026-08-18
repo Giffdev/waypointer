@@ -108,10 +108,11 @@ referenced by product/deployment files. `npm run deploy:preview` additionally
 runs `check:preview-config`, which audits the linked Vercel environment and
 Vercel SSO/password settings before deployment.
 
-Never use bare `vercel` or `vercel deploy` for this project. This checkout has
-no Git branch metadata, and a bare deployment can target Production. Production
-does not intentionally contain preview credentials, so such a build will fail
-closed.
+Never use bare `vercel` or `vercel deploy` for this project. Production
+candidates use `npm run deploy:production`, which verifies the clean private
+Git commit, exact local Vercel project/team, write pause, reviewed source and
+prebuilt artifact hashes, then runs `vercel deploy --prebuilt --prod
+--skip-domain`. Vercel Git integration is not required.
 
 For the hosted preview, credentials registration requires an HTTPS
 `AUTH_URL`, `FLIGHT_MAP_HOSTED_PREVIEW=true`,
@@ -203,34 +204,76 @@ same-origin `/api/health/release` endpoint returns 503 unless the live
 connection confirms `default_transaction_read_only=on`.
 
 No repository signing key is used. Deploy from a clean, externally reviewed
-Git commit using the Vercel CLI/API source-file upload path. `.vercelignore`
-is an allowlist for the exact build source. The candidate contains both the
-complete repository manifest and a separate Vercel upload manifest with every
-path, byte length, SHA-1 upload UID, and SHA-256 review digest.
+`Giffdev/waypointer` `main` commit using the authenticated Vercel CLI prebuilt
+path. `.vercel/project.json` must identify project
+`prj_1XEu7EWNl1Eekl3TKQ6FnKnGznv8` and team
+`team_qymLK9gugmE5lSs2mxC5XqRY`; Vercel Git repository linkage is neither
+required nor trusted. The candidate contains the complete repository and
+deployment-source manifests. A separate content-addressed prebuilt manifest
+records every exact `.vercel/output` upload path, byte length, SHA-1 upload
+UID, and SHA-256 review digest.
 
 Enable Vercel system environment variables and Secure Backend Access with OIDC.
 The authenticated release endpoint requests a Vercel-signed OIDC token whose
 audience contains the operator's one-time challenge. The operator validates
 Vercel's JWKS signature, issuer, audience, subject, team, project, and
-Production environment. Runtime `VERCEL_DEPLOYMENT_ID`, project, URL, Git
-repository/ref/commit, and release claims are corroborating evidence only.
+Production environment. Runtime `VERCEL_DEPLOYMENT_ID`, project, and URL are
+provider claims. Git repository/ref/commit provenance comes only from explicit
+deployment-scoped `FLIGHT_MAP_GIT_*` values derived from the verified clean
+checkout.
 
-After deployment, create a maximum-30-minute provider expectation from the
-clean checkout:
+Prepare the exact artifact without deploying:
 
 ```powershell
-$env:AIRPORT_RELEASE_DEPLOYMENT_ID = "<dpl_...>"
-$env:AIRPORT_RELEASE_DEPLOYMENT_URL = "https://<immutable-host>.vercel.app"
-$env:AIRPORT_RELEASE_GIT_REPO_ID = "<GitHub repository ID>"
-npm run db:airport-provider-expectation
+$fingerprint = (& node .\node_modules\tsx\dist\cli.mjs .\scripts\print-airport-target-fingerprint.ts).Trim()
+$env:FLIGHT_MAP_TARGET_FINGERPRINT = $fingerprint
+Remove-Variable fingerprint
+
+$env:FLIGHT_MAP_APPROVED_COMMIT_SHA = "<reviewed-commit>"
+$env:AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256 = "<reviewed-candidate-hash>"
+$env:FLIGHT_MAP_DEPLOY_PREPARE_ONLY = "true"
+npm run deploy:production
 ```
 
-The expectation is not a signature or provider attestation. It records the
-externally pinned commit, exact reviewed source UIDs, deployment/project/team,
-target, alias, and release hashes. Every privileged gate re-queries Vercel by
-alias, deployment ID, immutable hostname, and source-file tree. Missing source
-files, extra uploaded inputs, Git/source substitution, provider API failure,
-redirects, Preview, or alias drift fail closed.
+The fingerprint command uses session-only `MIGRATION_DATABASE_URL` to derive
+only the approved non-secret target fingerprint. It does not connect to the
+database. Every Vercel child process removes `MIGRATION_DATABASE_URL` and other
+database credentials. Independently review the emitted candidate and prebuilt
+manifest. Then deploy those exact existing bytes from the same clean checkout:
+
+```powershell
+Remove-Item Env:FLIGHT_MAP_DEPLOY_PREPARE_ONLY
+$env:FLIGHT_MAP_USE_EXISTING_PREBUILT = "true"
+$env:FLIGHT_MAP_APPROVED_PREBUILT_ARTIFACT_MANIFEST_SHA256 = "<reviewed-prebuilt-hash>"
+npm run deploy:production
+```
+
+The wrapper creates a Production-targeted immutable deployment with
+`--skip-domain`; it does not change `flight-map-one.vercel.app`. It writes a
+maximum-30-minute provider expectation that binds the commit, source hashes,
+prebuilt file tree, project/team, deployment ID, immutable URL, prior alias
+owner, release claims, and write pause. Verify the immutable URL before
+promotion, then promote through the fail-closed wrapper:
+
+```powershell
+$env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_PATH = "data/private/release-approvals/vercel-provider-expectation-<hash>.json"
+$env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_SHA256 = "<file-hash>"
+$env:AIRPORT_RELEASE_HEALTH_SESSION_COOKIE = "<ephemeral-cookie>"
+npm run verify:production-candidate
+npm run promote:production
+```
+
+Promotion repeats provider file-tree and OIDC health checks after assigning
+the alias, verifies public registration and sign-in routes, and restores the
+prior alias if any post-promotion check fails. Missing or extra prebuilt files,
+unexpected provider `gitSource`, source substitution, provider API failure,
+redirects, Preview, or alias drift fail closed. The manual
+`.github/workflows/vercel-deploy.yml` uses the same reviewed commit, candidate,
+prebuilt-artifact hash, project/team, and `VERCEL_TOKEN` secret; it has no
+automatic trigger. Its `prepare` operation uploads `.vercel/output` for
+independent review. A later `deploy` operation requires that prepare run ID and
+the reviewed artifact hash, downloads those exact bytes, and never rebuilds
+them.
 
 After that exact Production deployment is Ready, create and independently
 verify the provider snapshot. Store only non-secret snapshot/target metadata
@@ -248,9 +291,9 @@ $env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_SHA256 = "<file-hash>"
 ```
 
 Preparation makes uncached Vercel alias and deployment-by-ID/URL queries before
-sending the health cookie, verifies the exact provider source-file UIDs and
+sending the health cookie, verifies the exact provider prebuilt-file UIDs and
 challenge-bound Vercel OIDC identity, queries the alias again, rejects
-redirects, Preview, alias drift, replacement, and project/team/Git/source
+redirects, Preview, alias drift, replacement, and project/team/source
 mismatches, confirms the runtime pause, then verifies target name/OID, ledger,
 and snapshot fingerprint. It emits redacted content-addressed preflight and
 target/snapshot approval artifacts. The preflight is context only and never
@@ -304,7 +347,7 @@ serializable transaction. Any migration, seed, reconciliation, audit, checksum,
 or failure-injection error rolls back the entire database operation. The
 content-addressed evidence file is written only after commit and is never
 overwritten. It never trusts the cached preflight: uncached provider/alias,
-source-tree, OIDC, and write-pause checks run before opening the database
+prebuilt-tree, OIDC, and write-pause checks run before opening the database
 client, immediately before the first transactional write, immediately before
 commit, and immediately after commit. Alias drift rolls back when detected
 before commit and blocks promotion/forces the approved restore path if detected
@@ -333,7 +376,7 @@ exact deployment to `flight-map-one.vercel.app`, obtain a
 content-addressed provider expectation under
 `data/private/release-approvals/`. Generate it from the same clean pinned Git
 checkout after deployment. It binds the expected deployment ID/URL, exact
-Vercel source-file UIDs, candidate manifest, target fingerprint, migration
+Vercel prebuilt-file UIDs, candidate manifest, target fingerprint, migration
 manifest, catalog checksum, database evidence, and active write pause. Configure
 the expectation and an ephemeral dedicated health-account session:
 
@@ -379,7 +422,7 @@ Then configure Production:
 - `DB_POOL_MAX=1`
 - `FLIGHT_MAP_RELEASE_PHASE=database-released`
 - `FLIGHT_MAP_SOURCE_MANIFEST_SHA256=<full source-manifest digest>`
-- `FLIGHT_MAP_DEPLOYMENT_SOURCE_MANIFEST_SHA256=<reviewed Vercel upload-manifest digest>`
+- `FLIGHT_MAP_DEPLOYMENT_SOURCE_MANIFEST_SHA256=<reviewed deployment-source manifest digest>`
 - `FLIGHT_MAP_CANDIDATE_MANIFEST_SHA256=<reviewed candidate digest>`
 - `FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256=12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3`
 - `FLIGHT_MAP_TARGET_FINGERPRINT=<approved database target digest>`
@@ -414,10 +457,13 @@ Run:
 ```powershell
 npm run check
 npm run check:production-config
-npx vercel --prod --yes
+npm run deploy:production
 ```
 
-Do not assume a GitHub push deployed production. Record the resulting project ownership and URLs here, without tokens or credentials.
-
-A manual `workflow_dispatch` deployment workflow may be added later. Its token
-must be stored as a GitHub Actions secret, never committed.
+`deploy:production` creates an immutable Production candidate with
+`--skip-domain`; it does not promote the public alias. Run
+`verify:production-candidate`, then `promote:production` only after independent
+approval of the exact commit, candidate, and prebuilt manifest. The manual
+`workflow_dispatch` flow in `.github/workflows/vercel-deploy.yml` provides the
+same separate prepare and deploy operations. Its token is a GitHub Actions
+secret and is never committed.

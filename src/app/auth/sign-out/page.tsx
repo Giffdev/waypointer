@@ -1,5 +1,7 @@
 import { signOut } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+
 export default function SignOutPage() {
   return (
     <main className="app-shell" id="main-content">

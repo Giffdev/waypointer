@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 export type ReleasePhase = "control-plane" | "database-released";
 
 export interface ReleaseRuntimeClaims {
-  schemaVersion: 4;
+  schemaVersion: 5;
+  deploymentMethod: "vercel-cli-prebuilt";
   releasePhase: ReleasePhase;
   deploymentId: string;
   deploymentUrl: string;
@@ -96,7 +97,12 @@ export function releaseRuntimeClaimsFromEnvironment(
     /^[A-Za-z0-9.-]+\.vercel\.app$/,
   ).toLowerCase();
   const core = {
-    schemaVersion: 4 as const,
+    schemaVersion: 5 as const,
+    deploymentMethod: required(
+      environment,
+      "FLIGHT_MAP_DEPLOYMENT_METHOD",
+      /^vercel-cli-prebuilt$/,
+    ) as "vercel-cli-prebuilt",
     releasePhase,
     deploymentId: required(
       environment,
@@ -118,32 +124,32 @@ export function releaseRuntimeClaimsFromEnvironment(
     targetEnvironment: "production" as const,
     gitProvider: required(
       environment,
-      "VERCEL_GIT_PROVIDER",
+      "FLIGHT_MAP_GIT_PROVIDER",
       /^github$/,
     ) as "github",
     gitRepoOwner: required(
       environment,
-      "VERCEL_GIT_REPO_OWNER",
+      "FLIGHT_MAP_GIT_REPO_OWNER",
       /^[A-Za-z0-9_.-]{1,100}$/,
     ),
     gitRepoName: required(
       environment,
-      "VERCEL_GIT_REPO_SLUG",
+      "FLIGHT_MAP_GIT_REPO_NAME",
       /^[A-Za-z0-9_.-]{1,100}$/,
     ),
     gitRepoId: required(
       environment,
-      "VERCEL_GIT_REPO_ID",
+      "FLIGHT_MAP_GIT_REPO_ID",
       /^[A-Za-z0-9_.:-]{1,128}$/,
     ),
     gitCommitRef: required(
       environment,
-      "VERCEL_GIT_COMMIT_REF",
+      "FLIGHT_MAP_GIT_COMMIT_REF",
       /^[A-Za-z0-9._/-]{1,256}$/,
     ),
     gitCommitSha: required(
       environment,
-      "VERCEL_GIT_COMMIT_SHA",
+      "FLIGHT_MAP_GIT_COMMIT_SHA",
       /^[a-f0-9]{40}$/,
     ).toLowerCase(),
     sourceManifestSha256: required(

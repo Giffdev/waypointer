@@ -170,8 +170,6 @@ export async function prepareAirportProductionRelease(
     deployment.sourceManifestSha256 !== candidate.source.manifestSha256 ||
     deployment.deploymentSource.manifestSha256 !==
       candidate.deploymentSource.manifestSha256 ||
-    canonicalJson(deployment.deploymentSource.files) !==
-      canonicalJson(candidate.deploymentSource.files) ||
     deployment.approvedAirportCandidateSha256 !==
       approvedAirportCandidateSha256
   ) {
@@ -266,9 +264,9 @@ export async function prepareAirportProductionRelease(
         projectId: deployment.projectId,
         orgId: deployment.orgId,
         teamSlug: deployment.teamSlug,
-        commitSha: deployment.gitSource.commitSha,
-        gitRef: deployment.gitSource.ref,
-        gitRepoId: deployment.gitSource.repoId,
+        commitSha: deployment.sourceCommit.commitSha,
+        gitRef: deployment.sourceCommit.ref,
+        gitRepoId: deployment.sourceCommit.repoId,
         sourceManifestSha256: deployment.sourceManifestSha256,
         deploymentSourceManifestSha256:
           deployment.deploymentSource.manifestSha256,

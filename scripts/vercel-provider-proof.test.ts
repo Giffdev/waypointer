@@ -10,6 +10,7 @@ import {
   providerReleaseExpectationSha256,
   RELEASE_DEPLOYMENT_TRUST,
   type ProviderReleaseExpectation,
+  verifyImmutableReleaseCandidate,
   verifyReleaseEndpoint,
   verifyVercelOidcIdentity,
 } from "./vercel-provider-proof";
@@ -39,8 +40,9 @@ function expectationFixture(
   overrides: Partial<ProviderReleaseExpectation> = {},
 ): ProviderReleaseExpectation {
   const core = {
-    schemaVersion: 4 as const,
-    proofMode: "vercel-api-source-and-oidc" as const,
+    schemaVersion: 5 as const,
+    proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
+    deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
     projectId: RELEASE_DEPLOYMENT_TRUST.projectId,
     orgId: RELEASE_DEPLOYMENT_TRUST.orgId,
@@ -51,17 +53,21 @@ function expectationFixture(
     releasePhase: "database-released" as const,
     deploymentId: "dpl_12345678",
     deploymentUrl: "https://flight-map-abc123.vercel.app",
-    gitSource: {
+    priorAliasDeploymentId: "dpl_87654321",
+    sourceCommit: {
       type: "github" as const,
       owner: RELEASE_DEPLOYMENT_TRUST.gitRepoOwner,
       repo: RELEASE_DEPLOYMENT_TRUST.gitRepoName,
-      repoId: "123456",
+      repoId: RELEASE_DEPLOYMENT_TRUST.gitRepoId,
       ref: "main",
       commitSha: "0".repeat(40),
     },
     sourceManifestSha256: "1".repeat(64),
     deploymentSource: {
       manifestSha256: "2".repeat(64),
+    },
+    prebuiltArtifact: {
+      manifestSha256: "a".repeat(64),
       files,
     },
     candidateManifestSha256: "3".repeat(64),
@@ -105,12 +111,13 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
     VERCEL_URL: new URL(expectation.deploymentUrl).hostname,
     VERCEL_PROJECT_ID: expectation.projectId,
     VERCEL_PROJECT_PRODUCTION_URL: expectation.productionAlias,
-    VERCEL_GIT_PROVIDER: expectation.gitSource.type,
-    VERCEL_GIT_REPO_OWNER: expectation.gitSource.owner,
-    VERCEL_GIT_REPO_SLUG: expectation.gitSource.repo,
-    VERCEL_GIT_REPO_ID: expectation.gitSource.repoId,
-    VERCEL_GIT_COMMIT_REF: expectation.gitSource.ref,
-    VERCEL_GIT_COMMIT_SHA: expectation.gitSource.commitSha,
+    FLIGHT_MAP_DEPLOYMENT_METHOD: expectation.deploymentMethod,
+    FLIGHT_MAP_GIT_PROVIDER: expectation.sourceCommit.type,
+    FLIGHT_MAP_GIT_REPO_OWNER: expectation.sourceCommit.owner,
+    FLIGHT_MAP_GIT_REPO_NAME: expectation.sourceCommit.repo,
+    FLIGHT_MAP_GIT_REPO_ID: expectation.sourceCommit.repoId,
+    FLIGHT_MAP_GIT_COMMIT_REF: expectation.sourceCommit.ref,
+    FLIGHT_MAP_GIT_COMMIT_SHA: expectation.sourceCommit.commitSha,
     FLIGHT_MAP_RELEASE_PHASE: expectation.releasePhase,
     FLIGHT_MAP_SOURCE_MANIFEST_SHA256:
       expectation.sourceManifestSha256,
@@ -135,7 +142,7 @@ function providerFileTree(expectation: ProviderReleaseExpectation) {
     {
       name: "package.json",
       type: "file",
-      uid: expectation.deploymentSource.files[0]!.sha1,
+      uid: expectation.prebuiltArtifact.files[0]!.sha1,
       mode: 33188,
     },
     {
@@ -146,7 +153,7 @@ function providerFileTree(expectation: ProviderReleaseExpectation) {
         {
           name: "app.ts",
           type: "file",
-          uid: expectation.deploymentSource.files[1]!.sha1,
+          uid: expectation.prebuiltArtifact.files[1]!.sha1,
           mode: 33188,
         },
       ],
@@ -162,6 +169,7 @@ function providerFetchFor(
     hostDeploymentOverrides?: Record<string, unknown>;
     fileTree?: unknown;
     failPath?: string;
+    immutable?: boolean;
   } = {},
 ) {
   let aliasRequest = 0;
@@ -173,7 +181,9 @@ function providerFetchFor(
     if (url.pathname.startsWith("/v4/aliases/")) {
       const deploymentId =
         options.aliasDeploymentIds?.[aliasRequest] ??
-        expectation.deploymentId;
+        (options.immutable
+          ? expectation.priorAliasDeploymentId
+          : expectation.deploymentId);
       aliasRequest += 1;
       return Response.json({
         alias: expectation.productionAlias,
@@ -200,15 +210,8 @@ function providerFetchFor(
       },
       target: "production",
       readyState: "READY",
-      aliases: [expectation.productionAlias],
-      gitSource: {
-        type: expectation.gitSource.type,
-        org: expectation.gitSource.owner,
-        repo: expectation.gitSource.repo,
-        repoId: Number(expectation.gitSource.repoId),
-        ref: expectation.gitSource.ref,
-        sha: expectation.gitSource.commitSha,
-      },
+      aliases: options.immutable ? [] : [expectation.productionAlias],
+      gitSource: null,
     };
     const byHost = decodeURIComponent(url.pathname).includes(
       new URL(expectation.deploymentUrl).hostname,
@@ -353,6 +356,7 @@ describe("Vercel provider proof", () => {
       providerSourceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       oidcTokenSha256: "9".repeat(64),
     });
+
     expect(applicationFetch).toHaveBeenCalledTimes(1);
     const [input, init] = applicationFetch.mock.calls[0]!;
     expect(new URL(String(input)).origin).toBe(
@@ -361,9 +365,35 @@ describe("Vercel provider proof", () => {
     expect(init?.redirect).toBe("manual");
   });
 
+  it("verifies the immutable deployment while the production alias remains unchanged", async () => {
+    const expectation = expectationFixture();
+    const applicationFetch = applicationFetchFor(expectation);
+    await expect(
+      verifyImmutableReleaseCandidate(
+        expectation,
+        "__Secure-authjs.session-token=ephemeral-token-value",
+        {
+          vercelApiToken: "vercel-api-token-value",
+          providerFetch: providerFetchFor(expectation, {
+            immutable: true,
+          }) as typeof fetch,
+          applicationFetch: applicationFetch as typeof fetch,
+          oidcVerify: oidcEvidence,
+          challenge,
+        },
+      ),
+    ).resolves.toMatchObject({
+      origin: expectation.deploymentUrl,
+      aliasDeploymentId: expectation.priorAliasDeploymentId,
+    });
+    expect(
+      new URL(String(applicationFetch.mock.calls[0]![0])).origin,
+    ).toBe(expectation.deploymentUrl);
+  });
+
   it.each([
     [
-      "substituted commit",
+      "unexpected provider Git metadata",
       { deploymentOverrides: { gitSource: { sha: "f".repeat(40) } } },
     ],
     [
