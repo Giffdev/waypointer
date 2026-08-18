@@ -171,6 +171,10 @@ export function assertLinkedVercelProject(project: {
   }
 }
 
+export function validVercelEnvironmentId(value: string): boolean {
+  return /^[A-Za-z0-9_-]{8,256}$/u.test(value);
+}
+
 export async function runVercel(
   args: readonly string[],
   options: {
@@ -254,7 +258,7 @@ async function verifyWritePause(
   );
   if (
     matches.length !== 1 ||
-    !/^env_[A-Za-z0-9]{8,256}$/u.test(matches[0]?.id ?? "")
+    !validVercelEnvironmentId(matches[0]?.id ?? "")
   ) {
     throw new Error("Production write pause is not uniquely configured");
   }

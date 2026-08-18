@@ -7,6 +7,7 @@ import {
   parseVercelCliVersion,
   parseVercelPrebuiltDryRun,
   sanitizedDeploymentEnvironment,
+  validVercelEnvironmentId,
 } from "./deploy-production";
 
 describe("deploy-production", () => {
@@ -94,5 +95,11 @@ describe("deploy-production", () => {
         },
       ],
     });
+  });
+
+  it("accepts current opaque Vercel environment IDs", () => {
+    expect(validVercelEnvironmentId("aD29JHJ3otYaRJVq")).toBe(true);
+    expect(validVercelEnvironmentId("env_12345678")).toBe(true);
+    expect(validVercelEnvironmentId("../production")).toBe(false);
   });
 });
