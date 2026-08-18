@@ -7,20 +7,16 @@ import {
   writeContentAddressedJson,
 } from "./airport-release-provenance.ts";
 import {
+  sanitizedDeploymentEnvironment,
+  vercelCliProviderFetch,
+} from "./deploy-production.ts";
+import {
   loadProviderReleaseExpectation,
-  verifyImmutableReleaseCandidate,
-  verifyReleaseEndpoint,
+  verifyDeploymentEndpoint,
+  verifyImmutableDeploymentCandidate,
 } from "./vercel-provider-proof.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
-
-function required(environment: NodeJS.ProcessEnv, name: string): string {
-  const value = environment[name]?.trim() ?? "";
-  if (value.length === 0) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
 
 export async function verifyControlPlaneDeployment(
   environment: NodeJS.ProcessEnv = process.env,
@@ -31,21 +27,19 @@ export async function verifyControlPlaneDeployment(
     environment,
     "control-plane",
   );
+  const vercelApiToken = environment.VERCEL_TOKEN?.trim() || undefined;
   const options = {
-    vercelApiToken: required(environment, "VERCEL_TOKEN"),
+    vercelApiToken,
+    providerFetch: vercelApiToken
+      ? undefined
+      : vercelCliProviderFetch(
+          sanitizedDeploymentEnvironment(environment),
+        ),
   };
-  const sessionCookie = required(
-    environment,
-    "AIRPORT_RELEASE_HEALTH_SESSION_COOKIE",
-  );
   const evidence =
     mode === "immutable-candidate"
-      ? await verifyImmutableReleaseCandidate(
-          expectation,
-          sessionCookie,
-          options,
-        )
-      : await verifyReleaseEndpoint(expectation, sessionCookie, options);
+      ? await verifyImmutableDeploymentCandidate(expectation, options)
+      : await verifyDeploymentEndpoint(expectation, options);
   const artifact = await writeContentAddressedJson(
     path.join(root, "artifacts", "release-evidence", "vercel-deployment"),
     mode,
@@ -62,8 +56,8 @@ export async function verifyControlPlaneDeployment(
       providerSourceSha256: evidence.providerSourceSha256,
       runtimeClaimsSha256: evidence.runtimeClaimsSha256,
       oidcIdentitySha256: evidence.oidcIdentitySha256,
-      healthOrigin: evidence.origin,
-      healthOutcome: "ok",
+      attestationOrigin: evidence.origin,
+      attestationOutcome: "ok",
       verifiedAt: evidence.verifiedAt,
     },
   );

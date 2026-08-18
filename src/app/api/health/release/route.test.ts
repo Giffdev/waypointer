@@ -10,7 +10,7 @@ import { GET } from "./route";
 
 const challenge = "c".repeat(43);
 const runtime = {
-  schemaVersion: 5,
+  schemaVersion: 6,
   deploymentMethod: "vercel-cli-prebuilt",
   releasePhase: "control-plane",
   deploymentId: "dpl_12345678",
@@ -29,7 +29,6 @@ const runtime = {
   deploymentSourceManifestSha256: "2".repeat(64),
   candidateManifestSha256: "3".repeat(64),
   approvedAirportCandidateSha256: "4".repeat(64),
-  targetFingerprint: "5".repeat(64),
   migrationManifestSha256: "6".repeat(64),
   writesPaused: true,
   runtimeClaimsSha256: "7".repeat(64),

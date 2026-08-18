@@ -84,7 +84,6 @@ describe("provider expectation Git pin", () => {
         AIRPORT_RELEASE_PRIOR_ALIAS_DEPLOYMENT_ID: "dpl_87654321",
         AIRPORT_RELEASE_APPROVED_AIRPORT_CANDIDATE_SHA256:
           "1".repeat(64),
-        FLIGHT_MAP_TARGET_FINGERPRINT: "2".repeat(64),
         FLIGHT_MAP_MIGRATION_MANIFEST_SHA256: "3".repeat(64),
       },
       new Date(),
@@ -115,7 +114,7 @@ describe("provider expectation Git pin", () => {
     );
 
     expect(expectation).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       deploymentMethod: "vercel-cli-prebuilt",
       sourceCommit: {
         commitSha,
@@ -126,5 +125,6 @@ describe("provider expectation Git pin", () => {
         manifestSha256: prebuiltManifestSha256,
       },
     });
+    expect(expectation).not.toHaveProperty("targetFingerprint");
   });
 });

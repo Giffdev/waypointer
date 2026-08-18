@@ -31,7 +31,7 @@ const expectedCodes: Record<string, string> = {
 function expectationFixture(): ProviderReleaseExpectation {
   const fileContents = "{}\n";
   const core = {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
     deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
@@ -70,7 +70,6 @@ function expectationFixture(): ProviderReleaseExpectation {
     },
     candidateManifestSha256: "3".repeat(64),
     approvedAirportCandidateSha256: "4".repeat(64),
-    targetFingerprint: "5".repeat(64),
     migrationManifestSha256: "6".repeat(64),
     catalogChecksum: "7".repeat(64),
     databaseEvidenceSha256: "8".repeat(64),
@@ -110,7 +109,6 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
       expectation.candidateManifestSha256,
     FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256:
       expectation.approvedAirportCandidateSha256,
-    FLIGHT_MAP_TARGET_FINGERPRINT: expectation.targetFingerprint,
     FLIGHT_MAP_MIGRATION_MANIFEST_SHA256:
       expectation.migrationManifestSha256,
     FLIGHT_MAP_CATALOG_CHECKSUM: expectation.catalogChecksum,

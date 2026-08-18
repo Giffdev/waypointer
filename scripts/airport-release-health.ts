@@ -415,7 +415,6 @@ async function main() {
       target.approvedAirportCandidateSha256 ||
     deployment.sourceManifestSha256 !==
       databaseEvidence.candidate?.sourceManifestSha256 ||
-    deployment.targetFingerprint !== target.fingerprint ||
     deployment.migrationManifestSha256 !== migrationManifest.sha256 ||
     deployment.catalogChecksum !==
       databaseEvidence.catalog?.identityChecksum ||

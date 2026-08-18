@@ -167,7 +167,7 @@ export async function createProviderReleaseExpectation(
   }
   const issuedAt = now.toISOString();
   const core = {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
     deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: RELEASE_DEPLOYMENT_TRUST.platform,
@@ -213,11 +213,6 @@ export async function createProviderReleaseExpectation(
     approvedAirportCandidateSha256: required(
       environment,
       "AIRPORT_RELEASE_APPROVED_AIRPORT_CANDIDATE_SHA256",
-      /^[a-f0-9]{64}$/,
-    ),
-    targetFingerprint: required(
-      environment,
-      "FLIGHT_MAP_TARGET_FINGERPRINT",
       /^[a-f0-9]{64}$/,
     ),
     migrationManifestSha256: required(

@@ -31,10 +31,6 @@ on:
         description: Reviewed prebuilt artifact SHA-256 (required only for deploy)
         required: false
         type: string
-      target_fingerprint:
-        description: Approved non-secret target fingerprint (required only for deploy)
-        required: false
-        type: string
 
 permissions: {}
 
@@ -74,7 +70,6 @@ jobs:
           CANDIDATE_SHA256: ${{ inputs.candidate_manifest_sha256 }}
           PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
           PREBUILT_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
-          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
         run: |
           set -euo pipefail
           [[ "$APPROVAL_RUN_ID" =~ ^[0-9]+$ ]]
@@ -88,7 +83,6 @@ jobs:
               --arg candidate "$CANDIDATE_SHA256" \
               --arg prepared "$PREPARED_RUN_ID" \
               --arg prebuilt "$PREBUILT_SHA256" \
-              --arg target "$TARGET_FINGERPRINT" \
               '
                 select(
                   .schemaVersion == 1 and
@@ -100,8 +94,7 @@ jobs:
                   .reviewedCommitSha == $commit and
                   .candidateManifestSha256 == $candidate and
                   .preparedRunId == $prepared and
-                  .prebuiltArtifactManifestSha256 == $prebuilt and
-                  .targetFingerprint == $target
+                  .prebuiltArtifactManifestSha256 == $prebuilt
                 ) |
                 .approver |
                 select(type == "string" and length > 0)
@@ -145,7 +138,6 @@ jobs:
           APPROVAL_RUN_ID: ${{ inputs.approval_run_id }}
           PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
           PREBUILT_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
-          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
         run: |
           set -euo pipefail
           [[ "$REVIEWED_COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
@@ -160,7 +152,6 @@ jobs:
           if [[ "$OPERATION" == "deploy" ]]; then
             [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
             [[ "$PREBUILT_SHA256" =~ ^[a-f0-9]{64}$ ]]
-            [[ "$TARGET_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]]
           fi
 
       - name: Use Node.js
@@ -221,7 +212,6 @@ jobs:
           FLIGHT_MAP_APPROVED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
           AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
           FLIGHT_MAP_APPROVED_PREBUILT_ARTIFACT_MANIFEST_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
-          FLIGHT_MAP_TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
           FLIGHT_MAP_USE_EXISTING_PREBUILT: "true"
         run: npm run deploy:production
 

@@ -44,6 +44,8 @@ describe("Vercel release workflow", () => {
     );
     expect(workflow).toContain('test "$APPROVER" != "$REQUESTER"');
     expect(workflow).toContain(".approvalRunId == $approvalRunId");
+    expect(workflow).not.toContain("target_fingerprint");
+    expect(workflow).not.toContain("FLIGHT_MAP_TARGET_FINGERPRINT");
     expect(workflow).toContain(
       '.path == ".github/workflows/vercel-release-approval.yml"',
     );
@@ -87,6 +89,7 @@ describe("Vercel release workflow", () => {
     );
     expect(workflow).not.toContain("actions/checkout");
     expect(workflow).not.toContain("VERCEL_TOKEN");
+    expect(workflow).not.toContain("target_fingerprint");
     expect(workflow).not.toMatch(/^\s+pull_request:/mu);
   });
 });

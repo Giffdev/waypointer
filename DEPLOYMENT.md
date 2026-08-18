@@ -214,7 +214,7 @@ records every exact `.vercel/output` upload path, byte length, SHA-1 upload
 UID, and SHA-256 review digest.
 
 Enable Vercel system environment variables and Secure Backend Access with OIDC.
-The authenticated release endpoint requests a Vercel-signed OIDC token whose
+The deployment attestation endpoint requests a Vercel-signed OIDC token whose
 audience contains the operator's one-time challenge. The operator validates
 Vercel's JWKS signature, issuer, audience, subject, team, project, and
 Production environment. Runtime `VERCEL_DEPLOYMENT_ID`, project, and URL are
@@ -225,21 +225,15 @@ checkout.
 Prepare the exact artifact without deploying:
 
 ```powershell
-$fingerprint = (& node .\node_modules\tsx\dist\cli.mjs .\scripts\print-airport-target-fingerprint.ts).Trim()
-$env:FLIGHT_MAP_TARGET_FINGERPRINT = $fingerprint
-Remove-Variable fingerprint
-
 $env:FLIGHT_MAP_APPROVED_COMMIT_SHA = "<reviewed-commit>"
 $env:AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256 = "<reviewed-candidate-hash>"
 $env:FLIGHT_MAP_DEPLOY_PREPARE_ONLY = "true"
 npm run deploy:production
 ```
 
-The fingerprint command uses session-only `MIGRATION_DATABASE_URL` to derive
-only the approved non-secret target fingerprint. It does not connect to the
-database. Every Vercel child process removes `MIGRATION_DATABASE_URL` and other
-database credentials. Independently review the emitted candidate and prebuilt
-manifest. Then deploy those exact existing bytes from the same clean checkout:
+Every Vercel child process removes `MIGRATION_DATABASE_URL` and other database
+credentials. Independently review the emitted candidate and prebuilt manifest.
+Then deploy those exact existing bytes from the same clean checkout:
 
 ```powershell
 Remove-Item Env:FLIGHT_MAP_DEPLOY_PREPARE_ONLY
@@ -258,16 +252,21 @@ promotion, then promote through the fail-closed wrapper:
 ```powershell
 $env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_PATH = "data/private/release-approvals/vercel-provider-expectation-<hash>.json"
 $env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_SHA256 = "<file-hash>"
-$env:AIRPORT_RELEASE_HEALTH_SESSION_COOKIE = "<ephemeral-cookie>"
 npm run verify:production-candidate
 npm run promote:production
 ```
 
-Promotion repeats provider file-tree and OIDC health checks after assigning
-the alias, verifies public registration and sign-in routes, and restores the
-prior alias if any post-promotion check fails. Missing or extra prebuilt files,
-unexpected provider `gitSource`, source substitution, provider API failure,
-redirects, Preview, or alias drift fail closed. The manual
+Control-plane verification uses the public, challenge-bound
+`/api/health/deployment` endpoint. It returns only deployment runtime claims
+and a short-lived Vercel OIDC identity for the caller's one-time audience; it
+does not authenticate a user or access the database. Promotion repeats the
+provider file-tree and OIDC attestation after assigning the alias, verifies
+public registration and sign-in routes, and restores the prior alias if any
+post-promotion check fails. Missing or extra prebuilt files, unexpected
+provider `gitSource`, source substitution, provider API failure, redirects,
+Preview, or alias drift fail closed. The authenticated
+`/api/health/release` route and its ephemeral health session remain mandatory
+for the separate database catalog release. The manual
 `.github/workflows/vercel-deploy.yml` uses the same reviewed commit, candidate,
 prebuilt-artifact hash, project/team, and `VERCEL_TOKEN` secret; it has no
 automatic trigger. The only credentialed job targets the `vercel-production`
@@ -432,7 +431,6 @@ Then configure Production:
 - `FLIGHT_MAP_DEPLOYMENT_SOURCE_MANIFEST_SHA256=<reviewed deployment-source manifest digest>`
 - `FLIGHT_MAP_CANDIDATE_MANIFEST_SHA256=<reviewed candidate digest>`
 - `FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256=12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3`
-- `FLIGHT_MAP_TARGET_FINGERPRINT=<approved database target digest>`
 - `FLIGHT_MAP_MIGRATION_MANIFEST_SHA256=<reviewed migration manifest digest>`
 - `FLIGHT_MAP_CATALOG_CHECKSUM=<committed catalog identity checksum>`
 - `FLIGHT_MAP_DATABASE_EVIDENCE_SHA256=<database release evidence digest>`

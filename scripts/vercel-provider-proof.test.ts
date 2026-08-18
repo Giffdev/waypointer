@@ -10,8 +10,11 @@ import {
   providerReleaseExpectationSha256,
   RELEASE_DEPLOYMENT_TRUST,
   type ProviderReleaseExpectation,
+  verifyDeploymentEndpoint,
+  verifyImmutableDeploymentCandidate,
   verifyImmutableReleaseCandidate,
   verifyReleaseEndpoint,
+  verifyVercelDeploymentOidcIdentity,
   verifyVercelOidcIdentity,
 } from "./vercel-provider-proof";
 
@@ -40,7 +43,7 @@ function expectationFixture(
   overrides: Partial<ProviderReleaseExpectation> = {},
 ): ProviderReleaseExpectation {
   const core = {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
     deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
@@ -72,7 +75,6 @@ function expectationFixture(
     },
     candidateManifestSha256: "3".repeat(64),
     approvedAirportCandidateSha256: "4".repeat(64),
-    targetFingerprint: "5".repeat(64),
     migrationManifestSha256: "6".repeat(64),
     catalogChecksum: "7".repeat(64),
     databaseEvidenceSha256: "8".repeat(64),
@@ -127,7 +129,6 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
       expectation.candidateManifestSha256,
     FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256:
       expectation.approvedAirportCandidateSha256,
-    FLIGHT_MAP_TARGET_FINGERPRINT: expectation.targetFingerprint,
     FLIGHT_MAP_MIGRATION_MANIFEST_SHA256:
       expectation.migrationManifestSha256,
     FLIGHT_MAP_CATALOG_CHECKSUM: expectation.catalogChecksum,
@@ -305,6 +306,40 @@ describe("Vercel provider proof", () => {
       projectId: RELEASE_DEPLOYMENT_TRUST.projectId,
     });
 
+    const deploymentToken = await new SignJWT({
+      owner: RELEASE_DEPLOYMENT_TRUST.teamSlug,
+      owner_id: RELEASE_DEPLOYMENT_TRUST.orgId,
+      project: RELEASE_DEPLOYMENT_TRUST.projectName,
+      project_id: RELEASE_DEPLOYMENT_TRUST.projectId,
+      environment: "production",
+    })
+      .setProtectedHeader({
+        alg: "RS256",
+        kid: "vercel-test-key",
+        typ: "JWT",
+      })
+      .setIssuer(
+        `https://oidc.vercel.com/${RELEASE_DEPLOYMENT_TRUST.teamSlug}`,
+      )
+      .setAudience(
+        `urn:flight-map:deployment-attestation:${challenge}`,
+      )
+      .setSubject(subject)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + 120)
+      .sign(privateKey);
+    await expect(
+      verifyVercelDeploymentOidcIdentity(
+        deploymentToken,
+        challenge,
+        createLocalJWKSet({ keys: [publicJwk] }),
+      ),
+    ).resolves.toMatchObject({
+      audience:
+        `urn:flight-map:deployment-attestation:${challenge}`,
+    });
+
     const attacker = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const forged = await new SignJWT({
       owner: RELEASE_DEPLOYMENT_TRUST.teamSlug,
@@ -389,6 +424,54 @@ describe("Vercel provider proof", () => {
     expect(
       new URL(String(applicationFetch.mock.calls[0]![0])).origin,
     ).toBe(expectation.deploymentUrl);
+  });
+
+  it("verifies control-plane deployment attestation without a user session", async () => {
+    const expectation = expectationFixture({
+      releasePhase: "control-plane",
+      catalogChecksum: undefined,
+      databaseEvidenceSha256: undefined,
+    });
+    const applicationFetch = applicationFetchFor(expectation);
+
+    await expect(
+      verifyImmutableDeploymentCandidate(expectation, {
+        providerFetch: providerFetchFor(expectation, {
+          immutable: true,
+        }) as typeof fetch,
+        applicationFetch: applicationFetch as typeof fetch,
+        oidcVerify: oidcEvidence,
+        challenge,
+      }),
+    ).resolves.toMatchObject({
+      origin: expectation.deploymentUrl,
+      aliasDeploymentId: expectation.priorAliasDeploymentId,
+    });
+
+    expect(
+      new URL(String(applicationFetch.mock.calls[0]![0])).pathname,
+    ).toBe("/api/health/deployment");
+  });
+
+  it("verifies promoted deployment attestation without a user session", async () => {
+    const expectation = expectationFixture({
+      releasePhase: "control-plane",
+      catalogChecksum: undefined,
+      databaseEvidenceSha256: undefined,
+    });
+    await expect(
+      verifyDeploymentEndpoint(expectation, {
+        providerFetch:
+          providerFetchFor(expectation) as typeof fetch,
+        applicationFetch:
+          applicationFetchFor(expectation) as typeof fetch,
+        oidcVerify: oidcEvidence,
+        challenge,
+      }),
+    ).resolves.toMatchObject({
+      origin: `https://${expectation.productionAlias}`,
+      aliasDeploymentId: expectation.deploymentId,
+    });
   });
 
   it.each([

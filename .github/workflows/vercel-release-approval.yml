@@ -26,10 +26,6 @@ on:
         description: Reviewed prebuilt artifact SHA-256 (required only for deploy)
         required: false
         type: string
-      target_fingerprint:
-        description: Approved non-secret target fingerprint (required only for deploy)
-        required: false
-        type: string
 
 permissions: {}
 
@@ -55,7 +51,6 @@ jobs:
           CANDIDATE_SHA256: ${{ inputs.candidate_manifest_sha256 }}
           PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
           PREBUILT_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
-          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
         run: |
           set -euo pipefail
           test "$REPOSITORY" = "Giffdev/waypointer"
@@ -67,11 +62,9 @@ jobs:
           if [[ "$OPERATION" == "deploy" ]]; then
             [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
             [[ "$PREBUILT_SHA256" =~ ^[a-f0-9]{64}$ ]]
-            [[ "$TARGET_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]]
           else
             test -z "$PREPARED_RUN_ID"
             test -z "$PREBUILT_SHA256"
-            test -z "$TARGET_FINGERPRINT"
           fi
           mkdir -p artifacts/release-approval
           jq -n \
@@ -85,7 +78,6 @@ jobs:
             --arg candidateManifestSha256 "$CANDIDATE_SHA256" \
             --arg preparedRunId "$PREPARED_RUN_ID" \
             --arg prebuiltArtifactManifestSha256 "$PREBUILT_SHA256" \
-            --arg targetFingerprint "$TARGET_FINGERPRINT" \
             '{
               schemaVersion: 1,
               repository: $repository,
@@ -97,8 +89,7 @@ jobs:
               reviewedCommitSha: $reviewedCommitSha,
               candidateManifestSha256: $candidateManifestSha256,
               preparedRunId: $preparedRunId,
-              prebuiltArtifactManifestSha256: $prebuiltArtifactManifestSha256,
-              targetFingerprint: $targetFingerprint
+              prebuiltArtifactManifestSha256: $prebuiltArtifactManifestSha256
             }' > artifacts/release-approval/approval.json
 
       - name: Upload immutable approval record

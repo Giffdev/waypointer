@@ -53,6 +53,28 @@ interface CommandResult {
   readonly stdout: string;
 }
 
+export async function verifyPublicAuthAvailability(
+  origin: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<void> {
+  for (const pathname of ["/auth/register", "/auth/sign-in"]) {
+    const response = await fetchImplementation(new URL(pathname, origin), {
+      redirect: "manual",
+      cache: "no-store",
+      headers: {
+        "cache-control": "no-cache, no-store",
+        pragma: "no-cache",
+      },
+    });
+    if (
+      response.status !== 200 ||
+      (await response.text()).trim().length === 0
+    ) {
+      throw new Error(`Public auth route is unavailable: ${pathname}`);
+    }
+  }
+}
+
 interface VercelEnvironmentVariable {
   readonly id?: string;
   readonly key?: string;
@@ -297,6 +319,33 @@ export async function providerJson<T>(
   }
 }
 
+export function vercelCliProviderFetch(
+  environment: NodeJS.ProcessEnv,
+): typeof fetch {
+  return (async (input: URL | RequestInfo, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (
+      url.origin !== "https://api.vercel.com" ||
+      (init?.method && init.method !== "GET")
+    ) {
+      return Response.json({ error: "invalid provider request" }, {
+        status: 400,
+      });
+    }
+    try {
+      const payload = await providerJson<unknown>(
+        `${url.pathname}${url.search}`,
+        environment,
+      );
+      return Response.json(payload, { headers: { age: "0" } });
+    } catch {
+      return Response.json({ error: "provider request failed" }, {
+        status: 503,
+      });
+    }
+  }) as typeof fetch;
+}
+
 async function verifyWritePause(
   environment: NodeJS.ProcessEnv,
 ): Promise<void> {
@@ -375,7 +424,6 @@ function deploymentRuntimeVariables(options: {
   readonly deploymentSourceManifestSha256: string;
   readonly approvedAirportCandidateSha256: string;
   readonly migrationManifestSha256: string;
-  readonly targetFingerprint: string;
 }): Readonly<Record<string, string>> {
   return {
     FLIGHT_MAP_DEPLOYMENT_METHOD: "vercel-cli-prebuilt",
@@ -394,7 +442,6 @@ function deploymentRuntimeVariables(options: {
       options.candidateManifestSha256,
     FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256:
       options.approvedAirportCandidateSha256,
-    FLIGHT_MAP_TARGET_FINGERPRINT: options.targetFingerprint,
     FLIGHT_MAP_MIGRATION_MANIFEST_SHA256:
       options.migrationManifestSha256,
   };
@@ -565,6 +612,9 @@ export async function deployProductionCandidate(
   await verifyWritePause(childEnvironment);
   const priorAliasDeploymentId =
     await loadPriorAliasOwner(childEnvironment);
+  await verifyPublicAuthAvailability(
+    `https://${RELEASE_DEPLOYMENT_TRUST.productionAlias}`,
+  );
   if (useExistingPrebuilt) {
     assertLinkedVercelProject(
       JSON.parse(
@@ -641,11 +691,6 @@ export async function deployProductionCandidate(
     );
   }
 
-  const targetFingerprint = required(
-    environment,
-    "FLIGHT_MAP_TARGET_FINGERPRINT",
-    SHA256_PATTERN,
-  );
   const migrationManifest = await loadAirportReleaseMigrationManifest();
   const approvedAirportCandidateSha256 =
     await readApprovedAirportCandidate();
@@ -657,7 +702,6 @@ export async function deployProductionCandidate(
       candidate.deploymentSource.manifestSha256,
     approvedAirportCandidateSha256,
     migrationManifestSha256: migrationManifest.sha256,
-    targetFingerprint,
   });
   const runtimeArguments = Object.entries(runtimeVariables).flatMap(
     ([key, value]) => ["--env", `${key}=${value}`],
@@ -702,7 +746,6 @@ export async function deployProductionCandidate(
       priorAliasDeploymentId,
     AIRPORT_RELEASE_APPROVED_AIRPORT_CANDIDATE_SHA256:
       approvedAirportCandidateSha256,
-    FLIGHT_MAP_TARGET_FINGERPRINT: targetFingerprint,
     FLIGHT_MAP_MIGRATION_MANIFEST_SHA256:
       migrationManifest.sha256,
   });
@@ -724,7 +767,6 @@ export async function deployProductionCandidate(
         expectationArtifact.path,
       ),
       providerExpectationSha256: expectationArtifact.sha256,
-      targetFingerprintConfigured: true,
       aliasChanged: false,
     },
   );

@@ -45,7 +45,7 @@ const OIDC_JWKS = createRemoteJWKSet(
 );
 
 export interface ProviderReleaseExpectation {
-  schemaVersion: 5;
+  schemaVersion: 6;
   proofMode: "vercel-cli-prebuilt-provider-oidc-alias";
   deploymentMethod: "vercel-cli-prebuilt";
   platform: "vercel";
@@ -77,7 +77,6 @@ export interface ProviderReleaseExpectation {
   };
   candidateManifestSha256: string;
   approvedAirportCandidateSha256: string;
-  targetFingerprint: string;
   migrationManifestSha256: string;
   catalogChecksum?: string;
   databaseEvidenceSha256?: string;
@@ -136,7 +135,7 @@ export interface ReleaseEndpointEvidence {
 }
 
 export interface ReleaseEndpointOptions {
-  vercelApiToken: string;
+  vercelApiToken?: string;
   providerFetch?: typeof fetch;
   applicationFetch?: typeof fetch;
   oidcVerify?: typeof verifyVercelOidcIdentity;
@@ -264,7 +263,7 @@ function validateExpectation(
     validSha256(expectation.databaseEvidenceSha256);
   validateDeploymentSourceFiles(expectation.prebuiltArtifact?.files ?? []);
   if (
-    expectation.schemaVersion !== 5 ||
+    expectation.schemaVersion !== 6 ||
     expectation.proofMode !==
       "vercel-cli-prebuilt-provider-oidc-alias" ||
     expectation.deploymentMethod !== "vercel-cli-prebuilt" ||
@@ -298,7 +297,10 @@ function validateExpectation(
     !validSha256(expectation.prebuiltArtifact.manifestSha256) ||
     !validSha256(expectation.candidateManifestSha256) ||
     !validSha256(expectation.approvedAirportCandidateSha256) ||
-    !validSha256(expectation.targetFingerprint) ||
+    Object.prototype.hasOwnProperty.call(
+      expectation,
+      "targetFingerprint",
+    ) ||
     !validSha256(expectation.migrationManifestSha256) ||
     expectation.writesPaused !== true ||
     (expectation.releasePhase === "control-plane" &&
@@ -437,18 +439,20 @@ function verifyProviderSource(
 
 export async function verifyVercelProductionDeployment(
   expectation: ProviderReleaseExpectation,
-  token: string,
+  token: string | undefined,
   fetchImplementation: typeof fetch,
   aliasMode: "immutable-candidate" | "production-alias" = "production-alias",
 ): Promise<ProviderDeploymentVerification> {
   validateExpectation(expectation, expectation.releasePhase);
   const deploymentUrl = deploymentOrigin(expectation);
   const aliasOrigin = new URL(`https://${expectation.productionAlias}`);
-  if (
-    token.length < 20 ||
-    token.length > 4096 ||
-    /[\u0000-\u0020\u007f]/.test(token)
-  ) {
+  const hasValidToken = Boolean(
+    token &&
+      token.length >= 20 &&
+      token.length <= 4096 &&
+      !/[\u0000-\u0020\u007f]/.test(token),
+  );
+  if (!hasValidToken && fetchImplementation === fetch) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
   const requestStartedAt = new Date().toISOString();
@@ -461,7 +465,9 @@ export async function verifyVercelProductionDeployment(
         cache: "no-store",
         headers: {
           accept: "application/json",
-          authorization: `Bearer ${token}`,
+          ...(hasValidToken
+            ? { authorization: `Bearer ${token}` }
+            : {}),
           "cache-control": "no-cache, no-store",
           pragma: "no-cache",
         },
@@ -599,9 +605,10 @@ export async function verifyVercelProductionDeployment(
   };
 }
 
-export async function verifyVercelOidcIdentity(
+async function verifyVercelOidcIdentityForPurpose(
   token: string,
   challenge: string,
+  purpose: "release-health" | "deployment-attestation",
   keySet: Parameters<typeof jwtVerify>[1] = OIDC_JWKS,
   now = Date.now(),
 ): Promise<VercelOidcIdentityEvidence> {
@@ -612,7 +619,7 @@ export async function verifyVercelOidcIdentity(
   ) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
-  const audience = `urn:flight-map:release-health:${challenge}`;
+  const audience = `urn:flight-map:${purpose}:${challenge}`;
   const subject =
     `owner:${RELEASE_DEPLOYMENT_TRUST.teamSlug}:` +
     `project:${RELEASE_DEPLOYMENT_TRUST.projectName}:` +
@@ -657,12 +664,42 @@ export async function verifyVercelOidcIdentity(
   };
 }
 
+export async function verifyVercelOidcIdentity(
+  token: string,
+  challenge: string,
+  keySet: Parameters<typeof jwtVerify>[1] = OIDC_JWKS,
+  now = Date.now(),
+): Promise<VercelOidcIdentityEvidence> {
+  return verifyVercelOidcIdentityForPurpose(
+    token,
+    challenge,
+    "release-health",
+    keySet,
+    now,
+  );
+}
+
+export async function verifyVercelDeploymentOidcIdentity(
+  token: string,
+  challenge: string,
+  keySet: Parameters<typeof jwtVerify>[1] = OIDC_JWKS,
+  now = Date.now(),
+): Promise<VercelOidcIdentityEvidence> {
+  return verifyVercelOidcIdentityForPurpose(
+    token,
+    challenge,
+    "deployment-attestation",
+    keySet,
+    now,
+  );
+}
+
 function runtimeClaimsMatch(
   claims: ReleaseRuntimeClaims,
   expectation: ProviderReleaseExpectation,
 ): boolean {
   return Boolean(
-    claims.schemaVersion === 5 &&
+    claims.schemaVersion === 6 &&
       claims.deploymentMethod === expectation.deploymentMethod &&
       releaseRuntimeClaimsSha256(
         Object.fromEntries(
@@ -691,7 +728,6 @@ function runtimeClaimsMatch(
         expectation.candidateManifestSha256 &&
       claims.approvedAirportCandidateSha256 ===
         expectation.approvedAirportCandidateSha256 &&
-      claims.targetFingerprint === expectation.targetFingerprint &&
       claims.migrationManifestSha256 ===
         expectation.migrationManifestSha256 &&
       claims.catalogChecksum === expectation.catalogChecksum &&
@@ -701,14 +737,18 @@ function runtimeClaimsMatch(
   );
 }
 
-async function verifyReleaseEndpointAtOrigin(
+async function verifyEndpointAtOrigin(
   expectation: ProviderReleaseExpectation,
-  sessionCookie: string,
+  sessionCookie: string | undefined,
   options: ReleaseEndpointOptions,
   aliasMode: "immutable-candidate" | "production-alias",
+  endpointKind: "release-health" | "deployment-attestation",
 ): Promise<ReleaseEndpointEvidence> {
   validateExpectation(expectation, expectation.releasePhase);
-  if (!validHealthSessionCookie(sessionCookie)) {
+  if (
+    endpointKind === "release-health" &&
+    !validHealthSessionCookie(sessionCookie ?? "")
+  ) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
   const verified = await verifyVercelProductionDeployment(
@@ -727,13 +767,20 @@ async function verifyReleaseEndpointAtOrigin(
     aliasMode === "production-alias"
       ? verified.aliasOrigin
       : verified.deploymentOrigin;
-  const releaseUrl = new URL("/api/health/release", releaseOrigin);
+  const releaseUrl = new URL(
+    endpointKind === "release-health"
+      ? "/api/health/release"
+      : "/api/health/deployment",
+    releaseOrigin,
+  );
   releaseUrl.searchParams.set("challenge", challenge);
   const releaseResponse = await fetchImplementation(releaseUrl, {
     redirect: "manual",
     cache: "no-store",
     headers: {
-      cookie: sessionCookie,
+      ...(endpointKind === "release-health"
+        ? { cookie: sessionCookie! }
+        : {}),
       origin: releaseOrigin.origin,
       "cache-control": "no-cache, no-store",
       pragma: "no-cache",
@@ -754,11 +801,15 @@ async function verifyReleaseEndpointAtOrigin(
   };
   const oidcToken = releasePayload.providerIdentity?.oidcToken ?? "";
   const oidcIdentity = await (
-    options.oidcVerify ?? verifyVercelOidcIdentity
+    options.oidcVerify ??
+    (endpointKind === "release-health"
+      ? verifyVercelOidcIdentity
+      : verifyVercelDeploymentOidcIdentity)
   )(oidcToken, challenge);
   if (
     releasePayload.status !== "ok" ||
-    releasePayload.runtimeWriteMode !== "read-only" ||
+    (endpointKind === "release-health" &&
+      releasePayload.runtimeWriteMode !== "read-only") ||
     releasePayload.challenge !== challenge ||
     !releasePayload.runtime ||
     !runtimeClaimsMatch(releasePayload.runtime, expectation)
@@ -780,6 +831,7 @@ async function verifyReleaseEndpointAtOrigin(
   }
   const responseRecord = {
     challenge,
+    endpointKind,
     oidcIdentity,
     runtime: releasePayload.runtime,
     status: releasePayload.status,
@@ -825,11 +877,12 @@ export async function verifyImmutableReleaseCandidate(
   sessionCookie: string,
   options: ReleaseEndpointOptions,
 ): Promise<ReleaseEndpointEvidence> {
-  return verifyReleaseEndpointAtOrigin(
+  return verifyEndpointAtOrigin(
     expectation,
     sessionCookie,
     options,
     "immutable-candidate",
+    "release-health",
   );
 }
 
@@ -838,10 +891,37 @@ export async function verifyReleaseEndpoint(
   sessionCookie: string,
   options: ReleaseEndpointOptions,
 ): Promise<ReleaseEndpointEvidence> {
-  return verifyReleaseEndpointAtOrigin(
+  return verifyEndpointAtOrigin(
     expectation,
     sessionCookie,
     options,
     "production-alias",
+    "release-health",
+  );
+}
+
+export async function verifyImmutableDeploymentCandidate(
+  expectation: ProviderReleaseExpectation,
+  options: ReleaseEndpointOptions,
+): Promise<ReleaseEndpointEvidence> {
+  return verifyEndpointAtOrigin(
+    expectation,
+    undefined,
+    options,
+    "immutable-candidate",
+    "deployment-attestation",
+  );
+}
+
+export async function verifyDeploymentEndpoint(
+  expectation: ProviderReleaseExpectation,
+  options: ReleaseEndpointOptions,
+): Promise<ReleaseEndpointEvidence> {
+  return verifyEndpointAtOrigin(
+    expectation,
+    undefined,
+    options,
+    "production-alias",
+    "deployment-attestation",
   );
 }

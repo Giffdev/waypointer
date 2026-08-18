@@ -16,9 +16,6 @@ const expectation = {
 
 const environment = {
   NODE_ENV: "test" as const,
-  VERCEL_TOKEN: "vercel-test-token-value",
-  AIRPORT_RELEASE_HEALTH_SESSION_COOKIE:
-    "__Secure-authjs.session-token=test-session-value",
 };
 
 function immutableEvidence() {
@@ -35,7 +32,7 @@ function aliasEvidence() {
 }
 
 describe("promote-production", () => {
-  it("verifies immutable health before aliasing and re-verifies afterward", async () => {
+  it("verifies immutable attestation before aliasing and re-verifies afterward", async () => {
     const events: string[] = [];
     const runCli = vi.fn(async (args: readonly string[]) => {
       events.push(

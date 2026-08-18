@@ -142,7 +142,6 @@ export async function runAirportCatalogRelease(
         candidate.deploymentSource.manifestSha256 ||
       deployment.approvedAirportCandidateSha256 !==
         target.approvedAirportCandidateSha256 ||
-      deployment.targetFingerprint !== target.fingerprint ||
       deployment.migrationManifestSha256 !== migrationManifest.sha256
     ) {
       throw new AirportCatalogSafetyError("candidate-provenance-mismatch");

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export type ReleasePhase = "control-plane" | "database-released";
 
 export interface ReleaseRuntimeClaims {
-  schemaVersion: 5;
+  schemaVersion: 6;
   deploymentMethod: "vercel-cli-prebuilt";
   releasePhase: ReleasePhase;
   deploymentId: string;
@@ -22,7 +22,6 @@ export interface ReleaseRuntimeClaims {
   deploymentSourceManifestSha256: string;
   candidateManifestSha256: string;
   approvedAirportCandidateSha256: string;
-  targetFingerprint: string;
   migrationManifestSha256: string;
   catalogChecksum?: string;
   databaseEvidenceSha256?: string;
@@ -67,7 +66,8 @@ export function releaseRuntimeClaimsFromEnvironment(
     environment.VERCEL !== "1" ||
     environment.VERCEL_ENV !== "production" ||
     environment.VERCEL_TARGET_ENV !== "production" ||
-    environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() !== "true"
+    environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() !== "true" ||
+    Boolean(environment.FLIGHT_MAP_TARGET_FINGERPRINT?.trim())
   ) {
     throw new Error("Release runtime claims are unavailable.");
   }
@@ -97,7 +97,7 @@ export function releaseRuntimeClaimsFromEnvironment(
     /^[A-Za-z0-9.-]+\.vercel\.app$/,
   ).toLowerCase();
   const core = {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     deploymentMethod: required(
       environment,
       "FLIGHT_MAP_DEPLOYMENT_METHOD",
@@ -170,11 +170,6 @@ export function releaseRuntimeClaimsFromEnvironment(
     approvedAirportCandidateSha256: required(
       environment,
       "FLIGHT_MAP_APPROVED_AIRPORT_CANDIDATE_SHA256",
-      /^[a-f0-9]{64}$/,
-    ),
-    targetFingerprint: required(
-      environment,
-      "FLIGHT_MAP_TARGET_FINGERPRINT",
       /^[a-f0-9]{64}$/,
     ),
     migrationManifestSha256: required(

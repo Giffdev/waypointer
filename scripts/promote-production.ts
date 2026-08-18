@@ -11,12 +11,14 @@ import {
   providerJson,
   runVercel,
   sanitizedDeploymentEnvironment,
+  vercelCliProviderFetch,
+  verifyPublicAuthAvailability,
 } from "./deploy-production.ts";
 import {
   loadProviderReleaseExpectation,
   RELEASE_DEPLOYMENT_TRUST,
-  verifyImmutableReleaseCandidate,
-  verifyReleaseEndpoint,
+  verifyDeploymentEndpoint,
+  verifyImmutableDeploymentCandidate,
 } from "./vercel-provider-proof.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -39,43 +41,16 @@ interface VercelAlias {
 
 export interface PromotionDependencies {
   readonly loadExpectation?: typeof loadProviderReleaseExpectation;
-  readonly verifyImmutable?: typeof verifyImmutableReleaseCandidate;
-  readonly verifyAlias?: typeof verifyReleaseEndpoint;
+  readonly verifyImmutable?: typeof verifyImmutableDeploymentCandidate;
+  readonly verifyAlias?: typeof verifyDeploymentEndpoint;
   readonly providerRequest?: <T>(
     providerPath: string,
     environment: NodeJS.ProcessEnv,
   ) => Promise<T>;
   readonly runCli?: typeof runVercel;
-  readonly verifyPublicAuth?: typeof verifyPublicAuthRoutes;
+  readonly verifyPublicAuth?: typeof verifyPublicAuthAvailability;
   readonly writeEvidence?: typeof writeContentAddressedJson;
   readonly challenge?: () => string;
-}
-
-function required(environment: NodeJS.ProcessEnv, name: string): string {
-  const value = environment[name]?.trim() ?? "";
-  if (value.length === 0) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
-
-async function verifyPublicAuthRoutes(origin: string): Promise<void> {
-  for (const pathname of ["/auth/register", "/auth/sign-in"]) {
-    const response = await fetch(new URL(pathname, origin), {
-      redirect: "manual",
-      cache: "no-store",
-      headers: {
-        "cache-control": "no-cache, no-store",
-        pragma: "no-cache",
-      },
-    });
-    if (
-      response.status !== 200 ||
-      (await response.text()).trim().length === 0
-    ) {
-      throw new Error(`Public auth route is unavailable: ${pathname}`);
-    }
-  }
 }
 
 async function aliasOwner(
@@ -99,31 +74,30 @@ export async function promoteProductionCandidate(
   const loadExpectation =
     dependencies.loadExpectation ?? loadProviderReleaseExpectation;
   const verifyImmutable =
-    dependencies.verifyImmutable ?? verifyImmutableReleaseCandidate;
-  const verifyAlias = dependencies.verifyAlias ?? verifyReleaseEndpoint;
+    dependencies.verifyImmutable ?? verifyImmutableDeploymentCandidate;
+  const verifyAlias =
+    dependencies.verifyAlias ?? verifyDeploymentEndpoint;
   const providerRequest = dependencies.providerRequest ?? providerJson;
   const runCli = dependencies.runCli ?? runVercel;
   const verifyPublicAuth =
-    dependencies.verifyPublicAuth ?? verifyPublicAuthRoutes;
+    dependencies.verifyPublicAuth ?? verifyPublicAuthAvailability;
   const writeEvidence =
     dependencies.writeEvidence ?? writeContentAddressedJson;
   const expectation = await loadExpectation(
     environment,
     "control-plane",
   );
-  const vercelApiToken = required(environment, "VERCEL_TOKEN");
-  const sessionCookie = required(
-    environment,
-    "AIRPORT_RELEASE_HEALTH_SESSION_COOKIE",
-  );
   const childEnvironment = sanitizedDeploymentEnvironment(environment);
+  const vercelApiToken = environment.VERCEL_TOKEN?.trim() || undefined;
+  const providerFetch = vercelApiToken
+    ? undefined
+    : vercelCliProviderFetch(childEnvironment);
   const challenge =
     dependencies.challenge?.() ??
     randomBytes(32).toString("base64url");
   const immutableEvidence = await verifyImmutable(
     expectation,
-    sessionCookie,
-    { vercelApiToken, challenge },
+    { vercelApiToken, providerFetch, challenge },
   );
   const priorDeployment = await providerRequest<VercelDeployment>(
     `/v13/deployments/${expectation.priorAliasDeploymentId}` +
@@ -154,8 +128,7 @@ export async function promoteProductionCandidate(
     );
     const aliasEvidence = await verifyAlias(
       expectation,
-      sessionCookie,
-      { vercelApiToken, challenge },
+      { vercelApiToken, providerFetch, challenge },
     );
     await verifyPublicAuth(aliasEvidence.origin);
     const artifact = await writeEvidence(
@@ -173,8 +146,8 @@ export async function promoteProductionCandidate(
         commitSha: expectation.sourceCommit.commitSha,
         candidateManifestSha256:
           expectation.candidateManifestSha256,
-        immutableHealthOutcome: "ok",
-        aliasHealthOutcome: "ok",
+        immutableAttestationOutcome: "ok",
+        aliasAttestationOutcome: "ok",
         publicRegistrationReachable: true,
         publicSignInReachable: true,
         writesPaused: true,
@@ -186,7 +159,7 @@ export async function promoteProductionCandidate(
       deploymentId: expectation.deploymentId,
       liveUrl: `https://${expectation.productionAlias}`,
       immutableUrl: expectation.deploymentUrl,
-      healthOutcome: "ok",
+      attestationOutcome: "ok",
       evidencePath: path.relative(root, artifact.path),
       evidenceSha256: artifact.sha256,
     };

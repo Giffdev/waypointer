@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   assertPinnedVercelCliVersion,
@@ -20,6 +20,7 @@ import {
   sanitizedDeploymentEnvironment,
   validVercelEnvironmentId,
   vercelCommandInvocation,
+  verifyPublicAuthAvailability,
 } from "./deploy-production";
 
 describe("deploy-production", () => {
@@ -124,6 +125,34 @@ describe("deploy-production", () => {
     expect(validVercelEnvironmentId("aD29JHJ3otYaRJVq")).toBe(true);
     expect(validVercelEnvironmentId("env_12345678")).toBe(true);
     expect(validVercelEnvironmentId("../production")).toBe(false);
+  });
+
+  it("requires public registration and sign-in before deployment", async () => {
+    const fetchImplementation = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      return new Response(
+        url.pathname === "/auth/register" ? "register" : "sign in",
+        { status: 200 },
+      );
+    });
+
+    await expect(
+      verifyPublicAuthAvailability(
+        "https://flight-map-one.vercel.app",
+        fetchImplementation as typeof fetch,
+      ),
+    ).resolves.toBeUndefined();
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+
+    fetchImplementation.mockResolvedValueOnce(
+      new Response("", { status: 503 }),
+    );
+    await expect(
+      verifyPublicAuthAvailability(
+        "https://flight-map-one.vercel.app",
+        fetchImplementation as typeof fetch,
+      ),
+    ).rejects.toThrow(/Public auth route is unavailable/);
   });
 
   it("passes Windows CLI arguments exactly without shell interpretation", async () => {

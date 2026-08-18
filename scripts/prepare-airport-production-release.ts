@@ -234,7 +234,6 @@ export async function prepareAirportProductionRelease(
       connected.database_oid !== snapshot.databaseOid ||
       targetFingerprint !== snapshot.targetFingerprint ||
       preChangeState.stateSha256 !== snapshot.preChangeStateSha256 ||
-      deployment.targetFingerprint !== targetFingerprint ||
       deployment.migrationManifestSha256 !== migrationManifest.sha256 ||
       !["0014", "0015"].includes(migration.boundary)
     ) {
