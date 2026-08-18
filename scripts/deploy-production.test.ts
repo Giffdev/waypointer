@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   assertPinnedVercelCliVersion,
@@ -8,9 +12,21 @@ import {
   parseVercelPrebuiltDryRun,
   sanitizedDeploymentEnvironment,
   validVercelEnvironmentId,
+  vercelCommandInvocation,
 } from "./deploy-production";
 
 describe("deploy-production", () => {
+  const workspaces = new Set<string>();
+
+  afterEach(async () => {
+    await Promise.all(
+      [...workspaces].map((workspace) =>
+        rm(workspace, { recursive: true, force: true }),
+      ),
+    );
+    workspaces.clear();
+  });
+
   it("strips database credentials while preserving the parent environment", () => {
     const parent = {
       NODE_ENV: "test" as const,
@@ -101,5 +117,41 @@ describe("deploy-production", () => {
     expect(validVercelEnvironmentId("aD29JHJ3otYaRJVq")).toBe(true);
     expect(validVercelEnvironmentId("env_12345678")).toBe(true);
     expect(validVercelEnvironmentId("../production")).toBe(false);
+  });
+
+  it("passes Windows CLI arguments exactly without shell interpretation", async () => {
+    const workspace = path.join(
+      process.cwd(),
+      "artifacts",
+      "test-workspaces",
+      `vercel-argv-${randomUUID()}`,
+    );
+    workspaces.add(workspace);
+    await mkdir(workspace, { recursive: true });
+    const entryPoint = path.join(workspace, "argv.cjs");
+    await writeFile(
+      entryPoint,
+      "process.stdout.write(JSON.stringify(process.argv.slice(2)));",
+    );
+    const expectedArgs = [
+      "api",
+      "/v10/projects/project/env/id?teamId=team&decrypt=true",
+      "",
+      'quoted"value',
+      "--raw",
+    ];
+    const invocation = vercelCommandInvocation(
+      expectedArgs,
+      "win32",
+      entryPoint,
+    );
+
+    const result = spawnSync(
+      invocation.executable,
+      [...invocation.args],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(expectedArgs);
   });
 });

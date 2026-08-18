@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -175,6 +176,43 @@ export function validVercelEnvironmentId(value: string): boolean {
   return /^[A-Za-z0-9_-]{8,256}$/u.test(value);
 }
 
+export function vercelCommandInvocation(
+  args: readonly string[],
+  platform = process.platform,
+  windowsEntryPoint?: string,
+): {
+  readonly executable: string;
+  readonly args: readonly string[];
+} {
+  if (platform !== "win32") {
+    return { executable: "vercel", args };
+  }
+  const entryPoint =
+    windowsEntryPoint ?? resolveWindowsVercelEntryPoint(process.env.PATH ?? "");
+  return {
+    executable: process.execPath,
+    args: [entryPoint, ...args],
+  };
+}
+
+export function resolveWindowsVercelEntryPoint(pathValue: string): string {
+  for (const directory of pathValue.split(path.delimiter)) {
+    if (!directory) continue;
+    const commandPath = path.join(directory, "vercel.cmd");
+    const entryPoint = path.join(
+      directory,
+      "node_modules",
+      "vercel",
+      "dist",
+      "vc.js",
+    );
+    if (existsSync(commandPath) && existsSync(entryPoint)) {
+      return entryPoint;
+    }
+  }
+  throw new Error("Unable to locate the installed Vercel CLI");
+}
+
 export async function runVercel(
   args: readonly string[],
   options: {
@@ -182,14 +220,10 @@ export async function runVercel(
     readonly capture?: boolean;
   },
 ): Promise<CommandResult> {
-  const isWindows = process.platform === "win32";
-  const executable = isWindows ? process.env.ComSpec ?? "cmd.exe" : "vercel";
-  const commandArgs = isWindows
-    ? ["/d", "/s", "/c", "vercel", ...args]
-    : [...args];
+  const invocation = vercelCommandInvocation(args);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, commandArgs, {
+    const child = spawn(invocation.executable, [...invocation.args], {
       cwd: root,
       env: options.environment,
       windowsHide: true,
