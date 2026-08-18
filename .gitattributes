@@ -1,3 +1,9 @@
+* text=auto eol=lf
+
+drizzle/migrations/*.sql text eol=crlf
+data/private/reference/ourairports-airports.csv -text
+artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json -text
+
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union
 .squad/log/** merge=union

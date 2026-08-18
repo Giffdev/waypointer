@@ -41,7 +41,10 @@
 # private local flight data
 /logbook_*.csv
 /flightdiary_*.csv
-/data/private/
+/data/private/*
+!/data/private/reference/
+/data/private/reference/*
+!/data/private/reference/ourairports-airports.csv
 /uploads/
 /pgdata/
 /postgres-data/
@@ -63,6 +66,11 @@ yarn-error.log*
 next-env.d.ts
 
 # mutable local evidence and coordination state
-/artifacts/
+/artifacts/*
+!/artifacts/release-evidence/
+/artifacts/release-evidence/*
+!/artifacts/release-evidence/airport-catalog/
+/artifacts/release-evidence/airport-catalog/*
+!/artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json
 /.squad/
 /ROUTE_SPLIT_SUMMARY.md

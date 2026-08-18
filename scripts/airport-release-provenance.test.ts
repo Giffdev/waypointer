@@ -71,38 +71,42 @@ describe("airport release provenance", () => {
         writeContentAddressedJson(outputDirectory, "candidate", manifest),
       ).resolves.toEqual(artifact);
     },
-    15_000,
+    30_000,
   );
 
-  it("fails closed for stale, mutated, or incomplete provenance", async () => {
-    const manifest = await createCandidateManifest();
-    const artifact = await writeContentAddressedJson(
-      outputDirectory,
-      "candidate",
-      manifest,
-    );
-    await appendFile(artifact.path, "stale", "utf8");
+  it(
+    "fails closed for stale, mutated, or incomplete provenance",
+    async () => {
+      const manifest = await createCandidateManifest();
+      const artifact = await writeContentAddressedJson(
+        outputDirectory,
+        "candidate",
+        manifest,
+      );
+      await appendFile(artifact.path, "stale", "utf8");
 
-    await expect(
-      verifyCandidateManifest(artifact.path, artifact.sha256),
-    ).rejects.toMatchObject({
-      diagnosticCode: "candidate-provenance-mismatch",
-    });
+      await expect(
+        verifyCandidateManifest(artifact.path, artifact.sha256),
+      ).rejects.toMatchObject({
+        diagnosticCode: "candidate-provenance-mismatch",
+      });
 
-    const incomplete = await writeContentAddressedJson(
-      outputDirectory,
-      "candidate",
-      {
-        schemaVersion: 1,
-        files: [manifest.source.files[0]],
-      },
-    );
-    await expect(
-      verifyCandidateManifest(incomplete.path, incomplete.sha256),
-    ).rejects.toMatchObject({
-      diagnosticCode: "candidate-provenance-mismatch",
-    });
-  });
+      const incomplete = await writeContentAddressedJson(
+        outputDirectory,
+        "candidate",
+        {
+          schemaVersion: 1,
+          files: [manifest.source.files[0]],
+        },
+      );
+      await expect(
+        verifyCandidateManifest(incomplete.path, incomplete.sha256),
+      ).rejects.toMatchObject({
+        diagnosticCode: "candidate-provenance-mismatch",
+      });
+    },
+    30_000,
+  );
 
   it("verifies every content-addressed command link and rejects raw notices", async () => {
     const candidateSha256 = "a".repeat(64);

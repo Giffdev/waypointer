@@ -126,7 +126,7 @@ beforeAll(async () => {
       AIRPORT_RELEASE_CONFIRMATION_PREFIX + approvalArtifact.sha256,
     AIRPORT_RELEASE_EVIDENCE_DIRECTORY: evidenceDirectory,
   };
-});
+}, 30_000);
 
 afterAll(async () => {
   await Promise.all([

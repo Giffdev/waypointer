@@ -13,15 +13,16 @@ const loopbackHosts = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 function ensureEnvironment() {
   if (!existsSync(envPath)) {
-    if (!existsSync(templatePath)) {
+    if (existsSync(templatePath)) {
+      copyFileSync(templatePath, envPath);
+      console.log("Created .env.local from the local-only .env.local.example.");
+    } else if (!process.env.DATABASE_URL?.trim()) {
       throw new Error(
         "Create a local .env.local before running the full stack. Environment files and templates are intentionally excluded from source control.",
       );
     }
-    copyFileSync(templatePath, envPath);
-    console.log("Created .env.local from the local-only .env.local.example.");
   }
-  process.loadEnvFile(envPath);
+  if (existsSync(envPath)) process.loadEnvFile(envPath);
 }
 
 function requireLoopbackDatabaseUrl(name) {

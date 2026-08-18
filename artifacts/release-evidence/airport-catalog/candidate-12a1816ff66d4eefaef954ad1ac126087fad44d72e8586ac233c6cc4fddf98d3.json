@@ -1,0 +1,1963 @@
+{
+  "baseline": {
+    "rejectedCandidateManifestPath": "artifacts/release-evidence/airport-catalog/candidate-8a923d3ffa990fe350609e1d4cd123616dbb9a5163cc187dfc2ab6e7c600571d.json",
+    "rejectedCandidateManifestSha256": "8a923d3ffa990fe350609e1d4cd123616dbb9a5163cc187dfc2ab6e7c600571d",
+    "sourceManifestPath": "artifacts/release-evidence/airport-catalog/candidate-8a923d3ffa990fe350609e1d4cd123616dbb9a5163cc187dfc2ab6e7c600571d.json",
+    "sourceManifestSha256": "8a923d3ffa990fe350609e1d4cd123616dbb9a5163cc187dfc2ab6e7c600571d"
+  },
+  "diff": {
+    "added": 0,
+    "deleted": 0,
+    "entries": [
+      {
+        "afterSha256": "bbc6b74c3953523251904677e05f537648d5b94e7ce5cc6ed8c3bd9cc724f84e",
+        "beforeSha256": "8888f8e5ac117754bb15f74aa4ef1bdf74fbfb6c377a62c255c1970e5a95edec",
+        "path": "config/airport-catalog-release.json",
+        "status": "modified"
+      },
+      {
+        "afterSha256": "8036fb86225cc555d367cfdf66ac7744efdac5a8cc8cce8ae4b7ecbfa96c695d",
+        "beforeSha256": "44f33811aaf23fd53839837085ac466029c2132765fdc07cfda10752596f93e1",
+        "path": "scripts/airport-release-rollback.test.ts",
+        "status": "modified"
+      },
+      {
+        "afterSha256": "52cf4a04ff9f1a6e2754834f8d517f1e773f5211315a3aef0696026a36c9b1b2",
+        "beforeSha256": "9b70600f28ecc1b902e4c7aee6a2f2c5e9ce49f708cf614debe0b816ee9c7324",
+        "path": "scripts/airport-release-rollback.ts",
+        "status": "modified"
+      },
+      {
+        "afterSha256": "bd8bbc40709fea157a1dfa84dcd1de078991eac10f6e13cb5ac437544fdf1225",
+        "beforeSha256": "36c9e906672e6d4e0f77cacbc9602416567ba9e9c4c90a96a9deb0098c5fcda5",
+        "path": "scripts/airport-release-upgrade.postgres.test.ts",
+        "status": "modified"
+      }
+    ],
+    "modified": 4,
+    "sha256": "f657e0d038696cdb5109c89b810001237a3e8228aa005090174ee43d36925f54",
+    "unchanged": 372
+  },
+  "provenanceMode": "content-addressed-full-source-baseline",
+  "schemaVersion": 2,
+  "source": {
+    "files": [
+      {
+        "bytes": 4210,
+        "path": ".env.example",
+        "sha256": "ea1ed9940f7e553b347ebba82b2868b4f33edbe4c36365016b3f23abfe243a9c"
+      },
+      {
+        "bytes": 2230,
+        "path": ".env.local.example",
+        "sha256": "da9a14a5496b9c9addd351c8238270376072f20c905540f5c566458760189a8f"
+      },
+      {
+        "bytes": 73,
+        "path": ".firebaserc",
+        "sha256": "445f69c536867184317165257567e5c7249628182f9172fdc97b1cc13f90409d"
+      },
+      {
+        "bytes": 601,
+        "path": ".github/workflows/ci.yml",
+        "sha256": "352cf95ba7d7a56c47f3baa832aa36aa56de5de8566eeadced1a3ff2312c1d49"
+      },
+      {
+        "bytes": 61,
+        "path": ".vercelignore",
+        "sha256": "6b267f2898c13183cebb665d57d3888c729321cf58d32b5c33aba4fd89ff99e0"
+      },
+      {
+        "bytes": 18008,
+        "path": "DEPLOYMENT.md",
+        "sha256": "8f952713c8d21046eb58a7037549ab3acdd70b768e8d783b6da77be31a21173c"
+      },
+      {
+        "bytes": 701,
+        "path": "Dockerfile.worker",
+        "sha256": "461c7d78b812198bb63c20cfa5b35759e076ac3f63a5c0b419a99ba59c470240"
+      },
+      {
+        "bytes": 11018,
+        "path": "README.md",
+        "sha256": "51113c12c33c60bb03b71eba244bc6cc9ec0b8a37986fa5d1a225cab54cce60a"
+      },
+      {
+        "bytes": 682,
+        "path": "compose.yaml",
+        "sha256": "3f1f48b07af444b694213e3179d3fc7d17ce0fe0a13eaa4dc70b5a7d779d21ee"
+      },
+      {
+        "bytes": 6142,
+        "path": "config/airport-catalog-release.json",
+        "sha256": "bbc6b74c3953523251904677e05f537648d5b94e7ce5cc6ed8c3bd9cc724f84e"
+      },
+      {
+        "bytes": 429,
+        "path": "config/firebase-oauth-hosts.json",
+        "sha256": "4b341842341525167165c36e4dd29838d71371651dd199b041b24551f260a279"
+      },
+      {
+        "bytes": 12691689,
+        "path": "data/private/reference/ourairports-airports.csv",
+        "sha256": "9bd09e3f3610654d93a312b21d7c3779cedcabe81ab4450145e53ebc1a35398a"
+      },
+      {
+        "bytes": 5166,
+        "path": "docs/logbook-csv-imports.md",
+        "sha256": "893c5e330199dc8298e07e37059b37755be19016a6386b8c0ce48e1a7dbc6612"
+      },
+      {
+        "bytes": 1889,
+        "path": "docs/map-sharing-api.md",
+        "sha256": "29036e7e353178b6ca1a01d8ce6a87ed4ca79d8c0b2f0510eedabd8d9645a8f3"
+      },
+      {
+        "bytes": 45445,
+        "path": "docs/multi-user-accounts-and-sharing.md",
+        "sha256": "c1178d007688a30a96aaec1146f92e01da739e0574caecf5f86fc0bb51cd1e95"
+      },
+      {
+        "bytes": 25303,
+        "path": "docs/multi-user-security-and-privacy.md",
+        "sha256": "8f3fdfbe5a1f91aeb931b4a34eedb8ac0f2fc8262deca18c62ef8997e6ab1535"
+      },
+      {
+        "bytes": 16101,
+        "path": "docs/product-architecture.md",
+        "sha256": "5f311cdfd40f876516ac9fe6d6e4919c9d71bac7a81f52bed6487aefc56845c4"
+      },
+      {
+        "bytes": 505,
+        "path": "drizzle.config.ts",
+        "sha256": "95dea28aa8a3a58f00f2f1e97cc7b9fd1b68442a3ea57be3c7934ff91bc462d0"
+      },
+      {
+        "bytes": 12110,
+        "path": "drizzle/migrations/0000_multi_user_import_foundation.sql",
+        "sha256": "96e39c0225152e7bdf9968a923b59a0a7006d93ebe30d0f57626793d9ae6d681"
+      },
+      {
+        "bytes": 1285,
+        "path": "drizzle/migrations/0001_privacy_retention_hardening.sql",
+        "sha256": "cadfa6a7369ac75b2ee825ad193678b80008a458cc5d30586377ba6219539e89"
+      },
+      {
+        "bytes": 10510,
+        "path": "drizzle/migrations/0002_launch_schema.sql",
+        "sha256": "5fcab0b89612cdaf93cc00ec5da7111d981fbaa702603457184463f0d5fe3c17"
+      },
+      {
+        "bytes": 2838,
+        "path": "drizzle/migrations/0003_import_review.sql",
+        "sha256": "8715717e12091f5c561e437d4a09267d0b65c5fff6dca2ca63a7181d588f5a45"
+      },
+      {
+        "bytes": 93,
+        "path": "drizzle/migrations/0003_recent_authentication.sql",
+        "sha256": "e7b1ec64089bebdfd29938a563f19edb14ab6a52fd99e45ee57c281d10bc9ddf"
+      },
+      {
+        "bytes": 893,
+        "path": "drizzle/migrations/0004_durable_import.sql",
+        "sha256": "6c04b1b72eb2c7477a825fb266535f578adb0bacb1015f58fbcb4fbe6cec5627"
+      },
+      {
+        "bytes": 991,
+        "path": "drizzle/migrations/0005_editable_usernames.sql",
+        "sha256": "a033418bb84bc54e8ab3219c71a1293ff34ba806648e241fa07c592cbc6cb38b"
+      },
+      {
+        "bytes": 88,
+        "path": "drizzle/migrations/0006_synchronous_import_completion.sql",
+        "sha256": "4be84af36aacdc6c740fe1d56099a8b88bf9917a4a97fa9b9c1ad7e098b99f27"
+      },
+      {
+        "bytes": 3177,
+        "path": "drizzle/migrations/0007_flight_role_provenance.sql",
+        "sha256": "4a7704868e7e0061209511e1402c62ba140c95bb3c22669f72bbe2b1f3cfd482"
+      },
+      {
+        "bytes": 4349,
+        "path": "drizzle/migrations/0008_read_only_map_sharing.sql",
+        "sha256": "ca036da7c8bc44f8d806946cde160a2e34b1d5b508087775331f6833137ee882"
+      },
+      {
+        "bytes": 2531,
+        "path": "drizzle/migrations/0009_airport_identifier_aliases.sql",
+        "sha256": "c7398cfd3d130d16ef64ffea196a1b13362ff69fde4725bb7671e4044b04d363"
+      },
+      {
+        "bytes": 191,
+        "path": "drizzle/migrations/0010_airport_name_search.sql",
+        "sha256": "85901ad7765c1a9a58d9f32d00c3033a52a4070680bacc6bc6c1be9d5e3dc18d"
+      },
+      {
+        "bytes": 91,
+        "path": "drizzle/migrations/0011_nautical_miles_profile_default.sql",
+        "sha256": "c5503e9b459273361e0ae763d6dda53b92005c5a7f0c74d1bc197b1a3d25a6cb"
+      },
+      {
+        "bytes": 3115,
+        "path": "drizzle/migrations/0012_multi_stop_flight_routes.sql",
+        "sha256": "1cf4e746a05b16e0b8f755b5a1c1ea96d946e33ae7ae1234108cb8f263ac5406"
+      },
+      {
+        "bytes": 218,
+        "path": "drizzle/migrations/0013_map_view_mode_preference.sql",
+        "sha256": "f80589ea89c7523d1d87701a6599d9507ffe4ca61fd191db33cf21c9810544c2"
+      },
+      {
+        "bytes": 682,
+        "path": "drizzle/migrations/0014_fix_flight_share_invalidation.sql",
+        "sha256": "6760cd764fbeb47a755a49addc231f7d0706c40ca4e1048ab4b3744ebb638e7d"
+      },
+      {
+        "bytes": 635,
+        "path": "drizzle/migrations/0015_airport_source_provenance.sql",
+        "sha256": "70e257b5e80d1539edc54891c12b624c054d916af4e6e98650adac4b859d172f"
+      },
+      {
+        "bytes": 2757,
+        "path": "drizzle/migrations/meta/_journal.json",
+        "sha256": "ba2b497073a910522a5077c5f5c194b9c04e65fe4970dbbaac004f21b3c738e0"
+      },
+      {
+        "bytes": 6060,
+        "path": "e2e/auth.spec.ts",
+        "sha256": "e1f6547ff71539ee884739847d9da827602d94bc7886d58db0e2fb35f6f858db"
+      },
+      {
+        "bytes": 5158,
+        "path": "e2e/flight-filters.spec.ts",
+        "sha256": "7eb40790025bf361f070a4ec7c7d6aeac2011d6e35b670e17d8445b926c91380"
+      },
+      {
+        "bytes": 4597,
+        "path": "e2e/import-review.spec.ts",
+        "sha256": "8a3c6f1f230dd188eea8a29dc295955f2912f3631a388046ce1f423b8253f317"
+      },
+      {
+        "bytes": 2710,
+        "path": "e2e/import-status.spec.ts",
+        "sha256": "d37a9d4a51aab929728ce53a7adaa262d690dc946e3b2dd16efd495943cdaa6e"
+      },
+      {
+        "bytes": 1607,
+        "path": "e2e/profile-deletion.spec.ts",
+        "sha256": "ebf5802463dc040c5399a92d923ea515b4f6b64b89dada96c321a402e153f314"
+      },
+      {
+        "bytes": 427,
+        "path": "eslint.config.mjs",
+        "sha256": "ac184761ffd643381312693be99ad5d9cd5c29763236622fc9c81a1db9447504"
+      },
+      {
+        "bytes": 412,
+        "path": "next.config.ts",
+        "sha256": "b6f9fa02131276403e64242fc6c955a2fbf6b8de5363a6fdeba4732b4e7ea96d"
+      },
+      {
+        "bytes": 426552,
+        "path": "package-lock.json",
+        "sha256": "89f54372c75c07bfdac5c310ef1b8b374b1cef073de256eeaf1e08ab50865902"
+      },
+      {
+        "bytes": 5066,
+        "path": "package.json",
+        "sha256": "851c572bcc43a579bec8c06fd621cc6a3078da12e210aee2c13237188f1cde57"
+      },
+      {
+        "bytes": 1439,
+        "path": "playwright.config.ts",
+        "sha256": "54e4bf0c09fd2f6f9156a98b443e4a0149d7c1c68fc05ae811fe1a6dbd5cc6b3"
+      },
+      {
+        "bytes": 94,
+        "path": "postcss.config.mjs",
+        "sha256": "dfac7ac2d86d326a0e5adb024e7943c181393ed17a5fcb8f0315b24c7da6ddde"
+      },
+      {
+        "bytes": 315,
+        "path": "railway.json",
+        "sha256": "889386d76390e37245452e97a2e715c6c4ab1fc33758e1c4fcc4f3d4add42d8c"
+      },
+      {
+        "bytes": 8005,
+        "path": "scripts/airport-release-evidence.ts",
+        "sha256": "db668ce96f9bed84705bd6806f049896552861128fe7e7e10f5ce1235f604e12"
+      },
+      {
+        "bytes": 8903,
+        "path": "scripts/airport-release-health.test.ts",
+        "sha256": "d49f20465f1150a5131b65d7ceae69d08e0a9b379eecc108f03eefb163f3196c"
+      },
+      {
+        "bytes": 25173,
+        "path": "scripts/airport-release-health.ts",
+        "sha256": "87baba066f1d9a6db18ba4153ea17dc9addc2a138eabc65a4f9b6088c6a36fb4"
+      },
+      {
+        "bytes": 5204,
+        "path": "scripts/airport-release-migrations.test.ts",
+        "sha256": "c3b482ef164dbba87d5765c6475f08424358e4a7327e7f03d85dc1a8dcd19b52"
+      },
+      {
+        "bytes": 17519,
+        "path": "scripts/airport-release-migrations.ts",
+        "sha256": "fa7acac804ef3e13d5ea0903365bc1e037bff1f8c4b0b583e55356c69dd99846"
+      },
+      {
+        "bytes": 4054,
+        "path": "scripts/airport-release-provenance.test.ts",
+        "sha256": "c595854eb6b2a478c20349ae95ef945b175b5baba2a63bf786a21e4d175f70ca"
+      },
+      {
+        "bytes": 16739,
+        "path": "scripts/airport-release-provenance.ts",
+        "sha256": "3fc3534bb0a81a88ddda66881dda7e6ecc2098b027fbb724d250743ebad59b64"
+      },
+      {
+        "bytes": 5804,
+        "path": "scripts/airport-release-rollback.test.ts",
+        "sha256": "8036fb86225cc555d367cfdf66ac7744efdac5a8cc8cce8ae4b7ecbfa96c695d"
+      },
+      {
+        "bytes": 11381,
+        "path": "scripts/airport-release-rollback.ts",
+        "sha256": "52cf4a04ff9f1a6e2754834f8d517f1e773f5211315a3aef0696026a36c9b1b2"
+      },
+      {
+        "bytes": 9826,
+        "path": "scripts/airport-release-safety.test.ts",
+        "sha256": "e6dc7020d87488fe0f4665e6e5be6b02a3b5fdfbfb157f40c139148bf1243b0e"
+      },
+      {
+        "bytes": 12116,
+        "path": "scripts/airport-release-safety.ts",
+        "sha256": "9e84afce90d290314c991cd69d96ead4559f385a8be2aa2fadac86f5554c61af"
+      },
+      {
+        "bytes": 34290,
+        "path": "scripts/airport-release-upgrade.postgres.test.ts",
+        "sha256": "bd8bbc40709fea157a1dfa84dcd1de078991eac10f6e13cb5ac437544fdf1225"
+      },
+      {
+        "bytes": 8000,
+        "path": "scripts/airport-seed-plan.ts",
+        "sha256": "93c98ad6603e0d0831d6f2284abb24dc553109778330d4e1a5ade02e746e6f39"
+      },
+      {
+        "bytes": 1288,
+        "path": "scripts/audit-airport-catalog.ts",
+        "sha256": "1b079b0a0c6a45c2c2aec85e73c8966d545ed4c73248663f0aa2536ed768a333"
+      },
+      {
+        "bytes": 2275,
+        "path": "scripts/check-durable-import-worker-config.mjs",
+        "sha256": "c92a5d1682b8a4b41b2abdb1672441a683c6dcf64c1177cc4de2509db930db36"
+      },
+      {
+        "bytes": 2773,
+        "path": "scripts/check-durable-import-worker-config.test.ts",
+        "sha256": "c72f02f4c6308b7a63c10261cdb6f30aaf78546c6bb5c6bc0f64bd359837e257"
+      },
+      {
+        "bytes": 1302,
+        "path": "scripts/check-firebase-oauth-host.mjs",
+        "sha256": "6bee854e5e005b3918bb64fffe106dcb6e9ac42400ee9632a4ca3099c09d5617"
+      },
+      {
+        "bytes": 3336,
+        "path": "scripts/check-preview-release-config.mjs",
+        "sha256": "dc399728657f81d93cd091c3fa2cf76edf046e62cf345a0bb1ea28ac186909c5"
+      },
+      {
+        "bytes": 3558,
+        "path": "scripts/check-production-release-config.mjs",
+        "sha256": "74d2e93910c904918ae1ede422d78a74f96edd5b8d019856044d067e87f855f4"
+      },
+      {
+        "bytes": 4157,
+        "path": "scripts/check-public-auth-gates.mjs",
+        "sha256": "31ed411223808a89b7ed879ad9641893b8c10013bf488b675f89c03da874f07a"
+      },
+      {
+        "bytes": 659,
+        "path": "scripts/copy-maplibre-assets.mjs",
+        "sha256": "9d6637b0f3e483e936b470df11c5364c896526c5f02ba43e415f89146bfdc8b7"
+      },
+      {
+        "bytes": 509,
+        "path": "scripts/create-airport-release-candidate.ts",
+        "sha256": "4d5414aa7cbba46b89be4bbb642ce01271307590783580ce97a536a53c6da5b0"
+      },
+      {
+        "bytes": 5043,
+        "path": "scripts/durable-import-smoke.mjs",
+        "sha256": "6ca563b503b96fb2e9d7c454e5a16ef4d1886ae5d84e8a990c7ec058c2044f72"
+      },
+      {
+        "bytes": 5793,
+        "path": "scripts/import-foreflight.ts",
+        "sha256": "80ef5f2735040994e6c62b353e447b1c68613b7b987a824db8d1e6e3317464d4"
+      },
+      {
+        "bytes": 7067,
+        "path": "scripts/import-myflightradar24.ts",
+        "sha256": "c6278db39a32cf16bcae8aeea92322e8dfeba83dbd5543ea7cea4e35b5cd32c0"
+      },
+      {
+        "bytes": 11721,
+        "path": "scripts/local-stack.mjs",
+        "sha256": "154eca48df0fd022ae72e23e855f582a205705fe07819ddc490c46f716a2133d"
+      },
+      {
+        "bytes": 1998,
+        "path": "scripts/local-stack.test.ts",
+        "sha256": "f684130bbbd8b38b5196dc807e34c1c0ee222a589159a436092bc2d9ae5749d5"
+      },
+      {
+        "bytes": 10494,
+        "path": "scripts/migrate-local-artifact.ts",
+        "sha256": "fd296498593e3a3d53d0cc1f5fb63bc5616738593adde824c349bc98f010f285"
+      },
+      {
+        "bytes": 3756,
+        "path": "scripts/postgres-diagnostics.test.ts",
+        "sha256": "81876dae2a185c7be1359df8c12884c7b72971d8804214ccb1bc296149a12778"
+      },
+      {
+        "bytes": 3842,
+        "path": "scripts/postgres-diagnostics.ts",
+        "sha256": "f7010d31e658d8ddab4851c90b49109dbab8df0fe8c5cd339e676c0954b2e4fc"
+      },
+      {
+        "bytes": 5277,
+        "path": "scripts/prepare-local-airport-release.ts",
+        "sha256": "bb75ef66d1ac1a9cabe99e0c54886a136743d1a5e53ae8acdfe88faf497b8176"
+      },
+      {
+        "bytes": 901,
+        "path": "scripts/print-airport-target-fingerprint.ts",
+        "sha256": "ca5affec8ad3b2bf334bde2d447ffbfb50c575276ac79ba652b097956274c8c3"
+      },
+      {
+        "bytes": 6418,
+        "path": "scripts/public-auth-smoke.mjs",
+        "sha256": "3cc88a73f1ffaeb36706afd3c2cbc110e706cc02320a452d272b269b98fab747"
+      },
+      {
+        "bytes": 3594,
+        "path": "scripts/reconcile-unresolved-imports.ts",
+        "sha256": "e0810004b7f90d0d1ec7d322ca31b8df351f9333ee5d3dde9ead4b6e1c613b8a"
+      },
+      {
+        "bytes": 12285,
+        "path": "scripts/release-airport-catalog.ts",
+        "sha256": "528254346a8c2e96827a39aaa1b4afa18d2d35b54b9d05e5d750f72a4e0704e8"
+      },
+      {
+        "bytes": 1265,
+        "path": "scripts/safe-migrate.ts",
+        "sha256": "0eac349bce3911cc61a5575050771e6182ea43f20bb87713dbb4908a8b3eff0f"
+      },
+      {
+        "bytes": 12251,
+        "path": "scripts/seed-airports.test.ts",
+        "sha256": "f396bc1ebf978307468ca7e3ddd5f83820309dea0a246f29f134b1ca969fb05e"
+      },
+      {
+        "bytes": 11618,
+        "path": "scripts/seed-airports.ts",
+        "sha256": "b7c625a28717d14348ad74173ef69e757ae72d911316f13b9336bc0daa96a804"
+      },
+      {
+        "bytes": 1619,
+        "path": "scripts/worker-contract.test.ts",
+        "sha256": "34dd9d8e1c6aee1cd06adb3647aef96535f5199110d4dfe0ebbefc7ef5d8855d"
+      },
+      {
+        "bytes": 341,
+        "path": "scripts/worker-entrypoint.sh",
+        "sha256": "cc095f5320ffb16e3479e76fae54e28a089f02dd4cadff9a4e7b787ac5ed795c"
+      },
+      {
+        "bytes": 3608,
+        "path": "scripts/worker.ts",
+        "sha256": "5ac020b1faeb73be8d27db06c2a58e86b62fff96ad8440be8238266a19165351"
+      },
+      {
+        "bytes": 853,
+        "path": "src/app/(routes)/flights/page.tsx",
+        "sha256": "ee67fd2d6cbdd075bef305f2adbd6de14010601bf5c2c42ee8b767962e6320b7"
+      },
+      {
+        "bytes": 20464,
+        "path": "src/app/(routes)/flights/route-client.tsx",
+        "sha256": "652f4cc1b59f30778c00c66fead593eec6920c975e711ab60f445a041fbd0c7a"
+      },
+      {
+        "bytes": 938,
+        "path": "src/app/(routes)/import/page.tsx",
+        "sha256": "3ff23ba18a2637831c741670d123b08f7a69ee39c5959642a03a6cbb4acb4802"
+      },
+      {
+        "bytes": 47818,
+        "path": "src/app/(routes)/import/route-client.test.tsx",
+        "sha256": "7ca580b6e6f440d9953ac14e12b2d742450ab98567a021cd80bc463c4963a492"
+      },
+      {
+        "bytes": 69737,
+        "path": "src/app/(routes)/import/route-client.tsx",
+        "sha256": "823e53f902eab64fdd37793504efeae85ea8eacfa91d714debff1e6da2593d45"
+      },
+      {
+        "bytes": 850,
+        "path": "src/app/(routes)/layout.tsx",
+        "sha256": "3da654a9ecc8a0489139131b1808f29837c4c85d3b54be264d1ca77425aa626b"
+      },
+      {
+        "bytes": 865,
+        "path": "src/app/(routes)/map/page.tsx",
+        "sha256": "6b59dea6bc74c5ad5be6b5eb1cf3b9b63fd75b4179a346c53af90561b5344743"
+      },
+      {
+        "bytes": 14937,
+        "path": "src/app/(routes)/map/route-client.tsx",
+        "sha256": "88ca60c04825158ddbf7127cca0af7d4296737f14d4b56a589bc7b246ee76efe"
+      },
+      {
+        "bytes": 1798,
+        "path": "src/app/(routes)/settings/page.tsx",
+        "sha256": "83b7393ed53edfb48dad388e58529b2af0ae5629e2d765b268242de5ae88bdb3"
+      },
+      {
+        "bytes": 5155,
+        "path": "src/app/(routes)/settings/route-client.test.tsx",
+        "sha256": "1d919c8f5c2c823d8418fec1a1d769d5a34105d929132b25adc9f6d78ccc166f"
+      },
+      {
+        "bytes": 9041,
+        "path": "src/app/(routes)/settings/route-client.tsx",
+        "sha256": "8beb66f0b29b1d3d92547882c7204c721e996506507dd0ea9b896ce608af97bc"
+      },
+      {
+        "bytes": 2322,
+        "path": "src/app/api/account/_lib/response.ts",
+        "sha256": "a7049775d31c1ac2706896d91d852c9948523e0b9bc64e1890a0531dd38b6e8f"
+      },
+      {
+        "bytes": 1364,
+        "path": "src/app/api/account/delete/cancel/route.test.ts",
+        "sha256": "9ef2ad72271058d585fc0b4432c6d23e819a1ded122f1040d6599e19c51d6049"
+      },
+      {
+        "bytes": 694,
+        "path": "src/app/api/account/delete/cancel/route.ts",
+        "sha256": "e7d8aa803dfb9069fdf3034baeff0c41387def88241853301e1648ef546ae06e"
+      },
+      {
+        "bytes": 3261,
+        "path": "src/app/api/account/delete/route.test.ts",
+        "sha256": "68c2b92e9be4860ffc0daefd3dc8b346e235b61e45c28755a288f753fb172c48"
+      },
+      {
+        "bytes": 1809,
+        "path": "src/app/api/account/delete/route.ts",
+        "sha256": "c88ab8b7aa79f48d9ef4223e97729d461425a3ec267f306eec274dcaa55eae0c"
+      },
+      {
+        "bytes": 4648,
+        "path": "src/app/api/account/profile/route.test.ts",
+        "sha256": "7ea39792abc0bd7a96f59002467afab9a2ec3bf56ac863e2a2049fad377e95f5"
+      },
+      {
+        "bytes": 2303,
+        "path": "src/app/api/account/profile/route.ts",
+        "sha256": "f58fdb9657bc48ef9e1dce241de5dc59d4b944e76ade27fd124777d4c8b013ea"
+      },
+      {
+        "bytes": 1685,
+        "path": "src/app/api/account/sharing/preview/route.test.ts",
+        "sha256": "b10f4d89bcecaa1482209daab60ebdc1910b89224e42066124f250af4369e122"
+      },
+      {
+        "bytes": 1079,
+        "path": "src/app/api/account/sharing/preview/route.ts",
+        "sha256": "954e017726d703d87b23d799c4cd61979cd26ae88ed0f5f45563182fa5b6aa90"
+      },
+      {
+        "bytes": 830,
+        "path": "src/app/api/account/sharing/regenerate/route.ts",
+        "sha256": "a592857927914668239d1feb71baf35f13fd8fd3bc93ee5d6e5142820cfc3805"
+      },
+      {
+        "bytes": 2675,
+        "path": "src/app/api/account/sharing/route.test.ts",
+        "sha256": "0cce41582099a3fa7fc006e257a380425b15a7092ce40d51d2da9e4b58ad8739"
+      },
+      {
+        "bytes": 1935,
+        "path": "src/app/api/account/sharing/route.ts",
+        "sha256": "d1bc23a34856c8aa6ae8d980c3eef94e55e67090c34d1a0aee6aab13fbff77b7"
+      },
+      {
+        "bytes": 118,
+        "path": "src/app/api/auth/[...nextauth]/route.ts",
+        "sha256": "f62ac9a8e8cd0cbd44d160e7f8517dda50b443f5d09a63a84572de8f63745729"
+      },
+      {
+        "bytes": 3321,
+        "path": "src/app/api/auth/credentials/route.test.ts",
+        "sha256": "e98a431bffa72caead20aa61f35cfca95cb1eeacf4e06e42f81be50ceeba4ff0"
+      },
+      {
+        "bytes": 1070,
+        "path": "src/app/api/auth/credentials/route.ts",
+        "sha256": "f6eb2b7d822da9b8b771a81cc4fc58676362aaa052663881550a2874558ab3f7"
+      },
+      {
+        "bytes": 2237,
+        "path": "src/app/api/auth/firebase/register-check/route.test.ts",
+        "sha256": "edc73c4c5dfefa0047e7438519d41be3503e7c221fd6d65ec03e0845b107ea12"
+      },
+      {
+        "bytes": 1527,
+        "path": "src/app/api/auth/firebase/register-check/route.ts",
+        "sha256": "d09a64178f5a091953fc5ba7af21c687f42c4d5e5dc582f1bf84d0f16408aed6"
+      },
+      {
+        "bytes": 2987,
+        "path": "src/app/api/auth/firebase/route.test.ts",
+        "sha256": "fcbef3a3bd114f5d65b2d55041c6e6a1f65b223159ac7c591910a22bbf79e264"
+      },
+      {
+        "bytes": 1614,
+        "path": "src/app/api/auth/firebase/route.ts",
+        "sha256": "b12e3c638fe64ef20a23b4759cba5d8abbc30c29dd38f7b92f6540773a1abbb0"
+      },
+      {
+        "bytes": 4157,
+        "path": "src/app/api/auth/register/route.test.ts",
+        "sha256": "b530bbc6839458c0b227095ec27d536099469d888749423e9c15edc7ccc318c9"
+      },
+      {
+        "bytes": 5812,
+        "path": "src/app/api/auth/register/route.ts",
+        "sha256": "06e766dc9b5e5bfcdacb5a086a02d28967c00be082a2c0104503c1a942a3edf0"
+      },
+      {
+        "bytes": 2347,
+        "path": "src/app/api/auth/verify/route.test.ts",
+        "sha256": "9575c6f4a1212486406dc3f4a29668265675bfffb30d8d4b13f38f82116fbd26"
+      },
+      {
+        "bytes": 2182,
+        "path": "src/app/api/auth/verify/route.ts",
+        "sha256": "cc976abb6d98f21e11b7345dd8cb34ce281b59961fb05aa4e62ece4e903f4610"
+      },
+      {
+        "bytes": 2450,
+        "path": "src/app/api/flights/route.test.ts",
+        "sha256": "3c71647b54b37aefabeec93c70c4d9ea5c19a3ff36dfb8d945768275176ed774"
+      },
+      {
+        "bytes": 1824,
+        "path": "src/app/api/flights/route.ts",
+        "sha256": "d93ef5667067af65a13529f2174831b0dcf0b7896c5b077b7565c4658991a4ad"
+      },
+      {
+        "bytes": 2237,
+        "path": "src/app/api/health/release/route.test.ts",
+        "sha256": "698db24819217088478c87bc0c01d41f61a8999e19cad1e8748183f113b0dff0"
+      },
+      {
+        "bytes": 578,
+        "path": "src/app/api/health/release/route.ts",
+        "sha256": "a30b110a8e66b3301873bc7250aaca8f844c69a763b25fa905f1ecaa93d65310"
+      },
+      {
+        "bytes": 1572,
+        "path": "src/app/api/import/_lib/response.ts",
+        "sha256": "8e6c738189dc5a9f3959923c737975fd20407a1dcad6d55e27de1c67b85239f0"
+      },
+      {
+        "bytes": 157,
+        "path": "src/app/api/import/_lib/revalidate.ts",
+        "sha256": "df8346fa53043ed827f4a0a54b434e01e1772116a06524805aff92595f70a5f2"
+      },
+      {
+        "bytes": 20941,
+        "path": "src/app/api/import/_lib/service.ts",
+        "sha256": "61ca6c8357f50042ef16424147476ca6b2dc61c74fc68d66cd8322e6690266ba"
+      },
+      {
+        "bytes": 633,
+        "path": "src/app/api/import/airports/route.ts",
+        "sha256": "59439d2b67fd51db45b17ec32f01bf30f4406b9c56b77d60bad30b994b3addd0"
+      },
+      {
+        "bytes": 686,
+        "path": "src/app/api/import/batches/[batchId]/cancel/route.ts",
+        "sha256": "7a505dff720f9858b0fac7ba2d31c5cd1cfddeae0b59f082420f6084e696cf0a"
+      },
+      {
+        "bytes": 837,
+        "path": "src/app/api/import/batches/[batchId]/commit/route.ts",
+        "sha256": "259c5a9e217614b0a54c17ecdaeb5ef7b72ef2139d69dd9570cd96e184e2cb4e"
+      },
+      {
+        "bytes": 1425,
+        "path": "src/app/api/import/batches/[batchId]/decide/route.ts",
+        "sha256": "29be2a8ece0365b295e97bc88ef0b06ec73eabb946b10234df8067f3c9207353"
+      },
+      {
+        "bytes": 684,
+        "path": "src/app/api/import/batches/[batchId]/retry/route.ts",
+        "sha256": "85462a9ca137d115cd06b8e2b4a539e00877cd0bd2998cc6693868bf6e3a5224"
+      },
+      {
+        "bytes": 1209,
+        "path": "src/app/api/import/batches/[batchId]/route.ts",
+        "sha256": "32606b505a5990b091bd760c7392261dfc634eb20b5ff8205c969745c573c684"
+      },
+      {
+        "bytes": 1632,
+        "path": "src/app/api/import/batches/[batchId]/rows/[rowId]/route.ts",
+        "sha256": "a16b8b0ff975268f35bd21f3fac51aa50ca223e94a34fe06cdfd3c3b97422735"
+      },
+      {
+        "bytes": 427,
+        "path": "src/app/api/import/batches/route.ts",
+        "sha256": "3b356e87a85079b9143273a403eb0ac7e13169bd95bbef63e2fa2fa408d6d73e"
+      },
+      {
+        "bytes": 5790,
+        "path": "src/app/api/import/durable-import-routes.test.ts",
+        "sha256": "05c6ba651b0f1f87aef283f2492a706189bed8e0254919494b31beeacf5e002d"
+      },
+      {
+        "bytes": 2797,
+        "path": "src/app/api/import/import-review-routes.test.ts",
+        "sha256": "832fc44802aa3767d1a1a924e557253affacbe106a8c91f07b15108f5dfc9fc4"
+      },
+      {
+        "bytes": 912,
+        "path": "src/app/api/import/upload/finalize/route.ts",
+        "sha256": "7963058d8dcbdfe791cd4c7203831b687d91c2c3e8e689c8b1ef8e2a3bb5742f"
+      },
+      {
+        "bytes": 1236,
+        "path": "src/app/api/import/upload/initiate/route.ts",
+        "sha256": "937dca0e7a4b3bb8773d45fba6b79957cba8b3a90de10f428f34cbbc74e59b07"
+      },
+      {
+        "bytes": 4559,
+        "path": "src/app/api/import/upload/route.test.ts",
+        "sha256": "ccf1c7949794c78043830e19d4aa113c857a5c016827a3c6ed1741e006b2600b"
+      },
+      {
+        "bytes": 2240,
+        "path": "src/app/api/import/upload/route.ts",
+        "sha256": "727a3d5a7e68871ee2f2683693d8b004de67ffc145cab976af1cc86bd24d21a5"
+      },
+      {
+        "bytes": 3235,
+        "path": "src/app/api/shared/[token]/route.test.ts",
+        "sha256": "3f4d86fa0c1c240c37a0c03b207c8f77daee481691d951b5eacb64c5176680a0"
+      },
+      {
+        "bytes": 3055,
+        "path": "src/app/api/shared/[token]/route.ts",
+        "sha256": "f6e8dfce7bdff3a17b3ffa157f2ff28541f59c4c17c2bc59a62f5f6ac8091d93"
+      },
+      {
+        "bytes": 1420,
+        "path": "src/app/auth/delete-cancel/page.tsx",
+        "sha256": "edb7cafe6b97125d81ce4d74af4c675d6a47d6ee8f73cd04ddec8aeab625a54e"
+      },
+      {
+        "bytes": 570,
+        "path": "src/app/auth/firebase/callback/page.tsx",
+        "sha256": "7876952ec394fb583f62efd7a4cfdbe400d259699de337379e9aef2ac787d73a"
+      },
+      {
+        "bytes": 2649,
+        "path": "src/app/auth/register/page.test.tsx",
+        "sha256": "d6878cb25c5cf5884ad928887e3aec6807b2f8d24af27fb7795eccd8874d984a"
+      },
+      {
+        "bytes": 3740,
+        "path": "src/app/auth/register/page.tsx",
+        "sha256": "f35f9fd6985ac2f3531dbc5eb0a3d0496ff4352d5710b10dcb700f3750958c6a"
+      },
+      {
+        "bytes": 3738,
+        "path": "src/app/auth/sign-in/page.tsx",
+        "sha256": "a52c892aa863531f2a2a30af18d467a44293103155b415a3dc37f13858b207fa"
+      },
+      {
+        "bytes": 513,
+        "path": "src/app/auth/sign-out/page.tsx",
+        "sha256": "af5d2d210817ec57a1242ba7da193ad928fcd4682b54575911e8221b284d34a9"
+      },
+      {
+        "bytes": 2670,
+        "path": "src/app/auth/verify/page.tsx",
+        "sha256": "0abaa3f967ae4d96614a34e500b90a72a25546c85d519960767871cf35bf74be"
+      },
+      {
+        "bytes": 1768,
+        "path": "src/app/brand-surfaces.test.ts",
+        "sha256": "7e69f81c998273b25542d73fe4091a9502c0afa35420850bdad9ad7ad89a6eaf"
+      },
+      {
+        "bytes": 25931,
+        "path": "src/app/favicon.ico",
+        "sha256": "2b8ad2d33455a8f736fc3a8ebf8f0bdea8848ad4c0db48a2833bd0f9cd775932"
+      },
+      {
+        "bytes": 67347,
+        "path": "src/app/globals.css",
+        "sha256": "6072eb82e63029b478d2bd8c54b7beabf44470b8f4f1bc0f751fdce8f8c374dd"
+      },
+      {
+        "bytes": 1413,
+        "path": "src/app/layout.tsx",
+        "sha256": "8bd2caf9e578536942f5fcb042e84213e6f97afa7044162fff0397afead1ddb9"
+      },
+      {
+        "bytes": 1590,
+        "path": "src/app/map-layout.test.ts",
+        "sha256": "a2a9b41d71b94feb0f5f30e8e29f56023e8fee2c9ced507c1d0511531379fb89"
+      },
+      {
+        "bytes": 3427,
+        "path": "src/app/page.test.tsx",
+        "sha256": "4dbcc6780058a6f4911179cce32fbb3ddf168556f4ed237e4a08a683da830878"
+      },
+      {
+        "bytes": 363,
+        "path": "src/app/page.tsx",
+        "sha256": "880895d644b543c23ad3bd09feb2740aa3fbe7be5efff3cd2c44cbd8a44a9609"
+      },
+      {
+        "bytes": 7385,
+        "path": "src/app/responsive-actions.test.ts",
+        "sha256": "b39742117db6219b343606e5ede53c899f9fe2e5f8661f7cb3564813bfdc0974"
+      },
+      {
+        "bytes": 21949,
+        "path": "src/app/route-clients.test.tsx",
+        "sha256": "5ff74d0b0788f8f0d75a08725f88c0fff24dd1f512607d7e5c547a83468c000c"
+      },
+      {
+        "bytes": 371,
+        "path": "src/app/shared/[token]/page.test.tsx",
+        "sha256": "3cbf11b20469e4a0f28b20aa66258b6c52dd708634c62322ab77511e3fe9f1a8"
+      },
+      {
+        "bytes": 524,
+        "path": "src/app/shared/[token]/page.tsx",
+        "sha256": "881d594b1e93c99ad6bcd211716f664f27d6365286d40d55d3b3fd36219f0078"
+      },
+      {
+        "bytes": 3585,
+        "path": "src/components/airport-focus-combobox.test.tsx",
+        "sha256": "c0d4896094abca7cd3fde772e545da93255a1689916e90dd975728885cf53287"
+      },
+      {
+        "bytes": 1662,
+        "path": "src/components/airport-focus-combobox.tsx",
+        "sha256": "eca08928e7db7bbd371ab995e66f30cfc096ea24c6c7f316957150d70fc9145f"
+      },
+      {
+        "bytes": 1921,
+        "path": "src/components/airport-search-picker.test.tsx",
+        "sha256": "7c91c2d73092ced5561b6eefc867a97bbc0b4d8a406900af2e9d08c6ebfa5d02"
+      },
+      {
+        "bytes": 4769,
+        "path": "src/components/airport-search-picker.tsx",
+        "sha256": "a8df16b5cbb8311c27ad371a71db10bcd1f087da97271776fb6e59805699705f"
+      },
+      {
+        "bytes": 4965,
+        "path": "src/components/app-navigation.test.tsx",
+        "sha256": "07cef76bfa7216ed36415beed91b49d8dba9567374acfaab4f128874e744ae4e"
+      },
+      {
+        "bytes": 7508,
+        "path": "src/components/app-navigation.tsx",
+        "sha256": "0995cedc900aa29d115b39eafbd11dda7620ac1b9e806aebe38d35af13e56ca3"
+      },
+      {
+        "bytes": 4499,
+        "path": "src/components/auth/auth-form.test.tsx",
+        "sha256": "24c68bcc370d38e348dc0ba10cec5e0b03fb966ecc7b3d07d2e74dcbc38b062a"
+      },
+      {
+        "bytes": 2066,
+        "path": "src/components/auth/auth-form.tsx",
+        "sha256": "97c157a7664b8ff8d7224247d30844f3bc87a4f175ae5b51bbfc8260723902be"
+      },
+      {
+        "bytes": 1208,
+        "path": "src/components/auth/auth-shell.tsx",
+        "sha256": "2786796d5c7546b8634c9dfb154a2fd4c71c0c0254260b2cd76fcc04d78d378e"
+      },
+      {
+        "bytes": 1227,
+        "path": "src/components/auth/firebase-auth-form.test.tsx",
+        "sha256": "37940164d27293f7d5aaf69fb3501f675e827daafcdf38189c481971994237ae"
+      },
+      {
+        "bytes": 7187,
+        "path": "src/components/auth/firebase-auth-form.tsx",
+        "sha256": "db44d9aab72e087154e99def77dee366ed6bb71e5e16de66a5a766784be290fd"
+      },
+      {
+        "bytes": 1714,
+        "path": "src/components/auth/firebase-redirect-handler.test.tsx",
+        "sha256": "60191c75f13a441f96c70fb3a74315bb14fdf5977adb242b4edd38c6e3f71c19"
+      },
+      {
+        "bytes": 1760,
+        "path": "src/components/auth/firebase-redirect-handler.tsx",
+        "sha256": "a8469cc4ee3e8561a3fec13b7fb7dbd49dd614aff0aee2beff8bef1697379a0a"
+      },
+      {
+        "bytes": 2896,
+        "path": "src/components/auth/firebase-session-completion.test.tsx",
+        "sha256": "5cfb021d032f0996eacb61aec868ce7b31ec7570e07e5f4ba3026471b9814596"
+      },
+      {
+        "bytes": 2198,
+        "path": "src/components/auth/firebase-session-completion.tsx",
+        "sha256": "10524eba097a1ed8b3b182374ac8bbf1fc09089f2db82fff13a57ace5d8d9d90"
+      },
+      {
+        "bytes": 761,
+        "path": "src/components/auth/oauth-buttons.test.tsx",
+        "sha256": "089cafd5d30d8096cbe4c6207f8e7722eb298d720924890c55e101f62ee90e2a"
+      },
+      {
+        "bytes": 812,
+        "path": "src/components/auth/oauth-buttons.tsx",
+        "sha256": "b0fa188631f492b1d47a004ddaf12fd532146703fb7a6db83ddec2bc99ed2ecc"
+      },
+      {
+        "bytes": 1378,
+        "path": "src/components/auth/password-field.tsx",
+        "sha256": "cb33d9b933e8c8b1b6d44069c6e202c52c3c9e04cc046550ecdbb3a9cee30de7"
+      },
+      {
+        "bytes": 16151,
+        "path": "src/components/dashboard-shared.ts",
+        "sha256": "706847a36dc0a6e5cfca5284a576c22fefa2a0ee804b90afce018a475c13a702"
+      },
+      {
+        "bytes": 2326,
+        "path": "src/components/dashboard.test.tsx",
+        "sha256": "a705f3a021c4eb1c9a188e0001dc7b9be0d5c9ccbb9b678e887c12f21f1fc36b"
+      },
+      {
+        "bytes": 3007,
+        "path": "src/components/dashboard.tsx",
+        "sha256": "94a10c52c6dd560414a4fbfb394eed871b613908a529c43f1fbeadd34395515e"
+      },
+      {
+        "bytes": 7805,
+        "path": "src/components/filter-combobox.test.tsx",
+        "sha256": "154ff35c8d2a304f28654a519601f34cab68359909cc2cf38beb01eadae4c6a5"
+      },
+      {
+        "bytes": 10092,
+        "path": "src/components/filter-combobox.tsx",
+        "sha256": "d70b077d400291daab6e24d4ddbd083d5fb71cb84a4e676da406161b7641635a"
+      },
+      {
+        "bytes": 9599,
+        "path": "src/components/flight-entry-dialog.tsx",
+        "sha256": "a39ed97b9264efa5802c917ce3a648ad74c8e5a8539c296332f2d8f9098218b1"
+      },
+      {
+        "bytes": 6562,
+        "path": "src/components/flight-globe.test.tsx",
+        "sha256": "30e54f67871a17b988a3266998f86bf4b0617a9458105fa8f814594d0f7afe1a"
+      },
+      {
+        "bytes": 26413,
+        "path": "src/components/flight-globe.tsx",
+        "sha256": "adbffbb4e4b3ad00185085706a281cba4c95fb3d5cfa6fb9ff103aaded6a85ad"
+      },
+      {
+        "bytes": 792,
+        "path": "src/components/globe-panel.tsx",
+        "sha256": "0e505e5480c720392bbc42c3a1e8e7bc09e47b3bfa591e9d9a218c1718b25be4"
+      },
+      {
+        "bytes": 16263,
+        "path": "src/components/landing/landing-page.module.css",
+        "sha256": "9236e6f86910f6d5a1e6d5df78945f8869b125c1f4cc4d0631518086c6c4688a"
+      },
+      {
+        "bytes": 11956,
+        "path": "src/components/landing/landing-page.tsx",
+        "sha256": "8e337345c5c5870624951bdb0c5148b48941b141903f2122a7b734b0e68c20a1"
+      },
+      {
+        "bytes": 4153,
+        "path": "src/components/manual-flight-dialog.test.tsx",
+        "sha256": "094666a4e4fb3647114bbbde4a790d85e77a424446972f64c39c7f8760559c19"
+      },
+      {
+        "bytes": 8071,
+        "path": "src/components/manual-flight-dialog.tsx",
+        "sha256": "09c7a67be00f8c03a564c3d069c817fe2b65a78e6676c2979a9f145f3f4becdf"
+      },
+      {
+        "bytes": 2597,
+        "path": "src/components/map-legend.test.tsx",
+        "sha256": "3bbf3eb3999fe85a623c31d3137354ae9fbe690a8b50c8fd9a1786cfc9446f05"
+      },
+      {
+        "bytes": 2607,
+        "path": "src/components/map-legend.tsx",
+        "sha256": "a753c98bb307be81fab05398ee3c776c40300ce6d4a8b5475bfd09b9c050c2e3"
+      },
+      {
+        "bytes": 12464,
+        "path": "src/components/map-sharing-panel.test.tsx",
+        "sha256": "ae7fbf4e14110aad431fd40f67e9423b993220b22b949ca3fe3bfcae1ddab934"
+      },
+      {
+        "bytes": 20078,
+        "path": "src/components/map-sharing-panel.tsx",
+        "sha256": "d104e68b5c08340e1933eff6dffe824c3d99959ebda700e92d0b230a2dcc1e41"
+      },
+      {
+        "bytes": 1484,
+        "path": "src/components/map-view-toggle.test.tsx",
+        "sha256": "afb3d4dc104d745eb1f282a99042327991cf73a61011d0b101aa3d97c4c9c2b0"
+      },
+      {
+        "bytes": 1206,
+        "path": "src/components/map-view-toggle.tsx",
+        "sha256": "d7ee5935db912bf6bd8037702a4743af243e0118334df89d7db49c2b90736e3e"
+      },
+      {
+        "bytes": 3911,
+        "path": "src/components/shared-map-view.test.tsx",
+        "sha256": "e4d9dab1f485368e3a9cb3b4148733f3cc17218dc70d2db4005353cede3faf53"
+      },
+      {
+        "bytes": 6684,
+        "path": "src/components/shared-map-view.tsx",
+        "sha256": "84028d5fb7e476e844f25cd27602d1316f60173718bb34703882fb1d9b491630"
+      },
+      {
+        "bytes": 2580,
+        "path": "src/lib/auth/account-deletion.test.ts",
+        "sha256": "3621b3864f476c22d256fe515e582a96876811a8402dac82c25dba80607d2efc"
+      },
+      {
+        "bytes": 13308,
+        "path": "src/lib/auth/account-deletion.ts",
+        "sha256": "7ce615c08478b69f764092c0651204c192be423e17f883aae7dd9690a5b370f4"
+      },
+      {
+        "bytes": 279,
+        "path": "src/lib/auth/account-persistence.ts",
+        "sha256": "88a8de9c0061c14f68245135229582478bf8c8f73dc4584233f80ed24d7709b7"
+      },
+      {
+        "bytes": 1963,
+        "path": "src/lib/auth/account-state.test.ts",
+        "sha256": "e506450b0784a331ad52e04d3697971a19c98cff7f681c5a004ffc2451b0747b"
+      },
+      {
+        "bytes": 3700,
+        "path": "src/lib/auth/account-state.ts",
+        "sha256": "9bcc2f9bed7da8d8a9893dd5789132f859d98eba033ed647356d679e08ec9090"
+      },
+      {
+        "bytes": 547,
+        "path": "src/lib/auth/capabilities.test.ts",
+        "sha256": "ea14a264660de9615800311b3947c5b68aeccf8d4caf14c6f7d7eab9a2bbae66"
+      },
+      {
+        "bytes": 223,
+        "path": "src/lib/auth/capabilities.ts",
+        "sha256": "1915c58d5b579fe7029119e335ef782bf1a76fb37cda26fe7713ca8b4421ccd6"
+      },
+      {
+        "bytes": 554,
+        "path": "src/lib/auth/config.test.ts",
+        "sha256": "2f57e06eeba78f5018a96801834cd28065f63ec7dbfe812504bceea81d1b3889"
+      },
+      {
+        "bytes": 6995,
+        "path": "src/lib/auth/config.ts",
+        "sha256": "cd84139c866e6068afccb3a66d1a1d06aa671cf9ff6e62d9fd0ae780184ddb69"
+      },
+      {
+        "bytes": 1046,
+        "path": "src/lib/auth/credentials.ts",
+        "sha256": "9698624457bbd66f29526122eed9d549652dfbed6682758808043e884b1c3a6f"
+      },
+      {
+        "bytes": 2334,
+        "path": "src/lib/auth/email.ts",
+        "sha256": "67b75de0b4b5a87597abd925f2c3887aab54ab816b946e71362ecd129d5302dc"
+      },
+      {
+        "bytes": 1205,
+        "path": "src/lib/auth/firebase-bridge.test.ts",
+        "sha256": "6d977fbd1bcb79047d002dc2c1f845a3bd376e1a0e2541ad22801ba44462964f"
+      },
+      {
+        "bytes": 4365,
+        "path": "src/lib/auth/firebase-bridge.ts",
+        "sha256": "798b124d07fa2e7b329ac64c6df11671beb8ef471213c45a5f1e99984cbdc84f"
+      },
+      {
+        "bytes": 713,
+        "path": "src/lib/auth/firebase-client.ts",
+        "sha256": "06ea4a62166d474fbaa0854bed34d931002f8ffe227cfe7708b375fe8a6dd12c"
+      },
+      {
+        "bytes": 2073,
+        "path": "src/lib/auth/firebase-config.test.ts",
+        "sha256": "f65d50c9ba06051f52bae78a2487830019ec6089e7c3f359f28be40893878161"
+      },
+      {
+        "bytes": 1620,
+        "path": "src/lib/auth/firebase-config.ts",
+        "sha256": "4c7c3ad591257caf0b0ba2e2fe050244398bd8ac9b3854826139d5786f6f81a0"
+      },
+      {
+        "bytes": 1998,
+        "path": "src/lib/auth/guards.test.ts",
+        "sha256": "004b3c36dc5e71cf48e8aca50ebebc1484187bcf4aba0ff90039176fad4546fc"
+      },
+      {
+        "bytes": 1478,
+        "path": "src/lib/auth/guards.ts",
+        "sha256": "aca26395db0336b596e4220459e5aeb99a7614c48b889f4720a9ad7bd496c7be"
+      },
+      {
+        "bytes": 151,
+        "path": "src/lib/auth/index.ts",
+        "sha256": "907309b51c58a28ce66713d32a9a4a9bd58375f75d314dde77e50d759ebb9c0f"
+      },
+      {
+        "bytes": 1940,
+        "path": "src/lib/auth/oauth-providers.test.ts",
+        "sha256": "f01725927fec9e47c8a0b426f183b636ed498b35c8055d5383ea7a00e3706b62"
+      },
+      {
+        "bytes": 1691,
+        "path": "src/lib/auth/oauth-providers.ts",
+        "sha256": "ede86fbe03ebdc48130087e8ade8be41dafdbdc44196214baa2c41c713539413"
+      },
+      {
+        "bytes": 1505,
+        "path": "src/lib/auth/password.ts",
+        "sha256": "af17c380895a615d759d08c51b8fb2f59a805357622f0942dfd183512d483c3c"
+      },
+      {
+        "bytes": 4204,
+        "path": "src/lib/auth/privacy-hardening.test.ts",
+        "sha256": "0e9dcd9d41ee66175b6edc9634c4bc85b2aff1b342787f9aefb99445bab0ca93"
+      },
+      {
+        "bytes": 2013,
+        "path": "src/lib/auth/rate-limit.ts",
+        "sha256": "3ed633bf93a2b61ffa2051b630f63adba9247029fc909616a2644e816fce776d"
+      },
+      {
+        "bytes": 899,
+        "path": "src/lib/auth/registration-warning.ts",
+        "sha256": "8dc013522d9796dc9235243b0169761253a3e12de65d379514aa3677776d6a9f"
+      },
+      {
+        "bytes": 621,
+        "path": "src/lib/auth/request.ts",
+        "sha256": "091f482bb50ee1c15d6e79e83333df87c0508092f7fdab5b2c60da3a8a581576"
+      },
+      {
+        "bytes": 2412,
+        "path": "src/lib/auth/session-cookie.test.ts",
+        "sha256": "d53e1396ca26ba5de5074f453fd7fbe425b9ab35addb9a6856c0f90eeeb33752"
+      },
+      {
+        "bytes": 1598,
+        "path": "src/lib/auth/session-cookie.ts",
+        "sha256": "64044cb713a820e8df984cfadc5a4142cdfcefecb37504900897bf562912099a"
+      },
+      {
+        "bytes": 1213,
+        "path": "src/lib/auth/username.test.ts",
+        "sha256": "ef1640e30ceea0eaf0f401385d37ab11330dbb67cd4c295b4143f5361e350ef9"
+      },
+      {
+        "bytes": 1034,
+        "path": "src/lib/auth/username.ts",
+        "sha256": "e8dad074ddf94b79009c32bcb5247e2c9f45bb1f42f9c6cc75bb8dae2c8e21f4"
+      },
+      {
+        "bytes": 1783,
+        "path": "src/lib/db/airport-alias-schema.test.ts",
+        "sha256": "9f752c7c704e9b85d8285520f2f576f0928156e81201464973cc4bfadcd69af8"
+      },
+      {
+        "bytes": 856,
+        "path": "src/lib/db/distance-unit-default.test.ts",
+        "sha256": "47288b914ff7374d3354a068d11e3bd38aa603e95185135eceb91cc6a6a12428"
+      },
+      {
+        "bytes": 1329,
+        "path": "src/lib/db/durable-import-schema.test.ts",
+        "sha256": "c3b7991eca7cdb6608b13538a6be4dc95549c29e7280c2ec4c3f17f5130e54ae"
+      },
+      {
+        "bytes": 811,
+        "path": "src/lib/db/flight-role-migration.test.ts",
+        "sha256": "0cb7fd176ac48c56cb817299f1a48c0796c57b34efc62e99fce41def82a82d65"
+      },
+      {
+        "bytes": 1532,
+        "path": "src/lib/db/import-review-schema.test.ts",
+        "sha256": "334a7cb96ffc31bdd0993e50509afadb36daf47fee21ce119f36b01f758757aa"
+      },
+      {
+        "bytes": 2879,
+        "path": "src/lib/db/index.ts",
+        "sha256": "cbdd02c585e1237b6ffa617c303082e96daa8f006b3969c833a203f5a94e141a"
+      },
+      {
+        "bytes": 13124,
+        "path": "src/lib/db/launch-schema.postgres.test.ts",
+        "sha256": "7f11da65fbb00caa525ba53dac4994e61368acfdf867d5a1f053570d8464962c"
+      },
+      {
+        "bytes": 8743,
+        "path": "src/lib/db/launch-schema.test.ts",
+        "sha256": "d1317374c4c70660683a882cd6cca6d1cd96c169ba3067421a8493a37f57b99c"
+      },
+      {
+        "bytes": 645,
+        "path": "src/lib/db/map-view-mode-default.test.ts",
+        "sha256": "ec9aa674ba2f74d995a693c69a0a7382a456b2f3efbb08a7ed2661da0428ff9f"
+      },
+      {
+        "bytes": 302,
+        "path": "src/lib/db/release-lock.ts",
+        "sha256": "c749332cc4d6868305b7428b4064864f261527529256f7a66edc45413edb33bd"
+      },
+      {
+        "bytes": 432,
+        "path": "src/lib/db/repositories/airport-repository.ts",
+        "sha256": "d0d43e2f75f727b0aa7a4d5948d3898753bd6483b3ef9156fbde9695e3bbf4b7"
+      },
+      {
+        "bytes": 46451,
+        "path": "src/lib/db/repositories/drizzle-import-repository.ts",
+        "sha256": "2890e7596b736a4135abcea6933402fab5a7d8bab2981f9502ec6eecaeacc640"
+      },
+      {
+        "bytes": 1233,
+        "path": "src/lib/db/repositories/flight-repository.ts",
+        "sha256": "8d0bbc7e03b80f5c2168164d5ab1fd294205ecc574aa9bed27d52e53df31e008"
+      },
+      {
+        "bytes": 2123,
+        "path": "src/lib/db/repositories/import-repository.ts",
+        "sha256": "125674eeec3818575192776956417757595b8d0ce5d0abb04b5b9ee673e459bd"
+      },
+      {
+        "bytes": 31781,
+        "path": "src/lib/db/schema.ts",
+        "sha256": "5a7f3dea89dff59745ab3d8efd4bca93facf5644046d35e34651ce025aa84c76"
+      },
+      {
+        "bytes": 1142,
+        "path": "src/lib/db/username-schema.test.ts",
+        "sha256": "294d78f16298fb2888d81e001449743082ee18979e8b6152afea85a8d7d76d13"
+      },
+      {
+        "bytes": 735,
+        "path": "src/lib/db/worker.ts",
+        "sha256": "0287f971ee7ca9031efec0d2a8f7f3a273f5452807c3f148b9f387c9c7865c38"
+      },
+      {
+        "bytes": 915,
+        "path": "src/lib/distance-unit.ts",
+        "sha256": "d4c111a586fa1fed9eb7d4dc9cd2c509ab3f0f001f6bd23d72446394d2363afd"
+      },
+      {
+        "bytes": 2361,
+        "path": "src/lib/flight-context.ts",
+        "sha256": "ac9a39f1870d3408ebce8a61df3941c384808dd1fbdb18e9e4ea52377c60ce1d"
+      },
+      {
+        "bytes": 2490,
+        "path": "src/lib/flight-data.test.ts",
+        "sha256": "ad021ed1bae48ec8dc61e502d771cfc7cd96a5c50c8067feb12bf56f916eda89"
+      },
+      {
+        "bytes": 7971,
+        "path": "src/lib/flight-data.ts",
+        "sha256": "ae2efe9dfd0b112d4ebfea702039fd0b9c1ab4ad5cbb751331c06ad4bffbe6f0"
+      },
+      {
+        "bytes": 8269,
+        "path": "src/lib/flight-filters.test.ts",
+        "sha256": "00c78ac1589f4dec28fb4355e67f054e224734ef3cc996ad1716db1c1f8dab7a"
+      },
+      {
+        "bytes": 9627,
+        "path": "src/lib/flight-filters.ts",
+        "sha256": "4441682c3ee0648a356b4779afc845ba3fba331519bbc72d2591e2e376b32505"
+      },
+      {
+        "bytes": 6604,
+        "path": "src/lib/flight-insights.test.ts",
+        "sha256": "ac30591b7579164c5d7d74ae9118c147df17c8d493879713e116adc933d9d8ad"
+      },
+      {
+        "bytes": 7501,
+        "path": "src/lib/flight-insights.ts",
+        "sha256": "71036af3113370ab9baba9a7c9fdd086ec6c131f9d31ca16c722241fc551de58"
+      },
+      {
+        "bytes": 1761,
+        "path": "src/lib/flight-metadata.test.ts",
+        "sha256": "16a8fac1d6b55bbbb1a64a4420d26dc7ca28e3b7f74e35bfa524d70333b0e93d"
+      },
+      {
+        "bytes": 1404,
+        "path": "src/lib/flight-metadata.ts",
+        "sha256": "5da4db0b2c1c19ef39800271b39939ff4f4c74854e21c501af2809eccc751fb9"
+      },
+      {
+        "bytes": 1026,
+        "path": "src/lib/flight-role.test.ts",
+        "sha256": "00d25670515e3fb4a86ce63838c7ba89ba1f9172a3c612a5e00ed79f892b7706"
+      },
+      {
+        "bytes": 1092,
+        "path": "src/lib/flight-role.ts",
+        "sha256": "5b7613e65018d0b8970d4b2f9fc51b2aca8559566d381942a0e94467f17576f2"
+      },
+      {
+        "bytes": 8720,
+        "path": "src/lib/flight-statistics.test.ts",
+        "sha256": "bce91cce60a15cfd98f01c31b4b0e15c4bc96968ad89095be6fc34179a9bc989"
+      },
+      {
+        "bytes": 17852,
+        "path": "src/lib/flight-statistics.ts",
+        "sha256": "e9730159d9bf71922e52834bb7f3d01518c5d7fb1543912595740a8d406b1cc0"
+      },
+      {
+        "bytes": 6958,
+        "path": "src/lib/flights/backfill.postgres.test.ts",
+        "sha256": "53946761e76e755c29ce00b6afb546b8df338b24de0ad61273043011a822f5f2"
+      },
+      {
+        "bytes": 2634,
+        "path": "src/lib/flights/backfill.ts",
+        "sha256": "59d65908390845e099992babcd57e93e988c5e12516bb7aef0ee9207e7ebc600"
+      },
+      {
+        "bytes": 2359,
+        "path": "src/lib/flights/service.test.ts",
+        "sha256": "37e1581478fdd3c95691f971a577a6fe246f32755d194abb30e2f4891070dc9b"
+      },
+      {
+        "bytes": 8718,
+        "path": "src/lib/flights/service.ts",
+        "sha256": "e236e081424673f4ea07916adc8c11bbb2b6da30ac54a3ec197ffc88170c6346"
+      },
+      {
+        "bytes": 153,
+        "path": "src/lib/import/__fixtures__/crewlounge-pilotlog.csv",
+        "sha256": "23e11c2199254890a6f1f478bdd3b39b01f101a3ff21b21042c467db82aba9b5"
+      },
+      {
+        "bytes": 451,
+        "path": "src/lib/import/__fixtures__/durable-eicar-foreflight.csv",
+        "sha256": "9729556d1523ecb253077ac7c38a8920c716dc54216e6990c123e185a78c05d5"
+      },
+      {
+        "bytes": 576,
+        "path": "src/lib/import/__fixtures__/foreflight-v1.csv",
+        "sha256": "1d668b793b92c3e3d2c781ae55a7bd1a3ee9627a6dee9e3da2694eb7c29da7c7"
+      },
+      {
+        "bytes": 110,
+        "path": "src/lib/import/__fixtures__/generic-logbook.csv",
+        "sha256": "d3e32c978d96953696307cdeb6dc0ead3ef51eaa37baec4c938f378644d16fcd"
+      },
+      {
+        "bytes": 2104,
+        "path": "src/lib/import/__fixtures__/local-foreflight-v5.json",
+        "sha256": "d1590ccfe126a985df17d0840c5b976bf4a0c6cdef783cd76389cb078432f402"
+      },
+      {
+        "bytes": 1935,
+        "path": "src/lib/import/__fixtures__/local-fr24-v4.json",
+        "sha256": "e56508e43f1c83b69b25237f5a29adb0f57717d2298cf0f17cfed78a86cfefaa"
+      },
+      {
+        "bytes": 123,
+        "path": "src/lib/import/__fixtures__/myflightbook.csv",
+        "sha256": "252b0f225c2f342dd00e7f0ffad0673adb06cd88eb200a56ff03e225b8447b07"
+      },
+      {
+        "bytes": 8530,
+        "path": "src/lib/import/airport-reconciliation.test.ts",
+        "sha256": "b2aaa1771736681492501a0af310baf9cdc19c6d20ac77bd3bc9c404417ebbcb"
+      },
+      {
+        "bytes": 6148,
+        "path": "src/lib/import/airport-reconciliation.ts",
+        "sha256": "c92aaf1555464974f8af15a00065164f8ae4865eda4bd318b127b9580589af28"
+      },
+      {
+        "bytes": 14950,
+        "path": "src/lib/import/airport-repository.postgres.test.ts",
+        "sha256": "05dd6b894ec2582df346d982d015650f12fe4a92b50ccf634eb96b9423e202a2"
+      },
+      {
+        "bytes": 6580,
+        "path": "src/lib/import/airport-resolution.test.ts",
+        "sha256": "f633ef86353b1396655ab6f1153e361e292b7ea15c086b4fd83776f7db1e21ed"
+      },
+      {
+        "bytes": 10978,
+        "path": "src/lib/import/airport-resolution.ts",
+        "sha256": "321ad223ff96b88764c43b4413395d1a287c8faa985d1e61b750197c5ecc4c91"
+      },
+      {
+        "bytes": 353,
+        "path": "src/lib/import/api-contract.ts",
+        "sha256": "e8f894a4a953ff7771fb13915e3a7638c09f36f7d3cc51476c64c0fcec91bba1"
+      },
+      {
+        "bytes": 4787,
+        "path": "src/lib/import/api-guards.test.ts",
+        "sha256": "1665855c29ac8ebca89a79c0c6762978a52582cdd3ed3bf65c4c1dfdbeb3122d"
+      },
+      {
+        "bytes": 7507,
+        "path": "src/lib/import/automatic-import.test.ts",
+        "sha256": "92d5be900eaf48ae7b15dbb2494598666a3f8950d45df2385d7383e7de2320d1"
+      },
+      {
+        "bytes": 3808,
+        "path": "src/lib/import/corrections.test.ts",
+        "sha256": "156ff02e2ef0e1514a0904c31c3d7abe543f249614f72817c784858e3772aac1"
+      },
+      {
+        "bytes": 8914,
+        "path": "src/lib/import/corrections.ts",
+        "sha256": "97fddd31c7b073207eb6e5fda39fdb9d5838e8d293f0aca06baf3e114275ad2f"
+      },
+      {
+        "bytes": 2221,
+        "path": "src/lib/import/csv.ts",
+        "sha256": "1fc9ab8085b0de5783dc8b7ba3f75ee1bde463cf402d5c65a2184292fae6eac5"
+      },
+      {
+        "bytes": 3574,
+        "path": "src/lib/import/dedupe-score.test.ts",
+        "sha256": "76f035b40d799d963861393f07d6266968b72429016a89b27108de0c8c5ea931"
+      },
+      {
+        "bytes": 7899,
+        "path": "src/lib/import/dedupe.ts",
+        "sha256": "ef529b76a181a45a2e449c2a85785ca3a2492ddb9b0c60ba1a834858467fd4a5"
+      },
+      {
+        "bytes": 21859,
+        "path": "src/lib/import/drizzle-import-repository.postgres.test.ts",
+        "sha256": "fd792ce88e7c52b902a185c50301e06b4981d856543f4ef303ff106ba654eada"
+      },
+      {
+        "bytes": 1614,
+        "path": "src/lib/import/durable-import-fixtures.test.ts",
+        "sha256": "7d87890d89d0d92864a932b302d8be80aeda108f647bd1e4749c186ff8f3c4ef"
+      },
+      {
+        "bytes": 3927,
+        "path": "src/lib/import/durable-import-schema.test.ts",
+        "sha256": "8b1af70d6eb2f91ab222816f76dba8bc3d16bb62e8f980d6fdb847d6336bc6a3"
+      },
+      {
+        "bytes": 2466,
+        "path": "src/lib/import/durable-import.test.ts",
+        "sha256": "47ed8ead73cb098b726e7968d5c39aaef2add2d02208a398b3d26a05200403a8"
+      },
+      {
+        "bytes": 14256,
+        "path": "src/lib/import/durable-service.test.ts",
+        "sha256": "eb46971727937a7b362099b40bf27178701fa6ff17d14c3fc8c958259326eeb5"
+      },
+      {
+        "bytes": 13365,
+        "path": "src/lib/import/durable-service.ts",
+        "sha256": "6cc0a26b3f5bfb642bcde3f1b27ffe7235595110d1b39adbdc559626fe8a5251"
+      },
+      {
+        "bytes": 17748,
+        "path": "src/lib/import/durable-worker.test.ts",
+        "sha256": "f21648fc346282c5aaf475adec4c78b26192275c524b2e62e80a3ed6a48500d4"
+      },
+      {
+        "bytes": 15412,
+        "path": "src/lib/import/durable-worker.ts",
+        "sha256": "8d7ca7714afaedfb32dc6946c1c861e744b00416258980728837ce53e1de803e"
+      },
+      {
+        "bytes": 1702,
+        "path": "src/lib/import/fingerprint.test.ts",
+        "sha256": "68a8302d2498b6d4cfc58ffcce37d02520f5ab0620ab8d5b1bc1393ac1e00568"
+      },
+      {
+        "bytes": 2662,
+        "path": "src/lib/import/fingerprint.ts",
+        "sha256": "097a0db45793c9df837d1d1059ad2272a65f4e23fced81cd345baac33493ce2a"
+      },
+      {
+        "bytes": 12649,
+        "path": "src/lib/import/foreflight.test.ts",
+        "sha256": "e58069a84c56de2432002dc67ec3ca34e60809b18a444635691138f6fe00b745"
+      },
+      {
+        "bytes": 16209,
+        "path": "src/lib/import/foreflight.ts",
+        "sha256": "1d7cf94240a1581ae77b4683863bfae2fb681f34bf22f023b7c1753bbc08f491"
+      },
+      {
+        "bytes": 11361,
+        "path": "src/lib/import/generic-csv.test.ts",
+        "sha256": "4fc750a074a67143333a3a6e4945b21db1558f6d53418f1f385e8cf0a3636188"
+      },
+      {
+        "bytes": 30208,
+        "path": "src/lib/import/generic-csv.ts",
+        "sha256": "2d573b868e9ae25d8bb663143d79f3fd6c6736742e6ff79d2f48e22549a48292"
+      },
+      {
+        "bytes": 3106,
+        "path": "src/lib/import/generic-mapping.test.ts",
+        "sha256": "14a94a61e1f2ee8141b6149843e5b89dbde445ef2be76d49aac9a21bc644cf70"
+      },
+      {
+        "bytes": 156,
+        "path": "src/lib/import/generic-mapping.ts",
+        "sha256": "184dc92bd48544bd69e918a488eb8f219d658ecc67d7b9cac14c3d7a34e7eab9"
+      },
+      {
+        "bytes": 21879,
+        "path": "src/lib/import/in-memory-repository.ts",
+        "sha256": "5d6481dc9218264941c7e066f779af84bfe979e3b6092291ae7b4795addfe8e6"
+      },
+      {
+        "bytes": 13270,
+        "path": "src/lib/import/map-artifact.ts",
+        "sha256": "77cc1ff8b2971900f236ea9fbbdb2a33d47ce471e7e81c11b78245f93efde8c1"
+      },
+      {
+        "bytes": 4633,
+        "path": "src/lib/import/map-route-regression.test.ts",
+        "sha256": "e99c0e46e4c5c31ddb5b2b956cac47906954952c64c91094717a8a1cfcf3a32b"
+      },
+      {
+        "bytes": 6803,
+        "path": "src/lib/import/migration.test.ts",
+        "sha256": "108dca681b973b3df19a1cd8d191cd6d9e3358c52e79b85a1953f6a828343952"
+      },
+      {
+        "bytes": 14388,
+        "path": "src/lib/import/migration.ts",
+        "sha256": "ca67da71345092503ede63f82510248abc1ea927921909317af39aa1b614e5d3"
+      },
+      {
+        "bytes": 14133,
+        "path": "src/lib/import/multi-stop.test.ts",
+        "sha256": "fb0b5fa57ffc8c23051733a597ee375b1a577b84c72d194722da818c884872bd"
+      },
+      {
+        "bytes": 12837,
+        "path": "src/lib/import/myflightradar24-artifact.ts",
+        "sha256": "0d28e0ad0a6aff14e5c41083771af14e5a6d2ec4a99e90b53f028802a3ab64cf"
+      },
+      {
+        "bytes": 11101,
+        "path": "src/lib/import/myflightradar24.test.ts",
+        "sha256": "7a2fe5406a97f49dca3d09a01bd0d4b3d5f1dd9655d8a1863ef9bbf259a0135b"
+      },
+      {
+        "bytes": 9947,
+        "path": "src/lib/import/myflightradar24.ts",
+        "sha256": "01c80de25dee76ee45087c3dfa0c7edffbe3d73374052f879236fa89e3f98d7b"
+      },
+      {
+        "bytes": 6545,
+        "path": "src/lib/import/registry.test.ts",
+        "sha256": "4e8543bc197f2ec17dc3812f9a714f56d3df5e6e8008c549f83c79e36c187a80"
+      },
+      {
+        "bytes": 11330,
+        "path": "src/lib/import/registry.ts",
+        "sha256": "c7715868a6e92c583b70301dff43f0348171c90be145e2da6bee2dd4ab791269"
+      },
+      {
+        "bytes": 1443,
+        "path": "src/lib/import/review.ts",
+        "sha256": "5fee041cd587a81e00695de173366295666bf209c8dd73d596de79f9bbe63a42"
+      },
+      {
+        "bytes": 2993,
+        "path": "src/lib/import/role-statistics.test.ts",
+        "sha256": "6477ce9df36e2955fd4fd20ec1c9f6f94668e9b201d4d91e9c40918115c89b5a"
+      },
+      {
+        "bytes": 11922,
+        "path": "src/lib/import/security-isolation.test.ts",
+        "sha256": "1ca6a070b22dca424e35fa3565fdfc93cf3c0796df316145ff1799a514e3512f"
+      },
+      {
+        "bytes": 7329,
+        "path": "src/lib/import/service.ts",
+        "sha256": "f043b761ae5222e2fc2110ee7de19e58a0f004800472fa79e3178b4f792062c5"
+      },
+      {
+        "bytes": 3437,
+        "path": "src/lib/import/sha256.ts",
+        "sha256": "ab9f92a1d747525a00260972dc14066c64df64d2716425ad565750c42985cc74"
+      },
+      {
+        "bytes": 6106,
+        "path": "src/lib/import/types.ts",
+        "sha256": "2faa811a13b57e43303d3e38e2f0cb05db9c739eb94d616a492ccd61b49fbfbd"
+      },
+      {
+        "bytes": 17206,
+        "path": "src/lib/import/worker.ts",
+        "sha256": "e9ab188235fc0f6374cee1748612000fa7a91eaa9520f51c4613688c02da42e2"
+      },
+      {
+        "bytes": 11861,
+        "path": "src/lib/import/workflow.test.ts",
+        "sha256": "19e1caffacd48de2995bb3496251925d1a96138313a6521e8168701e549188d2"
+      },
+      {
+        "bytes": 1260,
+        "path": "src/lib/jobs/errors.test.ts",
+        "sha256": "9d8690bae8b9805b24bd0a358aeb37d1eed963d291cc2b9f7d1032e47a3cfc9b"
+      },
+      {
+        "bytes": 899,
+        "path": "src/lib/jobs/errors.ts",
+        "sha256": "91073ef630666281f596ad1d4a6218369f34f30944656863f4bc98393f6aaae8"
+      },
+      {
+        "bytes": 2314,
+        "path": "src/lib/jobs/repository-claim.test.ts",
+        "sha256": "67cffbb8412d31d0acca5e77c4ae187ab9785546163d44a6c9b0371c7f71b644"
+      },
+      {
+        "bytes": 3189,
+        "path": "src/lib/jobs/repository.postgres.test.ts",
+        "sha256": "9b6a0eeea0a01fecdc3b7f7d34ba2992ff7534ad583577d0a99aab4db1d97088"
+      },
+      {
+        "bytes": 6618,
+        "path": "src/lib/jobs/repository.test.ts",
+        "sha256": "eb226d5aafcae03505d166a4338bfa5e7e0984b3b901d3a470a3a7c612d14a48"
+      },
+      {
+        "bytes": 12769,
+        "path": "src/lib/jobs/repository.ts",
+        "sha256": "62fb010bba153da5e5a20238b76e241e6ce5c29e418d70f2d49727d159ac7ebe"
+      },
+      {
+        "bytes": 732,
+        "path": "src/lib/jobs/types.ts",
+        "sha256": "a3e5eae9d90e20d623170ba726d1c0cc9540a3d82761497775baa2515a20c1a7"
+      },
+      {
+        "bytes": 5271,
+        "path": "src/lib/local-flight-data.ts",
+        "sha256": "97e319af083b910af6a8d5f3ab64fff622e01572c255f8df4051a46b07f2d721"
+      },
+      {
+        "bytes": 2228,
+        "path": "src/lib/local-flight-statistics.ts",
+        "sha256": "b1b1a2f5506161d283e712776877f7771bea6646adadda475eeed2623a256c48"
+      },
+      {
+        "bytes": 5486,
+        "path": "src/lib/map-camera.test.ts",
+        "sha256": "5d23ba1d5c92890ca14d4100f10415ca8e7638fdb243a6acb7adcce85c310aa3"
+      },
+      {
+        "bytes": 4070,
+        "path": "src/lib/map-camera.ts",
+        "sha256": "ba0beb6a5f864dd326c703f7d6347de3e3389bd5d1d4b83a3beef48e70a477b8"
+      },
+      {
+        "bytes": 2297,
+        "path": "src/lib/map-data-readiness.test.ts",
+        "sha256": "f705f9e484011ba7377dd85cbff1f54ef0d6e71d30cb0bb4380b2d34c88209d3"
+      },
+      {
+        "bytes": 485,
+        "path": "src/lib/map-data-readiness.ts",
+        "sha256": "d9e410c521e0ed7f2a814d1dccb5acc147e369233b9e1e4eb7cc0896bfc5dcf5"
+      },
+      {
+        "bytes": 4550,
+        "path": "src/lib/map-framing.test.ts",
+        "sha256": "eb44fac972ccf4305eaf1417a86f172ea38affe756dfb52b0bc1cf3b99850a90"
+      },
+      {
+        "bytes": 9625,
+        "path": "src/lib/map-framing.ts",
+        "sha256": "d5322c6c14be2794846357c8f48ce66eeb0bfbbbca54c2cc597b1bc1199cf7c9"
+      },
+      {
+        "bytes": 4607,
+        "path": "src/lib/map-geojson.test.ts",
+        "sha256": "507d8c0962f3b0240489248e45cdac39b75bdc093e88b573d748518f77e9aa0b"
+      },
+      {
+        "bytes": 8356,
+        "path": "src/lib/map-geojson.ts",
+        "sha256": "12fb7fe7988d36a0867caac112100203736762352f090fc3fe8f828ab44b55f3"
+      },
+      {
+        "bytes": 5576,
+        "path": "src/lib/map-style.test.ts",
+        "sha256": "ac0f54f7a592d52f45ddc454e4abf1e7a871b40d5b168a0e495d955449243845"
+      },
+      {
+        "bytes": 8478,
+        "path": "src/lib/map-style.ts",
+        "sha256": "fe89c55481490fdc7471ea9a49a8ccf63db0e7fb764bac523adf95042db38f37"
+      },
+      {
+        "bytes": 312,
+        "path": "src/lib/map-view-mode.ts",
+        "sha256": "07283a612e41a1a8da6f484658682c3d8f7cd8d8fe1ed15ab11d70f3e64a7380"
+      },
+      {
+        "bytes": 2241,
+        "path": "src/lib/map-visualization.test.ts",
+        "sha256": "007dcae81b4f6af799e14c91f2f7742d220be692537a654d878348fcdf180bc4"
+      },
+      {
+        "bytes": 2213,
+        "path": "src/lib/map-visualization.ts",
+        "sha256": "fe5eb3fd3a21c784ec273068f828711852b2cb4745003fe57ba8f144aa4f5d07"
+      },
+      {
+        "bytes": 1564,
+        "path": "src/lib/map-zoom-sync.test.ts",
+        "sha256": "68f27306c2f31f115d32f1fb775e9f32a5888b0a57d4f34056ba257fbdcf8923"
+      },
+      {
+        "bytes": 616,
+        "path": "src/lib/map-zoom-sync.ts",
+        "sha256": "a76cd8a98fbf846df76b0ea943cc0c482c3c3b4922764aa34ca66797d0e52536"
+      },
+      {
+        "bytes": 1274,
+        "path": "src/lib/owner-route-data.ts",
+        "sha256": "d4b5ea8427940c09297fd8f9f70776e2a90e96ebff736feadbcbc4659bd90c4f"
+      },
+      {
+        "bytes": 1528,
+        "path": "src/lib/persisted-flight-data.ts",
+        "sha256": "44994dce65d3a33f90a3e2da9fd3a26e188113b4e9aed74de286b072706adb97"
+      },
+      {
+        "bytes": 3337,
+        "path": "src/lib/profile/service.postgres.test.ts",
+        "sha256": "93d19aacacaa0130025c14646c3658251d746769085e11d8ccdab6a5d77d1122"
+      },
+      {
+        "bytes": 1395,
+        "path": "src/lib/profile/service.test.ts",
+        "sha256": "4a5cff33b9d3d10e595b063227745e047f4b62df2b91c3d4683ef5dd9e5e49b7"
+      },
+      {
+        "bytes": 5272,
+        "path": "src/lib/profile/service.ts",
+        "sha256": "0af8b8cd9e55a439487af653d85a9f7752d92e5f2020baae5b136366eb6b51c5"
+      },
+      {
+        "bytes": 2455,
+        "path": "src/lib/reconciliation.test.ts",
+        "sha256": "9c453d83478bb7bae4667ccca345dc8fae4a4795eeb1028c6093bcaed644a488"
+      },
+      {
+        "bytes": 4233,
+        "path": "src/lib/reconciliation.ts",
+        "sha256": "7600a6dffe7617a6980c00b31db3963235ede2bc74a84cba57f679961bef1546"
+      },
+      {
+        "bytes": 2635,
+        "path": "src/lib/release-attestation.ts",
+        "sha256": "aee7d8a760dc53c9f6974674d2b4224e7b6e9c71794df0c33987bc4c520ec291"
+      },
+      {
+        "bytes": 4479,
+        "path": "src/lib/route-aggregation.test.ts",
+        "sha256": "61f5d78bcbc1d9d4ba9a1aca7ec4653a927eab45c4269f40f1d17c7f4f2e112a"
+      },
+      {
+        "bytes": 3997,
+        "path": "src/lib/route-aggregation.ts",
+        "sha256": "ef01ccf4fa0c8af4239f37998e9d9d5a7c7bcdc937fc003f63f38bd7866829d3"
+      },
+      {
+        "bytes": 2062,
+        "path": "src/lib/route-contracts.ts",
+        "sha256": "ff39545041ea32dfd1076880ec9dcafdf7489eaa95e88832f40aa54c8d0bcd4c"
+      },
+      {
+        "bytes": 14630,
+        "path": "src/lib/route-page-data.test.ts",
+        "sha256": "b899898beac7f327c3ebf1da252dbd175f7a72b4c0db9861699f1b8f78248d54"
+      },
+      {
+        "bytes": 5810,
+        "path": "src/lib/route-page-data.ts",
+        "sha256": "8360fb1d441840f3aa374068a405d39d6866d037ed37eefbc388a357dd463cce"
+      },
+      {
+        "bytes": 6747,
+        "path": "src/lib/runtime-mode.test.ts",
+        "sha256": "068e365497bf154edb8bbcbbeaf680a794993426c8d55a4ac1a69a93e29900f3"
+      },
+      {
+        "bytes": 7732,
+        "path": "src/lib/runtime-mode.ts",
+        "sha256": "c64c1f426ed13402d6cdb8319ae2a9147058087f254264af90046eca44095e2e"
+      },
+      {
+        "bytes": 3387,
+        "path": "src/lib/scanner/clamav.test.ts",
+        "sha256": "faa96ac23e3e2e33e2925e58936ef5556a5be22bd9437245792b14bdeed70c10"
+      },
+      {
+        "bytes": 4267,
+        "path": "src/lib/scanner/clamav.ts",
+        "sha256": "4e504ad171404e00eda5913b91c5b7a1778544883318016ebe443e1c191580a6"
+      },
+      {
+        "bytes": 256,
+        "path": "src/lib/scanner/types.ts",
+        "sha256": "9f32ff4d347a2082216352dc38263fd9db43ab5dcd5e393f9abe739160da3d58"
+      },
+      {
+        "bytes": 18454,
+        "path": "src/lib/sharing/service.postgres.test.ts",
+        "sha256": "78f83b215a096b4e1da066403358fd2fb1b7eed35bfb6ea8846cd00e8f4582f8"
+      },
+      {
+        "bytes": 1902,
+        "path": "src/lib/sharing/service.test.ts",
+        "sha256": "8e76d8a0b64bd3cbda95738ec4861841a75169ccdaffee7691f7e2292ecd12f1"
+      },
+      {
+        "bytes": 14591,
+        "path": "src/lib/sharing/service.ts",
+        "sha256": "7a7264e01e17dc351e0303bf0d73845f9a27c38defbe579f9757d1956bcc3a59"
+      },
+      {
+        "bytes": 8753,
+        "path": "src/lib/storage/index.ts",
+        "sha256": "d214db845523e83e2fdc65e31f30b8cf8ec383cce66b90d792eb952e934fe0c7"
+      },
+      {
+        "bytes": 1628,
+        "path": "src/lib/storage/presign.test.ts",
+        "sha256": "781f259aaa6d58e91461fc8b09511a1cb9b0c500b3b8f0a36928c7728be3adb7"
+      },
+      {
+        "bytes": 1118,
+        "path": "src/lib/storage/presign.ts",
+        "sha256": "34be6e74bfe8295869339ffab6f0891db0e5768a36f9c8c4b382752f787447b4"
+      },
+      {
+        "bytes": 1131,
+        "path": "src/proxy.ts",
+        "sha256": "2de30623c3cee17d5ed10cd627eb898d3bb5857091ad446c0b6d2f38aae1b6b6"
+      },
+      {
+        "bytes": 213,
+        "path": "src/types/next-auth.d.ts",
+        "sha256": "5c6959064672c016dbb37818afb59a0062edd72bb9bf34e2f85a2520b4638924"
+      },
+      {
+        "bytes": 809,
+        "path": "tsconfig.json",
+        "sha256": "1610f1dda6aa3689921e586a506e0776e5b54f1249f91ed88b0222eaadc22f58"
+      },
+      {
+        "bytes": 297,
+        "path": "vitest.config.ts",
+        "sha256": "9fb6aaac45df795d01cf8e2e0caa5ad35a2091a063778a27cab7c4c4701bd438"
+      },
+      {
+        "bytes": 416,
+        "path": "vitest.setup.ts",
+        "sha256": "c2468452cde229d8367bb968238b5c0642c0a9974991c20df7be852d4fdb2475"
+      }
+    ],
+    "manifestSha256": "1cbd37d6985a83ac2103799d1cb70d44cc25fe8e0363a0d4f677c0b19af9f5d9",
+    "selection": {
+      "extraFiles": [
+        "data/private/reference/ourairports-airports.csv"
+      ],
+      "roots": [
+        ".github/workflows",
+        "config",
+        "docs",
+        "drizzle/migrations",
+        "e2e",
+        "scripts",
+        "src"
+      ],
+      "topLevelFiles": [
+        ".env.example",
+        ".env.local.example",
+        ".firebaserc",
+        ".vercelignore",
+        "compose.yaml",
+        "DEPLOYMENT.md",
+        "Dockerfile.worker",
+        "drizzle.config.ts",
+        "eslint.config.mjs",
+        "next.config.ts",
+        "package.json",
+        "package-lock.json",
+        "playwright.config.ts",
+        "postcss.config.mjs",
+        "railway.json",
+        "README.md",
+        "tsconfig.json",
+        "vitest.config.ts",
+        "vitest.setup.ts"
+      ]
+    }
+  }
+}
