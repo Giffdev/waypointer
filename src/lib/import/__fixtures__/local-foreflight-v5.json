@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 5,
+  "statsFactSchemaVersion": 1,
+  "generatedAt": "2026-08-12T00:00:00.000Z",
+  "sourceLabel": "Synthetic ForeFlight artifact",
+  "source": {
+    "adapter": "ForeFlight Logbook Import",
+    "adapterVersion": 1,
+    "sourceFileSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "airportDataset": "synthetic"
+  },
+  "summary": {
+    "importedRows": 1,
+    "mapReadyFlights": 1,
+    "invalidRows": 0,
+    "unresolvedAirportRows": 0,
+    "ambiguousAirportRows": 0,
+    "exactDuplicateCandidates": 0,
+    "ambiguousDuplicateCandidates": 0
+  },
+  "airports": [],
+  "flights": [
+    {
+      "id": "synthetic-foreflight-1",
+      "date": "2026-04-05",
+      "departureTime": "08:05",
+      "origin": {
+        "code": "KSEA",
+        "name": "Synthetic Seattle",
+        "city": "Seattle",
+        "country": "US",
+        "lat": 47.45,
+        "lon": -122.31,
+        "facility": "commercial"
+      },
+      "destination": {
+        "code": "KJFK",
+        "name": "Synthetic New York",
+        "city": "New York",
+        "country": "US",
+        "lat": 40.64,
+        "lon": -73.78,
+        "facility": "commercial"
+      },
+      "kind": "private",
+      "role": "pilot",
+      "aircraft": "Cessna 172",
+      "registration": "N100ZZ",
+      "distanceMiles": 2400,
+      "distanceBasis": "great-circle",
+      "source": "ForeFlight",
+      "reconciliation": {
+        "status": "unique"
+      },
+      "provenance": {
+        "source": "ForeFlight",
+        "adapter": "ForeFlight Logbook Import",
+        "adapterVersion": 1,
+        "sourceRowNumber": 2,
+        "idempotencyKey": "synthetic-foreflight-row-2"
+      }
+    }
+  ],
+  "statsFacts": [],
+  "recentFlights": [],
+  "routes": [],
+  "stats": {
+    "records": 1,
+    "flights": 1,
+    "airports": 2,
+    "distanceMiles": 2400,
+    "durationHours": 0,
+    "mappedFlights": 1
+  },
+  "review": {
+    "invalidRows": [],
+    "unresolvedAirportRows": [],
+    "ambiguousAirportRows": [],
+    "duplicateCandidates": []
+  }
+}

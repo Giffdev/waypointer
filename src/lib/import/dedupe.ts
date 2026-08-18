@@ -1,0 +1,286 @@
+import type {
+  ImportDuplicateCandidate,
+  ProposedImportFlight,
+  StoredImportRow,
+  VersionedFingerprint,
+} from "./types";
+
+export const DUPLICATE_RULE_VERSION = 2 as const;
+export const DUPLICATE_SCORE_THRESHOLD = 0.7;
+
+export type ExistingFingerprintCandidate = {
+  flightId: string;
+  fingerprint: VersionedFingerprint;
+  flight?: ProposedImportFlight;
+};
+
+type Candidate = {
+  scope: ImportDuplicateCandidate["scope"];
+  candidateId: string;
+  flight: ProposedImportFlight;
+  fingerprint?: VersionedFingerprint;
+};
+
+export function applyDuplicateCandidates(
+  rows: StoredImportRow[],
+  existing: ExistingFingerprintCandidate[],
+): StoredImportRow[] {
+  const staged: Candidate[] = [];
+  return rows.map((row) => {
+    if (!row.commitReady) {
+      return { ...row, duplicateCandidate: undefined };
+    }
+    const candidates: Candidate[] = [
+      ...existing.flatMap((candidate) =>
+        candidate.flight
+          ? [{
+              scope: "existing-flight" as const,
+              candidateId: candidate.flightId,
+              flight: candidate.flight,
+              fingerprint: candidate.fingerprint,
+            }]
+          : row.rowFingerprint?.value === candidate.fingerprint.value
+            ? [{
+                scope: "existing-flight" as const,
+                candidateId: candidate.flightId,
+                flight: row.proposedFlight,
+                fingerprint: candidate.fingerprint,
+              }]
+            : [],
+      ),
+      ...staged,
+    ];
+    const duplicateCandidate = bestCandidate(row, candidates);
+    staged.push({
+      scope: "staged-row",
+      candidateId: row.id,
+      flight: row.proposedFlight,
+      fingerprint: row.rowFingerprint,
+    });
+    return {
+      ...row,
+      validationState: duplicateCandidate
+        ? "duplicate"
+        : baseValidationState(row),
+      duplicateCandidate,
+    };
+  });
+}
+
+function bestCandidate(
+  row: StoredImportRow,
+  candidates: Candidate[],
+): ImportDuplicateCandidate | undefined {
+  const assessed = candidates
+    .map((candidate) => assessCandidate(row, candidate))
+    .filter(
+      (candidate): candidate is ImportDuplicateCandidate =>
+        Boolean(candidate && candidate.score >= DUPLICATE_SCORE_THRESHOLD),
+    )
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.scope.localeCompare(right.scope),
+    );
+  const selected = assessed[0];
+  if (!selected) return undefined;
+  const previous = row.duplicateCandidate;
+  return {
+    ...selected,
+    resolution:
+      previous?.candidateId === selected.candidateId &&
+      previous.ruleVersion === selected.ruleVersion
+        ? previous.resolution
+        : "pending",
+  };
+}
+
+function assessCandidate(
+  row: StoredImportRow,
+  candidate: Candidate,
+): ImportDuplicateCandidate | undefined {
+  const signals: ImportDuplicateCandidate["signals"] = [];
+  const flight = row.proposedFlight;
+  if (
+    row.rowFingerprint &&
+    candidate.fingerprint?.value === row.rowFingerprint.value
+  ) {
+    signals.push({
+      code: "exact-fingerprint",
+      weight: 1,
+      detail: "The versioned canonical fingerprint is identical.",
+    });
+  } else {
+    addSignal(
+      signals,
+      sameDay(flight.date, candidate.flight.date),
+      "same-date",
+      0.3,
+      "Departure date matches.",
+    );
+    addSignal(
+      signals,
+      sameRoute(flight, candidate.flight),
+      "same-route",
+      0.25,
+      "Origin and destination match.",
+    );
+    const timeDifference = minutesApart(
+      flight.departureTime,
+      candidate.flight.departureTime,
+    );
+    if (timeDifference === 0) {
+      signals.push({
+        code: "same-time",
+        weight: 0.15,
+        detail: "Departure time matches.",
+      });
+    } else if (timeDifference !== undefined && timeDifference <= 120) {
+      signals.push({
+        code: "near-time",
+        weight: 0.1,
+        detail: `Departure times are ${timeDifference} minutes apart.`,
+      });
+    }
+    addSignal(
+      signals,
+      sameIdentity(flight, candidate.flight),
+      "same-flight-identity",
+      0.15,
+      "Flight number or registration matches.",
+    );
+    addSignal(
+      signals,
+      sameText(
+        flight.aircraft ?? flight.aircraftModel ?? flight.aircraftType,
+        candidate.flight.aircraft ??
+          candidate.flight.aircraftModel ??
+          candidate.flight.aircraftType,
+      ),
+      "same-aircraft",
+      0.05,
+      "Aircraft description matches.",
+    );
+    addSignal(
+      signals,
+      flight.kind === candidate.flight.kind,
+      "same-kind",
+      0.05,
+      "Flight kind matches.",
+    );
+    addSignal(
+      signals,
+      flight.role === candidate.flight.role,
+      "same-role",
+      0.05,
+      "Traveler role matches.",
+    );
+  }
+  const score = Number(
+    Math.min(1, signals.reduce((sum, signal) => sum + signal.weight, 0)).toFixed(
+      2,
+    ),
+  );
+  if (score < DUPLICATE_SCORE_THRESHOLD) return undefined;
+  return {
+    scope: candidate.scope,
+    candidateId: candidate.candidateId,
+    score,
+    ruleVersion: DUPLICATE_RULE_VERSION,
+    explanation: signals.map((signal) => signal.detail).join(" "),
+    signals,
+    resolution: "pending",
+  };
+}
+
+function addSignal(
+  signals: ImportDuplicateCandidate["signals"],
+  included: boolean,
+  code: string,
+  weight: number,
+  detail: string,
+): void {
+  if (included) signals.push({ code, weight, detail });
+}
+
+function baseValidationState(
+  row: StoredImportRow,
+): StoredImportRow["validationState"] {
+  return row.issues.some((issue) => issue.severity === "warning")
+    ? "warning"
+    : "ready";
+}
+
+function sameDay(left: string | undefined, right: string | undefined): boolean {
+  return Boolean(left && right && left.slice(0, 10) === right.slice(0, 10));
+}
+
+function sameAirport(
+  left: ProposedImportFlight["origin"],
+  right: ProposedImportFlight["origin"],
+): boolean {
+  return Boolean(
+    left?.status === "resolved" &&
+      right?.status === "resolved" &&
+      left.airportId === right.airportId,
+  );
+}
+
+function sameRoute(
+  left: ProposedImportFlight,
+  right: ProposedImportFlight,
+): boolean {
+  const leftMatches =
+    left.airportMatches && left.airportMatches.length >= 2
+      ? left.airportMatches
+      : left.origin && left.destination
+        ? [left.origin, left.destination]
+        : [];
+  const rightMatches =
+    right.airportMatches && right.airportMatches.length >= 2
+      ? right.airportMatches
+      : right.origin && right.destination
+        ? [right.origin, right.destination]
+        : [];
+  return (
+    leftMatches.length === rightMatches.length &&
+    leftMatches.every((match, index) =>
+      sameAirport(match, rightMatches[index]),
+    )
+  );
+}
+
+function sameIdentity(
+  left: ProposedImportFlight,
+  right: ProposedImportFlight,
+): boolean {
+  return (
+    sameText(left.flightNumber, right.flightNumber) ||
+    sameText(left.registration, right.registration)
+  );
+}
+
+function sameText(left: string | undefined, right: string | undefined): boolean {
+  return Boolean(
+    left &&
+      right &&
+      left.trim().toUpperCase() === right.trim().toUpperCase(),
+  );
+}
+
+function minutesApart(
+  left: string | undefined,
+  right: string | undefined,
+): number | undefined {
+  const leftMinutes = timeMinutes(left);
+  const rightMinutes = timeMinutes(right);
+  return leftMinutes === undefined || rightMinutes === undefined
+    ? undefined
+    : Math.abs(leftMinutes - rightMinutes);
+}
+
+function timeMinutes(value: string | undefined): number | undefined {
+  const match = /^(\d{1,2}):(\d{2})/.exec(value ?? "");
+  if (!match) return undefined;
+  return Number(match[1]) * 60 + Number(match[2]);
+}

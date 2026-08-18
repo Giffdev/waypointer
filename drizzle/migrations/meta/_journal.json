@@ -1,0 +1,125 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1786491060000,
+      "tag": "0000_multi_user_import_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786497060000,
+      "tag": "0001_privacy_retention_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786552831000,
+      "tag": "0002_launch_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786555770000,
+      "tag": "0003_import_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786559370000,
+      "tag": "0003_recent_authentication",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786560031730,
+      "tag": "0004_durable_import",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786730564000,
+      "tag": "0005_editable_usernames",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786743900000,
+      "tag": "0006_synchronous_import_completion",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786749000000,
+      "tag": "0007_flight_role_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786750320000,
+      "tag": "0008_read_only_map_sharing",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786750800000,
+      "tag": "0009_airport_identifier_aliases",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786751400000,
+      "tag": "0010_airport_name_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786751700000,
+      "tag": "0011_nautical_miles_profile_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786751900000,
+      "tag": "0012_multi_stop_flight_routes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786752700000,
+      "tag": "0013_map_view_mode_preference",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786752800000,
+      "tag": "0014_fix_flight_share_invalidation",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786975200000,
+      "tag": "0015_airport_source_provenance",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,223 @@
+# Waypointer
+
+A private, multi-user home for personal and commercial flight history. Waypointer turns existing flight logs into an interactive map, searchable history, and travel statistics.
+
+## Run locally
+
+For the complete account → upload → review → commit → Flights/Map flow:
+
+```powershell
+npm install
+npm run dev:full
+```
+
+The command uses the local-only `.env.local` configuration, starts PostgreSQL
+16/PostGIS with Docker Compose, runs Drizzle migrations, seeds the locally
+verified OurAirports reference dataset, and starts the app. Open
+`http://localhost:3000`, register, follow the development verification link,
+sign in, and import a supported CSV. Uploaded originals remain under the
+ignored `data\private\uploads` directory.
+
+Host dependency: Docker Desktop with Docker Compose v2. The command reports
+this explicitly when Docker is missing. Stop the database with:
+
+```powershell
+npm run db:local:down
+```
+
+The top-of-app status identifies `Full local workspace`, `Preview only`, or a
+configured persisted deployment.
+
+Validation:
+
+```powershell
+npm run check:full
+npm run test:airport-release
+```
+
+`test:airport-release` provisions disposable PostgreSQL/PostGIS, migrates it,
+runs two complete pinned catalog refreshes, verifies identical identity
+checksums, writes JSON evidence under
+`artifacts\release-evidence\airport-catalog`, and removes the database volume.
+
+## Persisted multi-user development
+
+Environment files and templates are intentionally excluded from source
+control. Create `.env.local` locally (an existing local-only
+`.env.local.example` may be copied) before using `npm run dev:full`.
+The development verification link requires the explicit full-local flag,
+loopback Auth and PostgreSQL URLs, local storage, a non-production process, and
+its own opt-in flag. It cannot be enabled by the production runtime.
+
+```powershell
+npm run db:setup
+npm run dev
+```
+
+Production rejects local storage and missing DB/auth/storage configuration.
+Original uploads are private, limited to 10 MB by default, and retained for
+seven days; staged row provenance remains in PostgreSQL.
+
+Run the repository-level PostgreSQL import journey explicitly against the
+migrated local PostGIS stack:
+
+```powershell
+npm run test:postgres
+```
+
+`npm run check:full` runs the normal checks, this PostgreSQL integration test,
+and Playwright. Both commands provision the local database through Docker
+Compose rather than silently skipping database coverage.
+
+The public map projection function is `SECURITY DEFINER`, has a locked
+`pg_catalog, public` search path, and is revoked from `PUBLIC`. Deployments that
+use a runtime database role separate from the migration owner must explicitly
+run:
+
+```sql
+GRANT EXECUTE ON FUNCTION public_map_projection(uuid, text) TO <runtime_role>;
+```
+
+Do not grant the runtime role ownership of that function or schema-creation
+rights.
+
+Production still requires provisioned PostgreSQL, `AUTH_SECRET`, and a real
+`AUTH_URL`. Account deletion remains fail-closed and unavailable unless both
+Resend variables are configured. The accepted synchronous MVP import mode does
+not retain originals. Durable imports additionally require private
+S3-compatible R2 storage and the Railway worker described below. The
+app-owned email/password flow remains available independently. Google appears
+only when `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET` are both set. Microsoft
+Entra ID appears only when `AUTH_MICROSOFT_ENTRA_ID_ID` and
+`AUTH_MICROSOFT_ENTRA_ID_SECRET` are both set; use the optional tenant-specific
+`AUTH_MICROSOFT_ENTRA_ID_ISSUER` to restrict organizational access. Register
+the exact Auth.js callback URLs `/api/auth/callback/google` and
+`/api/auth/callback/microsoft-entra-id`. Local placeholders and filesystem
+storage are rejected outside the explicit loopback development path.
+
+Runtime database connections use `DATABASE_URL` and a bounded pool. Production
+defaults to one connection for serverless/Vercel processes; `DB_POOL_MAX`
+overrides it explicitly (a future dedicated worker is expected to use about
+five). Drizzle commands prefer the DDL-capable `MIGRATION_DATABASE_URL` and
+fall back to `DATABASE_URL` locally. Private profiles and deletion requests use
+owner RLS. The internal `background_jobs` queue intentionally does not, because
+workers must claim jobs globally; every job still carries an immutable
+`user_id`.
+
+### Durable import worker
+
+Keep `FLIGHT_MAP_DURABLE_IMPORTS` disabled until separate private Preview and
+Production R2 buckets, origin-limited CORS, lifecycle rules, least-privilege
+presigner/worker credentials, migration `0004_durable_import.sql`, and a
+restricted pooled worker database role are provisioned. Railway must build
+`Dockerfile.worker` through `railway.json`; the image runs Node 22, `clamd`,
+and `freshclam`. The worker requires `WORKER_ID`, `WORKER_HEALTH_SECRET`, a
+worker-sized `DB_POOL_MAX` (normally 5), R2 configuration, and the documented
+ClamAV/job timing variables from `.env.example`. `/live` exposes no queue
+data; authenticated `/health` reports scanner health and aggregate queue
+metrics. Do not place signed URLs, object keys, filenames, or row data in logs.
+After provisioning, run `npm run check:durable-import-worker`, apply the
+migration, and execute `npm run smoke:durable-import` with a dedicated verified
+test account. The hosted smoke requires both a clean CSV review/deduplication
+result and a quarantined EICAR fixture before the feature flag may replace
+`sync-mvp`.
+
+Run launch-schema checks with `npm run test:schema`. To also exercise clean and
+upgrade migration paths, use a PostgreSQL role allowed to create temporary
+databases and set `FLIGHT_MAP_RUN_POSTGRES_SCHEMA_TESTS=true`.
+
+## Local ForeFlight preview import
+
+Place a ForeFlight Logbook CSV at the repository root using the ignored
+`logbook_*.csv` naming pattern, then run:
+
+```powershell
+npm run import:foreflight
+```
+
+The command downloads and caches the public OurAirports reference dataset
+before reading the logbook, then writes an ignored map artifact to
+`data\private\local-flights.json`, which the local mockup reads automatically.
+It never uploads logbook contents.
+Use `-- --offline` after the reference cache exists.
+
+OurAirports publishes public-domain nightly CSVs without an accuracy warranty.
+
+`npm run db:airport-release` is the production-safe catalog operation. It
+uses only the reviewed file and SHA-256 pinned in
+`config/airport-catalog-release.json`; it never downloads mutable release data.
+Existing UUIDs are retained through verified source identity or an exact
+logical match for explicitly marked 0009 code-derived identities. Crossed or
+reassigned identifiers fail before writes. An exact manifest covers every
+migration through 0015, including product migrations 0011–0014, and refuses
+extra, missing, reordered, or modified migration files. Pending migrations, the catalog,
+aliases, unresolved-import reconciliation, and database health checks run in
+one serializable transaction. Production requires a separately recorded,
+content-addressed target/snapshot approval and candidate manifest. When Git
+metadata is unavailable, the candidate includes a deterministic full relevant
+source-tree manifest plus a content-addressed diff from the rejected baseline;
+provenance failure blocks release. Active URLs cannot self-approve their own
+fingerprint. The application write path participates in the release advisory
+barrier, and production approval must prove an application-level write pause
+before the fresh snapshot. Evidence is content-addressed, notice-redacted, and
+never overwritten. `npm run db:setup` derives test-only safeguards for its
+known loopback database. Run
+`npm run db:audit-airports` to inspect cached coverage and representative
+non-IATA resolution. The cache remains public-domain OurAirports data; Flight
+Map preserves the dataset hash in `dataset_version` and does not treat the
+catalog as an authoritative navigation source.
+
+Correction search indexes official names, municipalities, catalog keywords,
+and a bounded phonetic key for spelling variants. Phonetic results are search
+suggestions only: imported identifiers are never silently resolved by name,
+and the UI must show the official airport name and codes before correction.
+
+## Local myFlightradar24 preview import
+
+Place an official flight-diary CSV at the repository root using the ignored
+`flightdiary_*.csv` naming pattern, then run:
+
+```powershell
+npm run import:fr24
+```
+
+The versioned adapter validates the official export header, resolves the
+exported IATA/ICAO airport pair against the local OurAirports cache, and writes
+an ignored map-safe artifact to `data\private\fr24-flights.json`. Registration,
+seat, note, and other raw diary fields are not serialized. Use `-- --offline`
+after the reference cache exists.
+The preview uses its airport type, scheduled-service flag, and identifiers for
+the custom commercial/GA/airstrip overlay. The current airstrip heuristic is a
+small airport without an IATA code; runway-based refinement is not implemented.
+
+## Migrate a local preview artifact
+
+Versioned ForeFlight and myFlightradar24 JSON artifacts can be moved into one
+existing account through the same staged review and commit services used by
+browser imports. The destination user and source file are always explicit.
+The default is a read-only dry run:
+
+```powershell
+npm run import:migrate-local -- --user-id <uuid> --source <artifact.json>
+npm run import:migrate-local -- --user-id <uuid> --source <artifact.json> --apply
+npm run import:migrate-local -- --user-id <uuid> --source <artifact.json> --commit
+```
+
+`--apply` stages rows for review without creating flights. `--commit` accepts
+only commit-ready non-duplicates and explicitly skips duplicate, ambiguous, or
+unresolved rows; it never auto-merges or alters an existing flight. Reruns are
+idempotent for the destination user, artifact version, adapter, and source
+hash. The command validates the exact supported schema version, never writes
+or deletes the source artifact, and prints only status, safe counts, and issue
+codes—never row contents, source paths, filenames, routes, or user identity.
+
+See [`docs/product-architecture.md`](docs/product-architecture.md) for MVP boundaries, data/import design, security, and deployment planning.
+See [`docs/logbook-csv-imports.md`](docs/logbook-csv-imports.md) for exact
+automatic formats, evidence-backed mapping presets, generic CSV behavior, and
+known limitations.
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the deliberately gated giffdev/Vercel release path.
+
+The explicit development preview still uses representative/local data. The
+persisted path uses authenticated, per-user PostgreSQL records and private
+storage. No remote repository has been initialized; eventual GitHub ownership
+must be `giffdev`.

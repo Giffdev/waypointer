@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 4,
+  "statsFactSchemaVersion": 1,
+  "generatedAt": "2026-08-12T00:00:00.000Z",
+  "sourceLabel": "Synthetic FR24 artifact",
+  "source": {
+    "adapter": "myFlightradar24 Flight Diary CSV",
+    "adapterVersion": 1,
+    "sourceFileSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "airportDataset": "synthetic"
+  },
+  "summary": {
+    "importedRows": 1,
+    "mapReadyFlights": 1,
+    "invalidRows": 0,
+    "unresolvedAirportRows": 0,
+    "ambiguousAirportRows": 0,
+    "exactDuplicateCandidates": 0,
+    "ambiguousDuplicateCandidates": 0,
+    "roleDistinctOverlapCandidates": 0
+  },
+  "airports": [],
+  "flights": [
+    {
+      "id": "synthetic-fr24-1",
+      "date": "2026-05-10",
+      "departureTime": "09:30",
+      "origin": {
+        "code": "KSEA",
+        "name": "Synthetic Seattle",
+        "city": "Seattle",
+        "country": "US",
+        "lat": 47.45,
+        "lon": -122.31,
+        "facility": "commercial"
+      },
+      "destination": {
+        "code": "KJFK",
+        "name": "Synthetic New York",
+        "city": "New York",
+        "country": "US",
+        "lat": 40.64,
+        "lon": -73.78,
+        "facility": "commercial"
+      },
+      "kind": "commercial",
+      "role": "passenger",
+      "aircraft": "Airbus A321",
+      "flightNumber": "AS100",
+      "distanceMiles": 2400,
+      "source": "FlightRadar24",
+      "reconciliation": {
+        "status": "unique"
+      },
+      "provenance": {
+        "source": "FlightRadar24",
+        "adapter": "myFlightradar24 Flight Diary CSV",
+        "adapterVersion": 1,
+        "sourceRowNumber": 2,
+        "idempotencyKey": "synthetic-fr24-row-2"
+      }
+    }
+  ],
+  "statsFacts": [],
+  "routes": [],
+  "review": {
+    "invalidRows": [],
+    "unresolvedAirportRows": [],
+    "ambiguousAirportRows": [],
+    "duplicateCandidates": []
+  }
+}

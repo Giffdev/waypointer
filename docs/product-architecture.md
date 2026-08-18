@@ -1,0 +1,123 @@
+# Waypointer — product and architecture plan
+
+## Product intent and observed references
+
+Waypointer is a multi-user, private-by-default home for a person's combined general-aviation and commercial flight history. It should make a life in the air legible through an explorable globe, trustworthy records, and user-controlled corrections.
+
+The proposed account and sharing architecture is in [`multi-user-accounts-and-sharing.md`](multi-user-accounts-and-sharing.md), and its mandatory security/privacy gates are in [`multi-user-security-and-privacy.md`](multi-user-security-and-privacy.md). Together they plan isolated accounts with usernames, planned Google authentication, and one explicitly enabled, revocable travel-map share link. The authenticated owner view remains private and may show exact airports; the shared URL reads a separately approved server-side projection that starts with coarse locations, excludes new imports, and removes materially edited flights until reapproval. Account deletion disables normal login and sharing immediately; a proposed grace-period cancellation uses out-of-band recovery rather than a partially active account. Social graphs and friend-only audiences are explicit non-goals. Both documents are proposed/planning-only and authorize no implementation, infrastructure, remote, or hosting changes.
+
+Publicly observed on 2026-08-07 (no authentication or private data accessed):
+
+- **Arelplane public profile:** a Cesium 3D map, profile highlights, lifetime stats, recent updates, airport/region/aircraft summaries, and a public description reporting flights, airports, and hours. Its public markup also signals import-review and inline-edit workflows.
+- **myFlightradar24 public profile:** a route map with airport points, colored paths, update recency, account entry points, and a separate flights URL. Public route/airport metadata powers the map.
+
+Inferred requirements, kept separate from observations: users will value filters, public sharing controls, lifetime summaries, provenance badges, and correction history. These are hypotheses to validate, not copied product behavior.
+
+## MVP boundary
+
+**In:** account registration/login (Google and username/password), private user workspace, generic CSV and ForeFlight CSV import, staged preview, airport matching, deterministic duplicate suggestions, row-level acceptance, origin/destination correction, provenance, a global globe that transitions to precise regional cartography, flight list, basic filters and aggregates, account export/delete.
+
+**Not in first release:** scraping or credential-based syncing from third parties; live aircraft tracking; social graph; mobile apps; collaborative logs; pilot credential storage; automatic Arelplane/myFR24 ingestion without an authorized export/API; public profiles by default. Arelplane-style and myFR24 exporters become adapters only after sample exports and terms/API review.
+
+The current mockup uses representative data unless an ignored, locally generated map-safe artifact is present. Browser uploads, remote persistence, and authentication remain explicitly disabled.
+
+## Chosen stack
+
+- **Next.js 16 App Router + TypeScript + React 19:** one maintainable full-stack web application, server components by default, mature deployment path.
+- **MapLibre GL JS 6 (BSD-3-Clause):** production-oriented WebGL cartography with globe projection at global scales and its automatic Mercator transition near zoom 12 for precise regional work. GPU-native vector/raster layers and accessible app controls require no paid-provider token. Great-circle routes and OurAirports-derived airport facilities are application-owned GeoJSON layers. Native layers remain preferred; deck.gl `ArcLayer` is only a fallback if measured route-rendering limitations justify its additional runtime.
+- **Tailwind CSS plus project CSS tokens:** quick responsive implementation while retaining a distinct visual system.
+- **PostgreSQL + PostGIS (planned):** relational integrity, geospatial airport/region lookup, row-level ownership queries, strong migration/tooling ecosystem.
+- **Drizzle ORM (planned):** explicit SQL-friendly schemas and migrations.
+- **Auth.js (planned):** Google OAuth plus Credentials provider. Passwords hashed with Argon2id; secure, HTTP-only sessions. No home-grown session protocol.
+- **S3-compatible object storage + background worker (planned):** private, short-retention original uploads; queued parsing and reconciliation outside request timeouts.
+- **Vitest:** foundational pure-domain tests; Playwright will cover import/auth journeys once those routes exist.
+
+## Domain/data model
+
+- `users`, `accounts`, `sessions`: identity and authentication. Username is unique but not an authorization boundary.
+- `user_profiles`: display preferences and independently controlled `profile_visibility`.
+- `sharing_policies`, `share_links`, `share_projection_entries`: one opt-in capability URL, server-side precision policy, and explicit approved flight membership/redacted snapshots; source flights never inherit share access.
+- `airports`: canonical ICAO/IATA/local identifiers, coordinates, country, first-level region, aliases, dataset/version.
+- `flights`: user-owned canonical record; date/time precision, origin/destination airport IDs, kind, aircraft/registration, flight number, duration/distance, notes, visibility, timestamps.
+- `import_batches`: user, adapter/version, status, original object key, file hash, counts, timestamps, expiry.
+- `import_rows`: minimal source snapshot, parsed fields, validation state, match confidence, proposed flight.
+- `flight_sources`: many-to-one provenance from canonical flight to batch/row, source type, external stable ID, source timestamps.
+- `flight_overrides`: field, original value, corrected value, actor, reason, timestamp. Canonical values update transactionally, but source truth remains immutable.
+- `duplicate_candidates`: candidate pair, rule/version, score, explanation, resolution. Do not silently merge low-confidence matches.
+
+All user-owned tables carry `user_id`; repository/service queries require it. Production PostgreSQL should also use row-level security as defense in depth.
+
+## Route and client-data boundaries
+
+- `/` is a framework-native temporary redirect to `/map`.
+- `/map` and `/flights` share normalized `type`, `period`, `year`, and `month` URL parameters. The URL is the source of truth so direct links and browser history reproduce the same view.
+- `/import` is independent of map filters.
+- Server components construct least-data route contracts: Map receives cartographic features and aggregates, Flights receives sanitized history fields, and Import receives only artifact presence and a normalized count. Raw rows, provenance payloads, source timestamps, and full history are not serialized to routes that do not require them.
+
+## Import and reconciliation
+
+1. Browser requests a scoped upload URL; object is private and size/type limited.
+2. Create `import_batch`; worker identifies the explicit adapter and parses into a versioned intermediate schema.
+3. Normalize dates/time zones, airport identifiers, whitespace/case, aircraft registrations, and flight numbers. Preserve raw values and adapter version.
+4. Resolve airports by canonical identifiers and aliases. Ambiguous or unknown locations enter review; never guess silently.
+5. Build deterministic fingerprints within one user: date/time precision + origin + destination + flight number/registration + kind. Source stable IDs and file hashes are stronger signals. Fuzzy matches produce candidates, not automatic deletion.
+6. Present new, duplicate, ambiguous, and invalid rows. User decisions are idempotent.
+7. Commit accepted rows and provenance in one transaction. Re-imports attach provenance or remain no-ops.
+8. Corrections select a canonical airport and append an override audit entry. Future imports may propose the saved alias, but cannot overwrite the user's correction without review.
+
+The included `flightFingerprint` is only the first deterministic seam; production matching needs time-precision semantics and rule versioning.
+
+## Privacy and security
+
+- Private by default; sharing is opt-in and field-aware. Private flights must never appear in public aggregates or metadata.
+- Authenticated owner contracts and tokenized shared contracts are separate allowlists. Owner views may show exact airports; shared views default to coarse location, with exact airports requiring an explicit per-share warning, preview, and confirmation.
+- Enabled shares do not auto-include newly added/imported flights. A projected-field edit removes the affected flight and derived data until explicit reapproval.
+- Account deletion disables normal login, sessions, jobs, and sharing immediately. A proposed grace period uses a verified-email, single-use cancellation flow; cancellation does not revive old sessions or share URLs.
+- Never request or retain third-party credentials. Imports use user-provided exports or authorized OAuth/API integrations.
+- Hash passwords with Argon2id; OAuth tokens encrypted at rest; secrets server-only; CSRF protection, rate limiting, breached-password screening, secure cookie settings, and email verification/reset.
+- Validate files by content and size, parse in an isolated worker, block formulas when re-exporting CSV, malware-scan retained originals, and delete originals after a short configurable window.
+- Encrypt storage and transport; redact logs; no raw import rows in telemetry. Maintain access/audit events and tested export/deletion workflows.
+- Airport data is shared reference data; flight records, original uploads, import rows, overrides, and derived user aggregates are user-private.
+
+## Deployment and ownership
+
+After explicit confirmation and authentication, create the repository under **GitHub persona `giffdev` only**—never `devsin_microsoft`. Do not create or connect a remote before then.
+
+Recommended initial production path: Vercel (Next.js) + managed Postgres/PostGIS + private S3-compatible storage + managed queue/worker. Use separate preview and production environments, migrations in CI, encrypted environment variables, backups, region selection, PII-scrubbed monitoring, and cost/retention limits. The architecture remains portable to a container host if worker or geospatial load grows.
+
+Patterns retained from the user's existing local projects are documented in `DEPLOYMENT.md`: explicit Vercel preview/production commands, committed environment placeholders, locked CI installs, and a manual production gate. Their Firebase architecture is intentionally not reused because Waypointer needs relational provenance, deduplication, and geospatial querying.
+
+## Phased backlog
+
+1. **Foundation:** schema/migrations, versioned OurAirports reference ingestion, Auth.js, ownership policies, CI, threat model.
+2. **Trustworthy import:** generic CSV contract, ForeFlight adapter, worker, review states, deterministic dedupe, corrections/provenance, fixtures and integration tests.
+3. **Map experience:** country/state boundaries, filters, aggregates, accessible 2D/table fallback, performance budgets.
+4. **Portability/privacy:** export, deletion, retention jobs, public-share controls, abuse/rate controls, audit review.
+5. **Source expansion:** obtain representative Arelplane/myFR24 exports, review terms/APIs, add versioned adapters; only then consider authorized sync.
+6. **Polish:** saved views, trips, richer stats, onboarding, observability and load testing.
+
+## Immediate acceptance criteria
+
+- A user can only query their own batches/flights.
+- Re-importing the same file is idempotent.
+- No ambiguous airport is committed without a user choice.
+- Every accepted flight shows provenance, and every correction preserves the source value.
+- Upload/auth UI never implies completion until backed by production services.
+
+## Current map performance boundary
+
+MapLibre owns tile, route, airport, and label rendering outside React's render loop. The app submits one route collection and one airport collection, uses native layers rather than one React component per feature, and only synchronizes zoom after interaction ends. All local routes and airports remain represented; zoom-dependent map labels limit visual collisions while the airport selector remains the complete accessible index.
+
+Regional inspection supports overzooming to level 18. MapLibre renders a globe at global scales and transitions toward Mercator around zoom 12; the close view must therefore be described as regional cartography, not literal spherical rendering. Selecting an airport moves to close regional detail and isolates connected routes; an accessible frequency-sorted route selector can fit and highlight one connection at a time. Reciprocal paths receive stable screen-space separation, collision-managed route labels appear at regional zoom, and routes have enlarged invisible hit targets plus a selected-route halo and aggregate-frequency popup. This preserves the complete artifact while reducing the Washington-area bundle without exposing raw flight rows.
+
+The full local artifact has been exercised with trusted drag and wheel input in a common laptop-sized browser viewport. This is pragmatic interaction validation, not a hardware-neutral benchmark. Low-end devices, high-DPI mobile devices, and substantially larger future artifacts do not yet have a formal frame-time budget and require profiling before production launch.
+
+## Cartography providers and graceful fallback
+
+The mockup defaults to OpenFreeMap's Liberty style and its OpenStreetMap/OpenMapTiles-derived vector data, with attribution displayed in-map. It supplies vector place, water, road, POI, landcover, and aeroway context plus Natural Earth shaded relief. OpenFreeMap is keyless and commercially usable with attribution, but offers no SLA and may change or discontinue service. The application therefore retains a neutral local style fallback and a configurable public style URL.
+
+OpenFreeMap's default aerodrome labels emphasize IATA facilities, so Waypointer renders a custom OurAirports overlay for the user's resolved commercial, GA, and small-airstrip endpoints with facility-specific minimum label zooms. OurAirports CSV data is public domain, refreshed nightly, and supplied without an accuracy warranty. The current explicit heuristic is: scheduled large/medium airports are `commercial`; small airports without an IATA code are `airstrip`; all others are `general-aviation`. Runway length/surface are not yet ingested and must be added from the versioned OurAirports runways feed before using runway-based styling. Shipping the entire nightly CSV to browsers is out of scope; broader contextual airport coverage should use preprocessed tiles or bounded server queries.
+
+An optional AWS Open Data Registry Mapzen Terrarium raster-dem source adds hillshade. Its component datasets have source- and region-specific attribution obligations, so the in-map control links to the full Tilezen/joerd attribution inventory rather than presenting a blanket license claim. MapLibre's 3D terrain mesh is deliberately disabled on the main globe because globe/terrain interoperability is not reliable enough for this acceptance path; shaded raster/hillshade preserves relief without flattening the global view. If elevation fails, the basemap and private route/airport layers continue to work. If the main style cannot be fetched, the neutral local globe still renders those application layers and reports the degraded state.
+
+`NEXT_PUBLIC_MAP_STYLE_URL` may select another public, CORS-enabled MapLibre style. It is browser-visible and must never carry a secret or paid-provider token. CesiumJS remains a fallback only if photorealistic 3D or 3D Tiles becomes more important than vector-cartography styling; common hosted Cesium imagery/terrain requires tokens and explicit approval. Provider/legal review remains a release gate; this document does not claim Arelplane parity.

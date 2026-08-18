@@ -1,0 +1,15 @@
+/*
+!/.nvmrc
+!/.vercelignore
+!/next.config.ts
+!/package.json
+!/package-lock.json
+!/postcss.config.mjs
+!/tsconfig.json
+!/public
+!/public/**
+!/scripts
+/scripts/*
+!/scripts/copy-maplibre-assets.mjs
+!/src
+!/src/**

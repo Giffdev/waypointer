@@ -1,0 +1,11 @@
+ForeFlight Logbook Import
+
+Aircraft Table
+AircraftID,TypeCode,Year,Make,Model,GearType,EngineType,equipType (FAA),aircraftClass (FAA)
+SYNTH-A,C172,2020,Example Aviation,Trainer,Fixed Tricycle,Reciprocating,airplane,Airplane Single Engine Land
+SYNTH-B,PA44,2021,Fictional Aircraft,Twin,Retractable,Reciprocating,airplane,Airplane Multi Engine Land
+Flights Table
+Date,AircraftID,From,To,Distance,TimeOut,TotalTime,PilotComments
+2026-01-02,SYNTH-A,KAAA,KBBB,125.5,8:05,1.2,"Synthetic note, with comma"
+2026-01-03,SYNTH-B,KBBB,KCCC,,14:30,1.4,"Invented
+multiline note"

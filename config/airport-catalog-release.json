@@ -1,0 +1,177 @@
+{
+  "schemaVersion": 2,
+  "source": {
+    "provider": "OurAirports",
+    "url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
+    "relativePath": "data/private/reference/ourairports-airports.csv",
+    "sha256": "9bd09e3f3610654d93a312b21d7c3779cedcabe81ab4450145e53ebc1a35398a",
+    "bytes": 12691689
+  },
+  "expected": {
+    "airports": 85836,
+    "aliases": 182149
+  },
+  "provenance": {
+    "approvedAirportCandidate": {
+      "relativePath": "artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json",
+      "sha256": "12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3"
+    },
+    "baselineManifest": {
+      "relativePath": "artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json",
+      "sha256": "12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3"
+    },
+    "rejectedCandidateManifest": {
+      "relativePath": "artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json",
+      "sha256": "12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3"
+    }
+  },
+  "releaseScope": {
+    "schemaVersion": 1,
+    "kind": "regional-airport-catalog-only",
+    "requiredBefore": "0014_fix_flight_share_invalidation",
+    "includedMigrations": [
+      "0015_airport_source_provenance"
+    ],
+    "databaseOperations": [
+      "verify-target-ledger-schema-and-snapshot",
+      "apply-0015-if-pending",
+      "refresh-pinned-airports-and-aliases",
+      "reconcile-unresolved-airport-imports",
+      "verify-regional-identities-and-historical-flight-links",
+      "persist-content-addressed-evidence"
+    ],
+    "excludedMigrations": [
+      "0009_airport_identifier_aliases",
+      "0010_airport_name_search",
+      "0011_nautical_miles_profile_default",
+      "0012_multi_stop_flight_routes",
+      "0013_map_view_mode_preference",
+      "0014_fix_flight_share_invalidation"
+    ],
+    "applicationPromotionIncluded": false
+  },
+  "migrationManifest": {
+    "schemaVersion": 1,
+    "entries": [
+      {
+        "order": 0,
+        "tag": "0000_multi_user_import_foundation",
+        "createdAt": 1786491060000,
+        "sha256": "96e39c0225152e7bdf9968a923b59a0a7006d93ebe30d0f57626793d9ae6d681"
+      },
+      {
+        "order": 1,
+        "tag": "0001_privacy_retention_hardening",
+        "createdAt": 1786497060000,
+        "sha256": "cadfa6a7369ac75b2ee825ad193678b80008a458cc5d30586377ba6219539e89"
+      },
+      {
+        "order": 2,
+        "tag": "0002_launch_schema",
+        "createdAt": 1786552831000,
+        "sha256": "5fcab0b89612cdaf93cc00ec5da7111d981fbaa702603457184463f0d5fe3c17"
+      },
+      {
+        "order": 3,
+        "tag": "0003_import_review",
+        "createdAt": 1786555770000,
+        "sha256": "8715717e12091f5c561e437d4a09267d0b65c5fff6dca2ca63a7181d588f5a45"
+      },
+      {
+        "order": 4,
+        "tag": "0003_recent_authentication",
+        "createdAt": 1786559370000,
+        "sha256": "e7b1ec64089bebdfd29938a563f19edb14ab6a52fd99e45ee57c281d10bc9ddf"
+      },
+      {
+        "order": 5,
+        "tag": "0004_durable_import",
+        "createdAt": 1786560031730,
+        "sha256": "6c04b1b72eb2c7477a825fb266535f578adb0bacb1015f58fbcb4fbe6cec5627"
+      },
+      {
+        "order": 6,
+        "tag": "0005_editable_usernames",
+        "createdAt": 1786730564000,
+        "sha256": "a033418bb84bc54e8ab3219c71a1293ff34ba806648e241fa07c592cbc6cb38b"
+      },
+      {
+        "order": 7,
+        "tag": "0006_synchronous_import_completion",
+        "createdAt": 1786743900000,
+        "sha256": "4be84af36aacdc6c740fe1d56099a8b88bf9917a4a97fa9b9c1ad7e098b99f27"
+      },
+      {
+        "order": 8,
+        "tag": "0007_flight_role_provenance",
+        "createdAt": 1786749000000,
+        "sha256": "4a7704868e7e0061209511e1402c62ba140c95bb3c22669f72bbe2b1f3cfd482"
+      },
+      {
+        "order": 9,
+        "tag": "0008_read_only_map_sharing",
+        "createdAt": 1786750320000,
+        "sha256": "ca036da7c8bc44f8d806946cde160a2e34b1d5b508087775331f6833137ee882"
+      },
+      {
+        "order": 10,
+        "tag": "0009_airport_identifier_aliases",
+        "createdAt": 1786750800000,
+        "sha256": "c7398cfd3d130d16ef64ffea196a1b13362ff69fde4725bb7671e4044b04d363"
+      },
+      {
+        "order": 11,
+        "tag": "0010_airport_name_search",
+        "createdAt": 1786751400000,
+        "sha256": "85901ad7765c1a9a58d9f32d00c3033a52a4070680bacc6bc6c1be9d5e3dc18d"
+      },
+      {
+        "order": 12,
+        "tag": "0011_nautical_miles_profile_default",
+        "createdAt": 1786751700000,
+        "sha256": "c5503e9b459273361e0ae763d6dda53b92005c5a7f0c74d1bc197b1a3d25a6cb"
+      },
+      {
+        "order": 13,
+        "tag": "0012_multi_stop_flight_routes",
+        "createdAt": 1786751900000,
+        "sha256": "1cf4e746a05b16e0b8f755b5a1c1ea96d946e33ae7ae1234108cb8f263ac5406"
+      },
+      {
+        "order": 14,
+        "tag": "0013_map_view_mode_preference",
+        "createdAt": 1786752700000,
+        "sha256": "f80589ea89c7523d1d87701a6599d9507ffe4ca61fd191db33cf21c9810544c2"
+      },
+      {
+        "order": 15,
+        "tag": "0014_fix_flight_share_invalidation",
+        "createdAt": 1786752800000,
+        "sha256": "6760cd764fbeb47a755a49addc231f7d0706c40ca4e1048ab4b3744ebb638e7d"
+      },
+      {
+        "order": 16,
+        "tag": "0015_airport_source_provenance",
+        "createdAt": 1786975200000,
+        "sha256": "70e257b5e80d1539edc54891c12b624c054d916af4e6e98650adac4b859d172f"
+      }
+    ],
+    "permittedBefore": [
+      {
+        "tag": "0014_fix_flight_share_invalidation",
+        "appliedCount": 16,
+        "ledgerSha256": "877cbf2ab1da1b0561988ffd8938160c7dbcd1358095013c4c2f01f6b34a0db1"
+      },
+      {
+        "tag": "0015_airport_source_provenance",
+        "appliedCount": 17,
+        "ledgerSha256": "214f6adf72d108fbaac60cb558938bfa8ff20935877bad0e588d573a7d6634fc"
+      }
+    ],
+    "expectedAfter": {
+      "tag": "0015_airport_source_provenance",
+      "appliedCount": 17,
+      "ledgerSha256": "214f6adf72d108fbaac60cb558938bfa8ff20935877bad0e588d573a7d6634fc"
+    }
+  }
+}

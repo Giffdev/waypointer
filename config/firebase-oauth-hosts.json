@@ -1,0 +1,10 @@
+{
+  "flight-map-preview-giffdev.vercel.app": {
+    "authorizedJavaScriptOrigin": "https://flight-map-preview-giffdev.vercel.app",
+    "authorizedRedirectUri": "https://flight-map-preview-giffdev.vercel.app/__/auth/handler"
+  },
+  "flight-map-one.vercel.app": {
+    "authorizedJavaScriptOrigin": "https://flight-map-one.vercel.app",
+    "authorizedRedirectUri": "https://flight-map-one.vercel.app/__/auth/handler"
+  }
+}
