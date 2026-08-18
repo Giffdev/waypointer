@@ -30,4 +30,10 @@ jobs:
         run: npm ci
 
       - name: Test, lint, and build
-        run: npm run check
+        run: |
+          export DATABASE_URL="postgresql:${CI_DATABASE_TARGET}"
+          npm run check
+        env:
+          CI_DATABASE_TARGET: //127.0.0.1:5432/flight_map_ci_build
+          AUTH_SECRET: ci-build-only-${{ github.sha }}
+          AUTH_URL: http://127.0.0.1:3000
