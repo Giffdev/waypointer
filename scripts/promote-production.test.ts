@@ -126,6 +126,7 @@ describe("promote-production", () => {
             deploymentId: expectation.priorAliasDeploymentId,
             projectId: expectation.projectId,
             redirect: null,
+            redirectStatusCode: null,
           } as never;
         },
         runCli: (async (args: readonly string[]) => {
@@ -150,6 +151,81 @@ describe("promote-production", () => {
       expect.objectContaining({
         status: "ROLLED_BACK",
         restoredSafely: true,
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "redirect target",
+      alias: {
+        redirect: "flight-map-redirected.vercel.app",
+        redirectStatusCode: null,
+      },
+      evidence: {
+        restoredAliasRedirect: "flight-map-redirected.vercel.app",
+        restoredAliasRedirectStatusCode: null,
+      },
+    },
+    {
+      name: "redirect status",
+      alias: {
+        redirect: null,
+        redirectStatusCode: 308,
+      },
+      evidence: {
+        restoredAliasRedirect: null,
+        restoredAliasRedirectStatusCode: 308,
+      },
+    },
+  ])("records BLOCKED for rollback $name mismatch", async ({
+    alias,
+    evidence,
+  }) => {
+    const writeEvidence = vi.fn(async () => ({
+      path: "artifacts/release-evidence/rollback.json",
+      sha256: "f".repeat(64),
+    }));
+    let providerRequestCount = 0;
+
+    await expect(
+      promoteProductionCandidate(environment, {
+        loadExpectation: async () => expectation,
+        verifyImmutable: async () => immutableEvidence(),
+        providerRequest: async () => {
+          providerRequestCount += 1;
+          if (providerRequestCount === 1) {
+            return {
+              id: expectation.priorAliasDeploymentId,
+              url: "flight-map-previous.vercel.app",
+              projectId: expectation.projectId,
+              ownerId: expectation.orgId,
+              readyState: "READY",
+            } as never;
+          }
+          return {
+            alias: expectation.productionAlias,
+            deploymentId: expectation.priorAliasDeploymentId,
+            projectId: expectation.projectId,
+            ...alias,
+          } as never;
+        },
+        runCli: (async () => ({ stdout: "" })) as never,
+        verifyAlias: async () => {
+          throw new Error("post-promotion health failed");
+        },
+        writeEvidence: writeEvidence as never,
+        challenge: () => "e".repeat(43),
+      }),
+    ).rejects.toThrow(/restoration was not verified/);
+
+    expect(writeEvidence).toHaveBeenCalledWith(
+      expect.any(String),
+      "production-rollback",
+      expect.objectContaining({
+        status: "BLOCKED",
+        restoredSafely: false,
+        ...evidence,
       }),
     );
   });

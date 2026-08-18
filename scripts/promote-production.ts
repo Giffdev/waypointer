@@ -34,6 +34,7 @@ interface VercelAlias {
   readonly deploymentId?: string;
   readonly projectId?: string;
   readonly redirect?: string | null;
+  readonly redirectStatusCode?: number | null;
 }
 
 export interface PromotionDependencies {
@@ -215,7 +216,8 @@ export async function promoteProductionCandidate(
       restored.alias === RELEASE_DEPLOYMENT_TRUST.productionAlias &&
       restored.projectId === RELEASE_DEPLOYMENT_TRUST.projectId &&
       restored.deploymentId === expectation.priorAliasDeploymentId &&
-      restored.redirect == null;
+      restored.redirect === null &&
+      restored.redirectStatusCode === null;
     const artifact = await writeEvidence(
       path.join(root, "artifacts", "release-evidence", "vercel-deployment"),
       "production-rollback",
@@ -230,6 +232,9 @@ export async function promoteProductionCandidate(
         immutableProviderVerificationSha256:
           immutableEvidence.providerVerificationSha256,
         restoredAliasOwner: restored.deploymentId ?? null,
+        restoredAliasRedirect: restored.redirect ?? null,
+        restoredAliasRedirectStatusCode:
+          restored.redirectStatusCode ?? null,
         restoredSafely,
         failureClass:
           error instanceof Error ? error.name : "UnknownError",

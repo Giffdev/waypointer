@@ -1,0 +1,110 @@
+name: Approve Vercel production candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Operation being independently approved
+        required: true
+        type: choice
+        options:
+          - prepare
+          - deploy
+      reviewed_commit_sha:
+        description: Exact reviewed private main commit
+        required: true
+        type: string
+      candidate_manifest_sha256:
+        description: Exact reviewed candidate manifest SHA-256
+        required: true
+        type: string
+      prepared_run_id:
+        description: Prepare workflow run ID (required only for deploy)
+        required: false
+        type: string
+      prebuilt_artifact_manifest_sha256:
+        description: Reviewed prebuilt artifact SHA-256 (required only for deploy)
+        required: false
+        type: string
+      target_fingerprint:
+        description: Approved non-secret target fingerprint (required only for deploy)
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  record-approval:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Giffdev/waypointer' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate and record approval
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_COMMIT_SHA: ${{ github.sha }}
+          APPROVER: ${{ github.actor }}
+          APPROVAL_RUN_ID: ${{ github.run_id }}
+          OPERATION: ${{ inputs.operation }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+          PREBUILT_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
+          TARGET_FINGERPRINT: ${{ inputs.target_fingerprint }}
+        run: |
+          set -euo pipefail
+          test "$REPOSITORY" = "Giffdev/waypointer"
+          test "$WORKFLOW_REF" = "refs/heads/main"
+          test "$REVIEWED_COMMIT_SHA" = "$WORKFLOW_COMMIT_SHA"
+          [[ "$REVIEWED_COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$APPROVAL_RUN_ID" =~ ^[0-9]+$ ]]
+          if [[ "$OPERATION" == "deploy" ]]; then
+            [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
+            [[ "$PREBUILT_SHA256" =~ ^[a-f0-9]{64}$ ]]
+            [[ "$TARGET_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]]
+          else
+            test -z "$PREPARED_RUN_ID"
+            test -z "$PREBUILT_SHA256"
+            test -z "$TARGET_FINGERPRINT"
+          fi
+          mkdir -p artifacts/release-approval
+          jq -n \
+            --arg repository "$REPOSITORY" \
+            --arg workflowRef "$WORKFLOW_REF" \
+            --arg workflowCommitSha "$WORKFLOW_COMMIT_SHA" \
+            --arg approver "$APPROVER" \
+            --arg approvalRunId "$APPROVAL_RUN_ID" \
+            --arg operation "$OPERATION" \
+            --arg reviewedCommitSha "$REVIEWED_COMMIT_SHA" \
+            --arg candidateManifestSha256 "$CANDIDATE_SHA256" \
+            --arg preparedRunId "$PREPARED_RUN_ID" \
+            --arg prebuiltArtifactManifestSha256 "$PREBUILT_SHA256" \
+            --arg targetFingerprint "$TARGET_FINGERPRINT" \
+            '{
+              schemaVersion: 1,
+              repository: $repository,
+              workflowRef: $workflowRef,
+              workflowCommitSha: $workflowCommitSha,
+              approver: $approver,
+              approvalRunId: $approvalRunId,
+              operation: $operation,
+              reviewedCommitSha: $reviewedCommitSha,
+              candidateManifestSha256: $candidateManifestSha256,
+              preparedRunId: $preparedRunId,
+              prebuiltArtifactManifestSha256: $prebuiltArtifactManifestSha256,
+              targetFingerprint: $targetFingerprint
+            }' > artifacts/release-approval/approval.json
+
+      - name: Upload immutable approval record
+        uses: actions/upload-artifact@v4
+        with:
+          name: vercel-release-approval-${{ github.run_id }}
+          path: artifacts/release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 14

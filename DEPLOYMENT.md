@@ -270,8 +270,15 @@ unexpected provider `gitSource`, source substitution, provider API failure,
 redirects, Preview, or alias drift fail closed. The manual
 `.github/workflows/vercel-deploy.yml` uses the same reviewed commit, candidate,
 prebuilt-artifact hash, project/team, and `VERCEL_TOKEN` secret; it has no
-automatic trigger. Its `prepare` operation uploads `.vercel/output` for
-independent review. A later `deploy` operation requires that prepare run ID and
+automatic trigger. The only credentialed job targets the `vercel-production`
+GitHub Environment and accepts a content-bound approval artifact only from a
+successful `vercel-release-approval.yml` run on `main` by a different GitHub
+actor than the release requester. The environment must permit deployments only
+from `main`; required environment reviewers should also be enabled when the
+repository plan supports them. The workflow requires the reviewed commit to
+equal both workflows' dispatch commit and the current private-repository `main`
+tip. Its `prepare` operation uploads `.vercel/output` for independent review. A
+later `deploy` operation requires a second approval, that prepare run ID, and
 the reviewed artifact hash, downloads those exact bytes, and never rebuilds
 them.
 
@@ -465,5 +472,9 @@ npm run deploy:production
 `verify:production-candidate`, then `promote:production` only after independent
 approval of the exact commit, candidate, and prebuilt manifest. The manual
 `workflow_dispatch` flow in `.github/workflows/vercel-deploy.yml` provides the
-same separate prepare and deploy operations. Its token is a GitHub Actions
-secret and is never committed.
+same separate prepare and deploy operations. Each operation requires a separate
+content-bound manual approval workflow run by an actor other than the release
+requester before its token-bearing step. The credentialed job also targets the
+`vercel-production` environment, and the token remains process-only. The build
+writes only the fixed non-secret project/team linkage; it never runs
+`vercel pull` or downloads Production environment values.

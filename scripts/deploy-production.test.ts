@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   assertPinnedVercelCliVersion,
   assertLinkedVercelProject,
+  buildVercelPrebuiltOutput,
   parseProductionDeploymentOutput,
   parseVercelCliVersion,
   parseVercelPrebuiltDryRun,
@@ -153,5 +160,164 @@ describe("deploy-production", () => {
     );
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(expectedArgs);
+  });
+
+  it("builds without pull or persisted production environment files", async () => {
+    const workspace = path.join(
+      process.cwd(),
+      "artifacts",
+      "test-workspaces",
+      `vercel-build-${randomUUID()}`,
+    );
+    workspaces.add(workspace);
+    await mkdir(workspace, { recursive: true });
+    await writeFile(path.join(workspace, ".env.local"), "TEST_ONLY=true\n");
+    const calls: string[][] = [];
+
+    await expect(
+      buildVercelPrebuiltOutput({
+        repositoryRoot: workspace,
+        environment: sanitizedDeploymentEnvironment({
+          NODE_ENV: "test",
+          VERCEL_TOKEN: "configured",
+        }),
+        runCli: async (args) => {
+          calls.push([...args]);
+          return { stdout: "" };
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual([
+      [
+        "build",
+        "--prod",
+        "--scope",
+        "giffdevs-projects",
+        "--global-config",
+        path.join(workspace, ".vercel", "release-control-global"),
+      ],
+    ]);
+    expect(calls.flat()).not.toContain("pull");
+    expect(
+      JSON.parse(
+        await readFile(
+          path.join(workspace, ".vercel", "project.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      projectId: "prj_1XEu7EWNl1Eekl3TKQ6FnKnGznv8",
+      orgId: "team_qymLK9gugmE5lSs2mxC5XqRY",
+      projectName: "flight-map",
+      settings: {
+        framework: "nextjs",
+        devCommand: null,
+        installCommand: null,
+        buildCommand: null,
+        outputDirectory: null,
+        rootDirectory: null,
+        directoryListing: false,
+        nodeVersion: "24.x",
+      },
+    });
+    await expect(
+      access(path.join(workspace, ".env.local")),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(
+        path.join(
+          workspace,
+          ".vercel",
+          "env.local.release-control-hold",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(path.join(workspace, ".vercel", ".env.production.local")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(path.join(workspace, ".vercel", "release-control-global")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("restores local environment files when the Vercel build fails", async () => {
+    const workspace = path.join(
+      process.cwd(),
+      "artifacts",
+      "test-workspaces",
+      `vercel-build-failure-${randomUUID()}`,
+    );
+    workspaces.add(workspace);
+    await mkdir(workspace, { recursive: true });
+    await writeFile(path.join(workspace, ".env.production"), "TEST_ONLY=true\n");
+
+    await expect(
+      buildVercelPrebuiltOutput({
+        repositoryRoot: workspace,
+        environment: sanitizedDeploymentEnvironment({
+          NODE_ENV: "test",
+          VERCEL_TOKEN: "configured",
+        }),
+        runCli: async () => {
+          throw new Error("synthetic build failure");
+        },
+      }),
+    ).rejects.toThrow("synthetic build failure");
+
+    await expect(
+      access(path.join(workspace, ".env.production")),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(
+        path.join(
+          workspace,
+          ".vercel",
+          "env.production.release-control-hold",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(path.join(workspace, ".vercel", ".env.production.local")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(path.join(workspace, ".vercel", "release-control-global")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails closed and cleans up if the build writes an environment file", async () => {
+    const workspace = path.join(
+      process.cwd(),
+      "artifacts",
+      "test-workspaces",
+      `vercel-build-env-write-${randomUUID()}`,
+    );
+    workspaces.add(workspace);
+    await mkdir(workspace, { recursive: true });
+
+    await expect(
+      buildVercelPrebuiltOutput({
+        repositoryRoot: workspace,
+        environment: sanitizedDeploymentEnvironment({
+          NODE_ENV: "test",
+          VERCEL_TOKEN: "configured",
+        }),
+        runCli: async () => {
+          await writeFile(
+            path.join(
+              workspace,
+              ".vercel",
+              ".env.production.local",
+            ),
+            "UNEXPECTED=true\n",
+          );
+          return { stdout: "" };
+        },
+      }),
+    ).rejects.toThrow(/persisted a production environment file/);
+
+    await expect(
+      access(path.join(workspace, ".vercel", ".env.production.local")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

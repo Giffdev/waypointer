@@ -1,6 +1,13 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -26,6 +33,21 @@ const root = path.resolve(import.meta.dirname, "..");
 const REQUIRED_VERCEL_CLI_VERSION = "58.9.2";
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
+const FIXED_VERCEL_PROJECT_LINK = {
+  projectId: RELEASE_DEPLOYMENT_TRUST.projectId,
+  orgId: RELEASE_DEPLOYMENT_TRUST.orgId,
+  projectName: RELEASE_DEPLOYMENT_TRUST.projectName,
+  settings: {
+    framework: "nextjs",
+    devCommand: null,
+    installCommand: null,
+    buildCommand: null,
+    outputDirectory: null,
+    rootDirectory: null,
+    directoryListing: false,
+    nodeVersion: "24.x",
+  },
+} as const;
 
 interface CommandResult {
   readonly stdout: string;
@@ -378,29 +400,28 @@ function deploymentRuntimeVariables(options: {
   };
 }
 
-async function writeSafeVercelBuildEnvironment(
-  environment: NodeJS.ProcessEnv,
-): Promise<string> {
-  const filePath = path.join(root, ".vercel", ".env.production.local");
-  const safeValues = {
-    AUTH_SECRET: environment.AUTH_SECRET!,
-    AUTH_URL: environment.AUTH_URL!,
-    DATABASE_URL: environment.DATABASE_URL!,
-    NEXTAUTH_SECRET: environment.NEXTAUTH_SECRET!,
-    NEXTAUTH_URL: environment.NEXTAUTH_URL!,
-    FLIGHT_MAP_BUILD_ID: environment.FLIGHT_MAP_BUILD_ID!,
-  };
+async function writeFixedVercelProjectLink(
+  repositoryRoot: string,
+): Promise<void> {
+  const vercelDirectory = path.join(repositoryRoot, ".vercel");
+  const projectPath = path.join(vercelDirectory, "project.json");
+  await mkdir(vercelDirectory, { recursive: true });
   await writeFile(
-    filePath,
-    `${Object.entries(safeValues)
-      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-      .join("\n")}\n`,
+    projectPath,
+    `${JSON.stringify(FIXED_VERCEL_PROJECT_LINK)}\n`,
     "utf8",
   );
-  return filePath;
+  assertLinkedVercelProject(
+    JSON.parse(await readFile(projectPath, "utf8")) as {
+      projectId?: string;
+      orgId?: string;
+    },
+  );
 }
 
-async function hideLocalEnvironmentFiles(): Promise<() => Promise<void>> {
+async function hideLocalEnvironmentFiles(
+  repositoryRoot: string,
+): Promise<() => Promise<void>> {
   const hidden: Array<{ source: string; hold: string }> = [];
   try {
     for (const fileName of [
@@ -409,9 +430,9 @@ async function hideLocalEnvironmentFiles(): Promise<() => Promise<void>> {
       ".env.production",
       ".env.production.local",
     ]) {
-      const source = path.join(root, fileName);
+      const source = path.join(repositoryRoot, fileName);
       const hold = path.join(
-        root,
+        repositoryRoot,
         ".vercel",
         `${fileName.slice(1)}.release-control-hold`,
       );
@@ -444,6 +465,62 @@ async function hideLocalEnvironmentFiles(): Promise<() => Promise<void>> {
       await rename(entry.hold, entry.source);
     }
   };
+}
+
+export async function buildVercelPrebuiltOutput(options: {
+  readonly repositoryRoot?: string;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly runCli?: typeof runVercel;
+}): Promise<void> {
+  const repositoryRoot = path.resolve(options.repositoryRoot ?? root);
+  const runCli = options.runCli ?? runVercel;
+  await writeFixedVercelProjectLink(repositoryRoot);
+  const providerEnvironmentPath = path.join(
+    repositoryRoot,
+    ".vercel",
+    ".env.production.local",
+  );
+  const globalConfigDirectory = path.join(
+    repositoryRoot,
+    ".vercel",
+    "release-control-global",
+  );
+  await rm(providerEnvironmentPath, { force: true });
+  await rm(globalConfigDirectory, { recursive: true, force: true });
+  const restoreLocalEnvironmentFiles =
+    await hideLocalEnvironmentFiles(repositoryRoot);
+  try {
+    await runCli(
+      [
+        "build",
+        "--prod",
+        "--scope",
+        RELEASE_DEPLOYMENT_TRUST.teamSlug,
+        "--global-config",
+        globalConfigDirectory,
+      ],
+      { environment: options.environment },
+    );
+    try {
+      await access(providerEnvironmentPath);
+      throw new Error(
+        "Vercel build persisted a production environment file",
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  } finally {
+    try {
+      await Promise.all([
+        rm(providerEnvironmentPath, { force: true }),
+        rm(globalConfigDirectory, { recursive: true, force: true }),
+      ]);
+    } finally {
+      await restoreLocalEnvironmentFiles();
+    }
+  }
 }
 
 export async function deployProductionCandidate(
@@ -495,43 +572,9 @@ export async function deployProductionCandidate(
       ) as { projectId?: string; orgId?: string },
     );
   } else {
-    await runVercel(
-      [
-        "pull",
-        "--yes",
-        "--environment=production",
-        "--scope",
-        RELEASE_DEPLOYMENT_TRUST.teamSlug,
-      ],
-      { environment: childEnvironment },
-    );
-    assertLinkedVercelProject(
-      JSON.parse(
-        await readFile(path.join(root, ".vercel", "project.json"), "utf8"),
-      ) as { projectId?: string; orgId?: string },
-    );
-    const safeBuildEnvironmentPath =
-      await writeSafeVercelBuildEnvironment(childEnvironment);
-    const restoreLocalEnvironmentFiles =
-      await hideLocalEnvironmentFiles();
-    try {
-      await runVercel(
-        [
-          "build",
-          "--prod",
-          "--yes",
-          "--scope",
-          RELEASE_DEPLOYMENT_TRUST.teamSlug,
-        ],
-        { environment: childEnvironment },
-      );
-    } finally {
-      try {
-        await restoreLocalEnvironmentFiles();
-      } finally {
-        await rm(safeBuildEnvironmentPath, { force: true });
-      }
-    }
+    await buildVercelPrebuiltOutput({
+      environment: childEnvironment,
+    });
   }
 
   const dryRun = parseVercelPrebuiltDryRun(
