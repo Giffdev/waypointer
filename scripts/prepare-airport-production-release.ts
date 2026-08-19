@@ -8,6 +8,10 @@ import {
   verifyReleaseEndpoint,
 } from "./airport-release-health.ts";
 import {
+  sanitizedDeploymentEnvironment,
+  vercelCliProviderFetch,
+} from "./deploy-production.ts";
+import {
   loadAirportReleaseMigrationManifest,
   type UnsafeSqlClient,
   verifyAirportMigrationState,
@@ -30,6 +34,7 @@ import {
   formatSafePostgresError,
   safePostgresClientOptions,
 } from "./postgres-diagnostics.ts";
+import type { ReleaseEndpointOptions } from "./vercel-provider-proof.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const MAX_AGE_MS = 30 * 60 * 1000;
@@ -133,6 +138,7 @@ export function assertCredentialFreeArtifact(
 
 export async function prepareAirportProductionRelease(
   environment: NodeJS.ProcessEnv = process.env,
+  releaseEndpointOptions: ReleaseEndpointOptions = {},
 ) {
   const migrationDatabaseUrl =
     environment.MIGRATION_DATABASE_URL?.trim() ?? "";
@@ -181,6 +187,7 @@ export async function prepareAirportProductionRelease(
     {
       vercelApiToken:
         environment.AIRPORT_RELEASE_VERCEL_API_TOKEN?.trim() ?? "",
+      ...releaseEndpointOptions,
     },
   );
   const snapshotPath = requireRepositoryPath(
@@ -390,7 +397,19 @@ export async function prepareAirportProductionRelease(
 }
 
 async function main() {
-  const result = await prepareAirportProductionRelease();
+  const releaseEndpointOptions: ReleaseEndpointOptions =
+    process.env.AIRPORT_RELEASE_PROVIDER_TRANSPORT === "vercel-cli"
+      ? {
+          providerFetch: vercelCliProviderFetch(
+            sanitizedDeploymentEnvironment(process.env),
+          ),
+          applicationFetch: globalThis.fetch,
+        }
+      : {};
+  const result = await prepareAirportProductionRelease(
+    process.env,
+    releaseEndpointOptions,
+  );
   process.stdout.write(
     JSON.stringify({
       approvalPath: path.relative(root, result.approvalPath),

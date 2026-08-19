@@ -297,8 +297,9 @@ function parseApproval(
     !Number.isFinite(importsPausedAt) ||
     !Number.isFinite(pauseVerifiedAt) ||
     !Number.isFinite(pauseExpiresAt) ||
-    importsPausedAt < approvedAt ||
+    importsPausedAt > approvedAt ||
     pauseVerifiedAt < importsPausedAt ||
+    pauseVerifiedAt > approvedAt ||
     pauseVerifiedAt > now ||
     now - pauseVerifiedAt > AIRPORT_SNAPSHOT_MAX_AGE_MS ||
     pauseExpiresAt <= now ||
@@ -317,6 +318,7 @@ function parseApproval(
     !Number.isFinite(snapshotExpiresAt) ||
     snapshotCreatedAt < importsPausedAt ||
     snapshotVerifiedAt < snapshotCreatedAt ||
+    snapshotVerifiedAt > approvedAt ||
     snapshotVerifiedAt > now ||
     now - snapshotVerifiedAt > AIRPORT_SNAPSHOT_MAX_AGE_MS ||
     snapshotExpiresAt <= now ||
@@ -380,6 +382,7 @@ function parseProductionPreflight(
     throw new AirportCatalogSafetyError("target-approval-invalid");
   }
   const now = Date.now();
+  const approvedAt = validDate(approval.approvedAt);
   const generatedAt = validDate(preflight.generatedAt);
   const expiresAt = validDate(preflight.expiresAt);
   const pauseVerifiedAt = validDate(
@@ -392,6 +395,7 @@ function parseProductionPreflight(
     preflight.releaseControlPlane?.providerRequestCompletedAt,
   );
   const snapshotCreatedAt = validDate(preflight.snapshot?.createdAt);
+  const snapshotVerifiedAt = validDate(preflight.snapshot?.verifiedAt);
   if (
     preflight.schemaVersion !== 3 ||
     preflight.status !== "production-preflight-provider-verified" ||
@@ -402,8 +406,12 @@ function parseProductionPreflight(
     !Number.isFinite(pauseVerifiedAt) ||
     !Number.isFinite(providerRequestStartedAt) ||
     !Number.isFinite(providerRequestCompletedAt) ||
+    !Number.isFinite(snapshotVerifiedAt) ||
     generatedAt > now ||
+    generatedAt !== approvedAt ||
     pauseVerifiedAt > now ||
+    pauseVerifiedAt !== validDate(approval.changeControl.verifiedAt) ||
+    pauseVerifiedAt > approvedAt ||
     now - pauseVerifiedAt > AIRPORT_SNAPSHOT_MAX_AGE_MS ||
     expiresAt <= now ||
     expiresAt > validDate(approval.expiresAt) ||
@@ -472,6 +480,7 @@ function parseProductionPreflight(
     providerRequestStartedAt > providerRequestCompletedAt ||
     providerRequestCompletedAt > pauseVerifiedAt ||
     pauseVerifiedAt - providerRequestCompletedAt > 5_000 ||
+    snapshotVerifiedAt > providerRequestStartedAt ||
     preflight.releaseControlPlane.candidateManifestSha256 !==
       approval.candidateManifestSha256 ||
     preflight.releaseControlPlane.approvedAirportCandidateSha256 !==

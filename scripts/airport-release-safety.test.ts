@@ -70,14 +70,14 @@ function approvalPayload(
     databaseName: "flight_map",
     databaseOid: 16_384,
     candidateManifestSha256: "",
-    approvedAt: new Date(now - 5_000).toISOString(),
+    approvedAt: new Date(now - 1_000).toISOString(),
     expiresAt: new Date(now + 3_600_000).toISOString(),
     changeControl: {
       mechanism: "application-read-only-plus-database-barrier" as const,
       staging: "live-production-alias-read-only-control-plane" as const,
       pauseEvidenceSha256: "b".repeat(64),
-      importsPausedAt: new Date(now - 4_000).toISOString(),
-      verifiedAt: new Date(now - 3_000).toISOString(),
+      importsPausedAt: new Date(now - 5_000).toISOString(),
+      verifiedAt: new Date(now - 2_000).toISOString(),
       expiresAt: new Date(now + 3_600_000).toISOString(),
     },
     snapshot: {
@@ -87,8 +87,8 @@ function approvalPayload(
       restoreProcedureSha256: sha256Bytes(
         canonicalJson(restoreProcedure),
       ),
-      createdAt: new Date(now - 2_000).toISOString(),
-      verifiedAt: new Date(now - 1_000).toISOString(),
+      createdAt: new Date(now - 4_000).toISOString(),
+      verifiedAt: new Date(now - 3_000).toISOString(),
       expiresAt: new Date(now + 3_600_000).toISOString(),
       restoreProcedure,
     },
@@ -262,6 +262,10 @@ describe("airport release database target safety", () => {
     approval.targetFingerprint = baseApproval.targetFingerprint;
     approval.candidateManifestSha256 =
       baseApproval.candidateManifestSha256;
+    const approvedAt = Date.parse(approval.approvedAt);
+    const providerVerifiedAt = approvedAt - 300;
+    approval.changeControl.verifiedAt =
+      new Date(providerVerifiedAt).toISOString();
     const preflight = await writeContentAddressedJson(
       evidenceDirectory,
       "airport-production-preflight",
@@ -269,7 +273,7 @@ describe("airport release database target safety", () => {
         schemaVersion: 3,
         status: "production-preflight-provider-verified",
         authorization: "context-only-fresh-provider-query-required",
-        generatedAt: new Date(Date.now() - 500).toISOString(),
+        generatedAt: approval.approvedAt,
         expiresAt: approval.expiresAt,
         releaseControlPlane: {
           deploymentId: "dpl_12345678",
@@ -298,14 +302,14 @@ describe("airport release database target safety", () => {
           providerBeforeSha256: "6".repeat(64),
           providerAfterSha256: "7".repeat(64),
           providerRequestStartedAt:
-            new Date(Date.now() - 350).toISOString(),
+            new Date(approvedAt - 500).toISOString(),
           providerRequestCompletedAt:
-            new Date(Date.now() - 300).toISOString(),
+            new Date(approvedAt - 400).toISOString(),
           responseSha256: "1".repeat(64),
           runtimeWriteMode: "read-only",
           defaultTransactionReadOnly: "on",
           writesPaused: true,
-          verifiedAt: new Date(Date.now() - 250).toISOString(),
+          verifiedAt: new Date(providerVerifiedAt).toISOString(),
         },
         target: {
           fingerprint: approval.targetFingerprint,
