@@ -303,6 +303,7 @@ describe("airport release database target safety", () => {
             new Date(Date.now() - 300).toISOString(),
           responseSha256: "1".repeat(64),
           runtimeWriteMode: "read-only",
+          defaultTransactionReadOnly: "on",
           writesPaused: true,
           verifiedAt: new Date(Date.now() - 250).toISOString(),
         },

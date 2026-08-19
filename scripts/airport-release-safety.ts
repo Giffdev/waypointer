@@ -102,6 +102,7 @@ export interface AirportProductionPreflightEvidence {
     providerRequestCompletedAt: string;
     responseSha256: string;
     runtimeWriteMode: "read-only";
+    defaultTransactionReadOnly: "on";
     writesPaused: true;
     verifiedAt: string;
   };

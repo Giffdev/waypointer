@@ -17,6 +17,9 @@ function databaseUrl(): string {
   return value;
 }
 
+export const RUNTIME_READ_ONLY_POSTGRES_OPTIONS =
+  "-c default_transaction_read_only=on";
+
 export function databasePoolMax(
   environment: NodeJS.ProcessEnv = process.env,
 ): number {
@@ -32,23 +35,28 @@ export function databasePoolMax(
 export function runtimeDatabaseConnectionParameters(
   environment: NodeJS.ProcessEnv = process.env,
 ) {
+  return environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() === "true"
+    ? { options: RUNTIME_READ_ONLY_POSTGRES_OPTIONS }
+    : {};
+}
+
+export function runtimeDatabaseClientOptions(
+  environment: NodeJS.ProcessEnv = process.env,
+) {
   return {
-    default_transaction_read_only:
-      environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() === "true",
-  };
+    max: databasePoolMax(environment),
+    prepare: false,
+    idle_timeout: 20,
+    connect_timeout: 10,
+    onnotice: () => {},
+    connection: runtimeDatabaseConnectionParameters(environment),
+  } as const;
 }
 
 function createDatabase() {
   const client =
     globalDatabase.flightMapSql ??
-    postgres(databaseUrl(), {
-      max: databasePoolMax(),
-      prepare: false,
-      idle_timeout: 20,
-      connect_timeout: 10,
-      onnotice: () => {},
-      connection: runtimeDatabaseConnectionParameters(),
-    });
+    postgres(databaseUrl(), runtimeDatabaseClientOptions());
   const db = drizzle(client, { schema });
 
   if (process.env.NODE_ENV !== "production") {
@@ -81,19 +89,25 @@ export async function closeDb(): Promise<void> {
   if (client) await client.end({ timeout: 5 });
 }
 
-export async function verifyRuntimeWritePause(): Promise<void> {
-  if (
-    process.env.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() !== "true"
-  ) {
-    throw new AirportReleaseWriteBarrierError();
-  }
+export async function verifyRuntimeWritePause(): Promise<"on"> {
   const rows = await getDb().execute<{
     default_transaction_read_only?: string;
   }>(sql`show default_transaction_read_only`);
-  if (
-    (rows as unknown as Array<{
+  assertRuntimeReadOnlySetting(
+    rows as unknown as Array<{
       default_transaction_read_only?: string;
-    }>)[0]?.default_transaction_read_only !== "on"
+    }>,
+  );
+  return "on";
+}
+
+export function assertRuntimeReadOnlySetting(
+  rows: ReadonlyArray<{ default_transaction_read_only?: string }>,
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  if (
+    environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() !== "true" ||
+    rows[0]?.default_transaction_read_only !== "on"
   ) {
     throw new AirportReleaseWriteBarrierError();
   }

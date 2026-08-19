@@ -16,9 +16,16 @@ import {
   userProfiles,
 } from "./schema";
 import {
+  assertRuntimeReadOnlySetting,
   databasePoolMax,
+  RUNTIME_READ_ONLY_POSTGRES_OPTIONS,
+  runtimeDatabaseClientOptions,
   runtimeDatabaseConnectionParameters,
 } from "./index";
+import {
+  createWorkerDatabases,
+  workerDatabaseClientOptions,
+} from "./worker";
 
 const migration = readFileSync(
   fileURLToPath(
@@ -75,15 +82,57 @@ describe("database pool sizing", () => {
   });
 
   it("makes every runtime connection read-only during a release pause", () => {
+    const paused = {
+      NODE_ENV: "production",
+      FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+    };
     expect(
-      runtimeDatabaseConnectionParameters({
-        NODE_ENV: "test",
+      runtimeDatabaseConnectionParameters(paused),
+    ).toEqual({
+      options: RUNTIME_READ_ONLY_POSTGRES_OPTIONS,
+    });
+    expect(runtimeDatabaseClientOptions(paused).connection).toEqual({
+      options: RUNTIME_READ_ONLY_POSTGRES_OPTIONS,
+    });
+    expect(workerDatabaseClientOptions(paused).connection).toEqual({
+      options: RUNTIME_READ_ONLY_POSTGRES_OPTIONS,
+    });
+    expect(runtimeDatabaseConnectionParameters({ NODE_ENV: "test" })).toEqual(
+      {},
+    );
+    expect(runtimeDatabaseClientOptions({ NODE_ENV: "test" }).connection).toEqual(
+      {},
+    );
+    expect(workerDatabaseClientOptions({ NODE_ENV: "test" }).connection).toEqual(
+      {},
+    );
+  });
+
+  it("fails workers and health closed while preserving normal mode", () => {
+    expect(() =>
+      createWorkerDatabases({
+        DATABASE_URL: "postgres://example.invalid/flight_map",
         FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
       }),
-    ).toEqual({ default_transaction_read_only: true });
-    expect(runtimeDatabaseConnectionParameters({ NODE_ENV: "test" })).toEqual({
-      default_transaction_read_only: false,
-    });
+    ).toThrow(/temporarily read-only/);
+    expect(() =>
+      assertRuntimeReadOnlySetting(
+        [{ default_transaction_read_only: "on" }],
+        { FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true" },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertRuntimeReadOnlySetting(
+        [{ default_transaction_read_only: "off" }],
+        { FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true" },
+      ),
+    ).toThrow(/temporarily read-only/);
+    expect(() =>
+      assertRuntimeReadOnlySetting(
+        [{ default_transaction_read_only: "on" }],
+        {},
+      ),
+    ).toThrow(/temporarily read-only/);
   });
 });
 

@@ -466,6 +466,7 @@ function applicationFetchFor(
       {
         status: "ok",
         runtimeWriteMode: "read-only",
+        database: { defaultTransactionReadOnly: "on" },
         challenge: url.searchParams.get("challenge"),
         runtime: runtimeClaims(expectation),
         providerIdentity: { oidcToken: "provider-signed-token" },

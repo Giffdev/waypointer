@@ -172,6 +172,7 @@ describe("airport deployed application health", () => {
           {
             status: "ok",
             runtimeWriteMode: "read-only",
+            database: { defaultTransactionReadOnly: "on" },
             challenge: url.searchParams.get("challenge"),
             runtime: runtimeClaims(expectation),
             providerIdentity: { oidcToken: "provider-signed-token" },
@@ -217,6 +218,7 @@ describe("airport deployed application health", () => {
       deploymentId: expectation.deploymentId,
       routesChecked: 5,
       airportQueriesChecked: 9,
+      defaultTransactionReadOnly: "on",
     });
     for (const [input] of applicationFetch.mock.calls) {
       expect(new URL(String(input)).origin).toBe(

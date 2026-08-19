@@ -192,6 +192,7 @@ export interface ApplicationHealthEvidence {
   routesChecked: number;
   airportQueriesChecked: number;
   responseSha256: string;
+  defaultTransactionReadOnly: "on";
 }
 
 export async function verifyApplicationHealth(
@@ -296,6 +297,8 @@ export async function verifyApplicationHealth(
     responseSha256: createHash("sha256")
       .update(JSON.stringify(observations))
       .digest("hex"),
+    defaultTransactionReadOnly:
+      releaseEndpoint.defaultTransactionReadOnly,
   };
 }
 

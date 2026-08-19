@@ -285,6 +285,8 @@ export async function prepareAirportProductionRelease(
         providerRequestCompletedAt: pause.providerRequestCompletedAt,
         responseSha256: pause.responseSha256,
         runtimeWriteMode: "read-only",
+        defaultTransactionReadOnly:
+          pause.defaultTransactionReadOnly,
         writesPaused: true,
         verifiedAt: pause.verifiedAt,
       },

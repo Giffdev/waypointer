@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 import { afterAll, describe, expect, it } from "vitest";
+import { runtimeDatabaseConnectionParameters } from "./index";
 
 const enabled =
   process.env.FLIGHT_MAP_RUN_POSTGRES_SCHEMA_TESTS === "true" &&
@@ -306,6 +307,45 @@ postgresDescribe("launch migration clean and upgrade paths", () => {
       ]);
     } finally {
       await client.end();
+    }
+  });
+
+  it("starts paused runtime connections read-only and preserves normal writes", async () => {
+    const database = await createDatabase("runtime_read_only");
+    const normal = postgres(databaseUrl(database), {
+      max: 1,
+      prepare: false,
+      onnotice: () => {},
+    });
+    try {
+      await normal`create table runtime_write_probe (id integer primary key)`;
+      await normal`insert into runtime_write_probe (id) values (1)`;
+    } finally {
+      await normal.end();
+    }
+
+    const paused = postgres(databaseUrl(database), {
+      max: 1,
+      prepare: false,
+      onnotice: () => {},
+      connection: runtimeDatabaseConnectionParameters({
+        FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+      }),
+    });
+    try {
+      const [setting] = await paused<{
+        default_transaction_read_only: string;
+      }[]>`show default_transaction_read_only`;
+      expect(setting.default_transaction_read_only).toBe("on");
+      await expect(
+        paused`insert into runtime_write_probe (id) values (2)`,
+      ).rejects.toMatchObject({ code: "25006" });
+      const rows = await paused<{ id: number }[]>`
+        select id from runtime_write_probe order by id
+      `;
+      expect(rows).toEqual([{ id: 1 }]);
+    } finally {
+      await paused.end();
     }
   });
 });

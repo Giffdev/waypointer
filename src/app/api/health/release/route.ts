@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   try {
     await requireAuthenticatedUser();
     assertSameOrigin(request);
-    await verifyRuntimeWritePause();
+    const defaultTransactionReadOnly = await verifyRuntimeWritePause();
     const challenge = new URL(request.url).searchParams.get("challenge") ?? "";
     if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) {
       throw new Error("Invalid release health challenge.");
@@ -32,6 +32,7 @@ export async function GET(request: Request) {
       {
         status: "ok",
         runtimeWriteMode: "read-only",
+        database: { defaultTransactionReadOnly },
         challenge,
         runtime,
         providerIdentity: { oidcToken },

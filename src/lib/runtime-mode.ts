@@ -16,6 +16,12 @@ export type ImportRuntimeCapability = {
 
 const DEFAULT_MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
+export function areReleaseWritesPaused(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() === "true";
+}
+
 function isLoopbackUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
@@ -111,6 +117,7 @@ export function isBoundedMvpSyncImportConfiguration(
 ): boolean {
   const maxBytes = Number(environment.IMPORT_MAX_BYTES);
   return (
+    !areReleaseWritesPaused(environment) &&
     environment.NODE_ENV === "production" &&
     environment.FLIGHT_MAP_MVP_SYNC_IMPORTS === "true" &&
     environment.IMPORT_STORAGE_BACKEND === "sync-mvp" &&
@@ -127,6 +134,7 @@ export function isDurableImportConfiguration(
 ): boolean {
   const maxBytes = Number(environment.IMPORT_MAX_BYTES);
   return (
+    !areReleaseWritesPaused(environment) &&
     environment.FLIGHT_MAP_DURABLE_IMPORTS === "true" &&
     environment.FLIGHT_MAP_MVP_SYNC_IMPORTS !== "true" &&
     environment.IMPORT_STORAGE_BACKEND === "r2" &&
@@ -207,6 +215,15 @@ export function getFlightMapRuntimeMode(): FlightMapRuntimeMode {
 }
 
 export function getImportRuntimeCapability(): ImportRuntimeCapability {
+  if (areReleaseWritesPaused()) {
+    return {
+      available: false,
+      durable: false,
+      maxFileBytes: DEFAULT_MAX_IMPORT_BYTES,
+      unavailableReason:
+        "Imports are temporarily unavailable during a controlled release.",
+    };
+  }
   const mode = getFlightMapRuntimeMode();
   const boundedMvpSyncAvailable = isBoundedMvpSyncImportConfiguration();
   const configuredMax = Number(

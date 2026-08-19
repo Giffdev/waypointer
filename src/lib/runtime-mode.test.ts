@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  areReleaseWritesPaused,
   canExposeDevelopmentVerificationLink,
   getFlightMapRuntimeMode,
   getImportRuntimeCapability,
@@ -133,6 +134,35 @@ describe("runtime mode", () => {
     };
 
     expect(isBoundedMvpSyncImportConfiguration(environment)).toBe(false);
+  });
+
+  it("disables synchronous and background import writes during a release pause", () => {
+    const paused = {
+      NODE_ENV: "production",
+      FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+      FLIGHT_MAP_MVP_SYNC_IMPORTS: "true",
+      FLIGHT_MAP_DURABLE_IMPORTS: "true",
+      DATABASE_URL: "postgres://production.example/db",
+      AUTH_SECRET: "a-secure-production-auth-secret",
+      IMPORT_STORAGE_BACKEND: "r2",
+      IMPORT_MAX_BYTES: "10485760",
+      OBJECT_STORAGE_ENDPOINT: "https://objects.example.test",
+      OBJECT_STORAGE_REGION: "auto",
+      OBJECT_STORAGE_BUCKET: "private-imports",
+      OBJECT_STORAGE_ACCESS_KEY_ID: "worker-access",
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: "worker-secret",
+    };
+    expect(areReleaseWritesPaused(paused)).toBe(true);
+    expect(isBoundedMvpSyncImportConfiguration(paused)).toBe(false);
+    expect(isDurableImportConfiguration(paused)).toBe(false);
+    for (const [name, value] of Object.entries(paused)) {
+      vi.stubEnv(name, value);
+    }
+    expect(getImportRuntimeCapability()).toMatchObject({
+      available: false,
+      durable: false,
+      unavailableReason: expect.stringContaining("controlled release"),
+    });
   });
 
   it("switches from sync MVP to durable imports only with complete private storage", () => {

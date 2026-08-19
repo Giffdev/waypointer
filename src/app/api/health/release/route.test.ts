@@ -66,7 +66,7 @@ describe("release health endpoint", () => {
       id: "00000000-0000-4000-8000-000000000001",
       email: "health@example.test",
     });
-    vi.mocked(verifyRuntimeWritePause).mockResolvedValue();
+    vi.mocked(verifyRuntimeWritePause).mockResolvedValue("on");
     const response = await GET(
       new Request(
         `https://candidate.vercel.app/api/health/release?challenge=${challenge}`,
@@ -77,6 +77,7 @@ describe("release health endpoint", () => {
     expect(await response.json()).toEqual({
       status: "ok",
       runtimeWriteMode: "read-only",
+      database: { defaultTransactionReadOnly: "on" },
       challenge,
       runtime,
       providerIdentity: { oidcToken: "provider-signed-token" },
@@ -92,7 +93,7 @@ describe("release health endpoint", () => {
       id: "00000000-0000-4000-8000-000000000001",
       email: "health@example.test",
     });
-    vi.mocked(verifyRuntimeWritePause).mockResolvedValue();
+    vi.mocked(verifyRuntimeWritePause).mockResolvedValue("on");
     vi.mocked(getVercelOidcToken).mockRejectedValueOnce(
       new Error("OIDC unavailable"),
     );

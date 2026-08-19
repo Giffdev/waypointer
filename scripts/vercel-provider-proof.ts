@@ -167,6 +167,7 @@ export interface ReleaseEndpointEvidence {
   providerRequestStartedAt: string;
   providerRequestCompletedAt: string;
   responseSha256: string;
+  defaultTransactionReadOnly: "on";
   verifiedAt: string;
 }
 
@@ -1324,6 +1325,7 @@ async function verifyEndpointAtOrigin(
   const releasePayload = (await releaseResponse.json()) as {
     status?: string;
     runtimeWriteMode?: string;
+    database?: { defaultTransactionReadOnly?: string };
     challenge?: string;
     runtime?: ReleaseRuntimeClaims;
     providerIdentity?: { oidcToken?: string };
@@ -1338,7 +1340,8 @@ async function verifyEndpointAtOrigin(
   if (
     releasePayload.status !== "ok" ||
     (endpointKind === "release-health" &&
-      releasePayload.runtimeWriteMode !== "read-only") ||
+      (releasePayload.runtimeWriteMode !== "read-only" ||
+        releasePayload.database?.defaultTransactionReadOnly !== "on")) ||
     releasePayload.challenge !== challenge ||
     !releasePayload.runtime ||
     !runtimeClaimsMatch(releasePayload.runtime, expectation)
@@ -1363,6 +1366,7 @@ async function verifyEndpointAtOrigin(
     endpointKind,
     oidcIdentity,
     runtime: releasePayload.runtime,
+    database: releasePayload.database,
     status: releasePayload.status,
   };
   return {
@@ -1397,6 +1401,7 @@ async function verifyEndpointAtOrigin(
     providerRequestStartedAt: verified.requestStartedAt,
     providerRequestCompletedAt: verifiedAfter.requestCompletedAt,
     responseSha256: sha256Bytes(canonicalJson(responseRecord)),
+    defaultTransactionReadOnly: "on",
     verifiedAt: new Date().toISOString(),
   };
 }
