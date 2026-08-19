@@ -156,45 +156,76 @@ function Invoke-ReleaseNode([string]$Script) {
   return $output
 }
 
-function New-NeonSnapshot([string]$SnapshotName) {
-  $neonCommand = Get-Command neon, neonctl -ErrorAction SilentlyContinue |
+function Get-NeonCommand {
+  $neonCommand = Get-Command neonctl, neon -ErrorAction SilentlyContinue |
     Select-Object -First 1
-  $projectId = $env:NEON_PROJECT_ID
-  $productionBranchId = $env:NEON_PRODUCTION_BRANCH_ID
-  if (
-    $null -eq $neonCommand -or
-    [string]::IsNullOrWhiteSpace($projectId) -or
-    [string]::IsNullOrWhiteSpace($productionBranchId)
-  ) {
-    return $null
+  if ($null -eq $neonCommand) {
+    throw "neon-authentication-required"
   }
-  $parentOutput = @(
-    & $neonCommand.Source branches list `
-      --project-id $projectId --output json 2>$null
-  )
+  return $neonCommand
+}
+
+function Invoke-NeonJson(
+  [object]$NeonCommand,
+  [string[]]$Arguments
+) {
+  $output = @(& $NeonCommand.Source @Arguments 2>$null)
   if ($LASTEXITCODE -ne 0) {
-    return $null
+    throw "neon-provider-query-failed"
   }
   try {
-    $parent = @(($parentOutput -join [Environment]::NewLine) |
-      ConvertFrom-Json) |
-      Where-Object {
-        $_.id -eq $productionBranchId -and
-        $_.project_id -eq $projectId -and
-        $_.current_state -eq "ready"
-      }
+    return (($output -join [Environment]::NewLine) | ConvertFrom-Json)
   }
   catch {
-    return $null
+    throw "neon-provider-query-failed"
   }
+}
+
+function Get-AuthenticatedNeonProjects([object]$NeonCommand) {
+  $output = @(& $NeonCommand.Source projects list --output json 2>$null)
+  if ($LASTEXITCODE -ne 0) {
+    throw "neon-authentication-required"
+  }
+  try {
+    $projects = @(($output -join [Environment]::NewLine) | ConvertFrom-Json)
+  }
+  catch {
+    throw "neon-provider-query-failed"
+  }
+  return $projects
+}
+
+function Assert-NeonProductionBranch(
+  [object]$NeonCommand,
+  [string]$ProjectId,
+  [string]$ProductionBranchId
+) {
+  $branches = @(Invoke-NeonJson $NeonCommand @(
+    "branches", "list",
+    "--project-id", $ProjectId,
+    "--output", "json"
+  ))
+  $parent = @($branches | Where-Object {
+    $_.id -eq $ProductionBranchId -and
+    $_.project_id -eq $ProjectId -and
+    $_.current_state -eq "ready"
+  })
   if ($parent.Count -ne 1) {
-    return $null
+    throw "neon-production-branch-verification-failed"
   }
+}
+
+function New-NeonSnapshot(
+  [object]$NeonCommand,
+  [string]$SnapshotName,
+  [string]$ProjectId,
+  [string]$ProductionBranchId
+) {
   $output = @(
-    & $neonCommand.Source branches create --no-compute `
+    & $NeonCommand.Source branches create `
       --name $SnapshotName `
-      --parent $productionBranchId `
-      --project-id $projectId `
+      --parent $ProductionBranchId `
+      --project-id $ProjectId `
       --output json 2>$null
   )
   if ($LASTEXITCODE -ne 0) {
@@ -202,50 +233,23 @@ function New-NeonSnapshot([string]$SnapshotName) {
   }
   try {
     $created = (($output -join [Environment]::NewLine) | ConvertFrom-Json)
-    $createdAt = [DateTimeOffset]::Parse([string]$created.branch.created_at)
     if (
-      $created.branch.parent_id -ne $productionBranchId -or
+      $created.branch.parent_id -ne $ProductionBranchId -or
+      $created.branch.project_id -ne $ProjectId -or
       $created.branch.id -notmatch '^br-[a-z0-9-]{3,240}$'
     ) {
-      return $null
+      throw "neon-snapshot-creation-response-invalid"
     }
-    if (
-      $created.branch.project_id -ne $projectId -or
-      $createdAt -gt [DateTimeOffset]::UtcNow.AddMinutes(1)
-    ) {
-      throw "neon-snapshot-verification-failed"
-    }
-    for ($attempt = 0; $attempt -lt 15; $attempt += 1) {
-      $branchesOutput = @(
-        & $neonCommand.Source branches list `
-          --project-id $projectId --output json 2>$null
-      )
-      if ($LASTEXITCODE -eq 0) {
-        $branch = @(($branchesOutput -join [Environment]::NewLine) |
-          ConvertFrom-Json) |
-          Where-Object {
-            $_.id -eq $created.branch.id -and
-            $_.project_id -eq $projectId -and
-            $_.parent_id -eq $productionBranchId -and
-            $_.current_state -eq "ready"
-          }
-        if ($branch.Count -eq 1) {
-          return [pscustomobject]@{
-            id = [string]$created.branch.id
-            projectId = [string]$created.branch.project_id
-            parentBranchId = [string]$created.branch.parent_id
-            createdAt = [string]$created.branch.created_at
-            executable = [string]$neonCommand.Name
-          }
-        }
-      }
-      Start-Sleep -Seconds 2
-    }
-    throw "neon-snapshot-verification-failed"
+    return [string]$created.branch.id
   }
   catch {
-    throw "neon-snapshot-verification-failed"
+    throw "neon-snapshot-creation-response-invalid"
   }
+}
+
+function ConvertTo-Base64Json([object]$Value) {
+  $json = $Value | ConvertTo-Json -Depth 10 -Compress
+  return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
 }
 
 function Write-OperatorEvidence([string]$Status, [string]$BlockedStage) {
@@ -314,6 +318,34 @@ foreach ($name in $secretEnvironmentNames) {
 
 Push-Location $root
 try {
+  $stage = "Neon authentication"
+  $neonCommand = Get-NeonCommand
+  if ($null -ne $neonApiKeySecure) {
+    Set-EnvironmentFromSecureString "NEON_API_KEY" $neonApiKeySecure
+  }
+  try {
+    $neonProjects = @(Get-AuthenticatedNeonProjects $neonCommand)
+    $neonProjectId = [string]$env:NEON_PROJECT_ID
+    $productionBranchId = [string]$env:NEON_PRODUCTION_BRANCH_ID
+    if (
+      [string]::IsNullOrWhiteSpace($neonProjectId) -or
+      [string]::IsNullOrWhiteSpace($productionBranchId)
+    ) {
+      throw "neon-provider-configuration-missing"
+    }
+    $neonProject = @($neonProjects | Where-Object {
+      $_.id -eq $neonProjectId
+    })
+    if ($neonProject.Count -ne 1) {
+      throw "neon-project-verification-failed"
+    }
+    Assert-NeonProductionBranch `
+      $neonCommand $neonProjectId $productionBranchId
+  }
+  finally {
+    Remove-Item -Path "Env:NEON_API_KEY" -ErrorAction SilentlyContinue
+  }
+
   $stage = "artifact verification"
   $providerPath = Join-Path $root "data\private\release-approvals\vercel-provider-expectation-$providerSha256.json"
   $candidatePath = Join-Path $root "artifacts\release-evidence\airport-catalog\candidate-$candidateSha256.json"
@@ -417,53 +449,56 @@ void (async () => {
   $stage = "Neon snapshot creation"
   $snapshotName =
     "airport-prod-$([DateTimeOffset]::UtcNow.ToString('yyyyMMdd-HHmmss'))"
-  $snapshotCreatedAt = [DateTimeOffset]::UtcNow.ToString("o")
   if ($null -ne $neonApiKeySecure) {
     Set-EnvironmentFromSecureString "NEON_API_KEY" $neonApiKeySecure
   }
   try {
-    $createdSnapshot = New-NeonSnapshot $snapshotName
+    $snapshotId = New-NeonSnapshot `
+      $neonCommand $snapshotName $neonProjectId $productionBranchId
+    $snapshotAttempts = 15
+    if ($null -eq $snapshotId) {
+      Write-Host ""
+      Write-Host "One-time Neon Console action required:"
+      Write-Host "Create branch '$snapshotName' from the Production branch with a read-write compute endpoint, without changing Production."
+      Write-Host "After Neon reports the branch Ready, copy its non-secret branch ID (br-...)."
+      $snapshotId = (Read-Host "Neon snapshot branch ID").Trim()
+      $snapshotAttempts = 1
+    }
+    if ($snapshotId -notmatch '^br-[a-z0-9-]{3,240}$') {
+      throw "snapshot-id-invalid"
+    }
+    $verifiedSnapshot = Invoke-JsonNode $operatorHelper @(
+      "provider-verify",
+      "--neon-executable", [string]$neonCommand.Source,
+      "--neon-project-id", $neonProjectId,
+      "--production-branch-id", $productionBranchId,
+      "--snapshot-id", $snapshotId,
+      "--attempts", [string]$snapshotAttempts
+    )
   }
   finally {
     Remove-Item -Path "Env:NEON_API_KEY" -ErrorAction SilentlyContinue
   }
-  $restoreWithNeonctl = $false
-  if ($null -eq $createdSnapshot) {
-    Write-Host ""
-    Write-Host "One-time Neon Console action required:"
-    Write-Host "Create branch '$snapshotName' from the Production branch, without changing Production."
-    Write-Host "After Neon reports the branch Ready, copy its non-secret branch ID (br-...)."
-    $snapshotId = (Read-Host "Neon snapshot branch ID").Trim()
-  }
-  else {
-    $snapshotId = $createdSnapshot.id
-    $snapshotCreatedAt = $createdSnapshot.createdAt
-    Write-Host "Neon snapshot branch created and parent verified: $snapshotId"
-    $restoreWithNeonctl = $createdSnapshot.executable -eq "neonctl"
-  }
-  if ($snapshotId -notmatch '^br-[a-z0-9-]{3,240}$') {
-    throw "snapshot-id-invalid"
-  }
+  Write-Host "Neon snapshot verified by provider: $snapshotId"
+  $restoreWithNeonctl = $neonCommand.Name -eq "neonctl"
 
   $stage = "snapshot attestation"
   $attestArguments = @(
     "attest",
     "--snapshot-id", $snapshotId,
-    "--created-at", $snapshotCreatedAt,
     "--target-fingerprint", [string]$target.targetFingerprint,
     "--database-name", [string]$target.databaseName,
     "--database-oid", [string]$target.databaseOid,
-    "--pre-change-state-sha256", [string]$target.preChangeStateSha256
+    "--pre-change-state-sha256", [string]$target.preChangeStateSha256,
+    "--neon-project-id", $neonProjectId,
+    "--production-branch-id", $productionBranchId,
+    "--provider-branch-base64",
+    (ConvertTo-Base64Json $verifiedSnapshot.branch),
+    "--provider-endpoints-base64",
+    (ConvertTo-Base64Json @($verifiedSnapshot.endpoints))
   )
   if ($restoreWithNeonctl) {
     $attestArguments += "--restore-with-neonctl"
-  }
-  if ($null -ne $createdSnapshot) {
-    $attestArguments += @(
-      "--neon-project-id", [string]$createdSnapshot.projectId,
-      "--production-branch-id",
-      [string]$createdSnapshot.parentBranchId
-    )
   }
   $snapshot = Invoke-JsonNode $operatorHelper $attestArguments
   $env:AIRPORT_RELEASE_SNAPSHOT_ATTESTATION_PATH = [string]$snapshot.path
@@ -555,7 +590,13 @@ void (async () => {
 
 }
 catch {
-  if ($releaseStarted) {
+  if (
+    -not $releaseStarted -and
+    $_.Exception.Message -eq "neon-authentication-required"
+  ) {
+    $failureMessage = "neonctl auth"
+  }
+  elseif ($releaseStarted) {
     $failureMessage =
       "Release reached '$stage' and commit status may be committed. Do not retry; verify database state and use any emitted database evidence before following the approved health/rollback stop condition."
   }
@@ -607,6 +648,11 @@ finally {
     }
   }
   Pop-Location
+}
+
+if ($failureMessage -eq "neonctl auth") {
+  [Console]::Error.WriteLine($failureMessage)
+  exit 1
 }
 
 try {
