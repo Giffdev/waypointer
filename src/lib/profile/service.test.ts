@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeOwnerProfile } from "./service";
+import {
+  normalizeOwnerProfile,
+  shouldCreateOwnerProfile,
+} from "./service";
 
 describe("private profile allowlist", () => {
   it("normalizes the approved mutable profile fields", () => {
@@ -46,5 +49,18 @@ describe("private profile allowlist", () => {
         distanceUnit: "miles",
       }),
     ).toThrow(/3–30 letters/i);
+  });
+
+  it("does not lazily create profiles while release writes are paused", () => {
+    expect(
+      shouldCreateOwnerProfile({
+        FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+      }),
+    ).toBe(false);
+    expect(
+      shouldCreateOwnerProfile({
+        FLIGHT_MAP_RELEASE_WRITES_PAUSED: "false",
+      }),
+    ).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import {
   USERNAME_REQUIREMENTS,
 } from "@/lib/auth/username";
 import { withUserDb } from "@/lib/db";
+import { areReleaseWritesPaused } from "@/lib/runtime-mode";
 import { userProfiles, users } from "@/lib/db/schema";
 import {
   DEFAULT_DISTANCE_UNIT,
@@ -59,6 +60,12 @@ export class UsernameConflictError extends Error {
   }
 }
 
+export function shouldCreateOwnerProfile(
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !areReleaseWritesPaused(environment);
+}
+
 export function normalizeOwnerProfile(
   input: UpdateOwnerProfileInput,
 ): UpdateOwnerProfileInput {
@@ -101,13 +108,15 @@ export async function getOwnerProfile(userId: string): Promise<OwnerProfile> {
       .limit(1);
     if (!account) throw new Error("Authentication is required.");
 
-    await tx
-      .insert(userProfiles)
-      .values({
-        userId,
-        displayName: account.name ?? account.username,
-      })
-      .onConflictDoNothing();
+    if (shouldCreateOwnerProfile()) {
+      await tx
+        .insert(userProfiles)
+        .values({
+          userId,
+          displayName: account.name ?? account.username,
+        })
+        .onConflictDoNothing();
+    }
     const [profile] = await tx
       .select()
       .from(userProfiles)
