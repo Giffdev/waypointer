@@ -25,6 +25,7 @@ export interface AirportSeedIdentitySummary {
 
 export interface AirportSeedAssignment {
   ids: string[];
+  sourceIdentReassignments: string[];
   matchedExisting: number;
   created: number;
   summary: AirportSeedIdentitySummary;
@@ -143,6 +144,7 @@ export function assignAirportSeedIds(
       reference,
     ]);
   }
+  const sourceIdentReassignments = new Set<string>();
   const normalizedExistingAirports = existingAirports.map((airport) => {
     if (isVerifiedSourceIdentity(airport) || !airport.sourceIdent) {
       return airport;
@@ -160,9 +162,17 @@ export function assignAirportSeedIds(
         airport.sourceIdent!,
       ),
     );
-    return compatibleReferences.length === 1
-      ? { ...airport, sourceIdent: compatibleReferences[0].ident }
-      : airport;
+    if (
+      compatibleReferences.length === 1 &&
+      compatibleReferences[0].ident !== airport.sourceIdent
+    ) {
+      sourceIdentReassignments.add(airport.id);
+      return {
+        ...airport,
+        sourceIdent: compatibleReferences[0].ident,
+      };
+    }
+    return airport;
   });
   const existingById = new Map(
     normalizedExistingAirports.map((airport) => [airport.id, airport]),
@@ -291,6 +301,7 @@ export function assignAirportSeedIds(
   const created = ids.length - claimed.size;
   return {
     ids,
+    sourceIdentReassignments: [...sourceIdentReassignments].sort(),
     matchedExisting: claimed.size,
     created,
     summary: {

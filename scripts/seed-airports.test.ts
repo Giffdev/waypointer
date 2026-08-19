@@ -291,6 +291,9 @@ describe("airport catalog refresh identity planning", () => {
       "replacement-id",
       "historical-id",
     ]);
+    expect(assignment.sourceIdentReassignments).toEqual([
+      "historical-id",
+    ]);
   });
 
   it("uses distinct source identifiers to preserve colocated legacy rows", () => {

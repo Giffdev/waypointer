@@ -204,6 +204,27 @@ export async function applyAirportCatalogRefresh(
       })),
     );
 
+    for (
+      let index = 0;
+      index < assignment.sourceIdentReassignments.length;
+      index += 500
+    ) {
+      await tx
+        .update(airports)
+        .set({
+          sourceIdent: null,
+          sourceIdentProvenance: null,
+        })
+        .where(
+          inArray(
+            airports.id,
+            assignment.sourceIdentReassignments.slice(
+              index,
+              index + 500,
+            ),
+          ),
+        );
+    }
     for (let index = 0; index < values.length; index += 500) {
       await tx
         .insert(airports)
