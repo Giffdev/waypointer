@@ -123,10 +123,15 @@ export function assertCredentialFreeArtifact(
   sensitiveValues: string[],
 ): void {
   const contents = canonicalJson(value);
+  const contentsWithoutSafeAuthorization = contents.replace(
+    /"authorization"\s*:\s*"context-only-fresh-provider-query-required"/gi,
+    "",
+  );
   if (
-    /"(?:databaseUrl|migrationDatabaseUrl|password|token|cookie|authorization)"/i.test(
+    /"(?:databaseUrl|migrationDatabaseUrl|password|token|cookie)"/i.test(
       contents,
     ) ||
+    /"authorization"\s*:/i.test(contentsWithoutSafeAuthorization) ||
     /postgres(?:ql)?:\/\/|(?:database_url|password)=/i.test(contents) ||
     sensitiveValues.some(
       (sensitive) => sensitive.length > 0 && contents.includes(sensitive),

@@ -15,10 +15,23 @@ describe("production release preparation evidence", () => {
     ).not.toThrow();
   });
 
+  it("accepts the fixed non-secret preflight authorization marker", () => {
+    expect(() =>
+      assertCredentialFreeArtifact(
+        {
+          authorization:
+            "context-only-fresh-provider-query-required",
+        },
+        [],
+      ),
+    ).not.toThrow();
+  });
+
   it.each([
     { migrationDatabaseUrl: "postgresql://owner:secret@db.example/db" },
     { token: "secret-token" },
     { nested: { cookie: "session-value" } },
+    { authorization: "Bearer secret-token" },
     { restoreCommand: { args: ["postgresql://owner:secret@db/db"] } },
   ])("rejects credential-bearing artifacts", (artifact) => {
     expect(() =>
