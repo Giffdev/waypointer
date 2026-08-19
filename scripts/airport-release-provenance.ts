@@ -530,6 +530,21 @@ export async function verifyCandidateManifest(
   manifestPath: string,
   expectedSha256: string,
 ): Promise<AirportReleaseCandidateManifest> {
+  const manifest = await loadCandidateManifestArtifact(
+    manifestPath,
+    expectedSha256,
+  );
+  const regenerated = await createCandidateManifest();
+  if (canonicalJson(regenerated) !== canonicalJson(manifest)) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+  return manifest;
+}
+
+export async function loadCandidateManifestArtifact(
+  manifestPath: string,
+  expectedSha256: string,
+): Promise<AirportReleaseCandidateManifest> {
   let manifest: AirportReleaseCandidateManifest;
   try {
     const contents = await readFile(manifestPath);
@@ -552,8 +567,87 @@ export async function verifyCandidateManifest(
   ) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
   }
-  const regenerated = await createCandidateManifest();
-  if (canonicalJson(regenerated) !== canonicalJson(manifest)) {
+  validateFileEntries(manifest.source.files);
+  validateFileEntries(manifest.deploymentSource.files);
+  const validEntries = manifest.diff.entries.every(
+    (entry, index) =>
+      typeof entry.path === "string" &&
+      entry.path !== "" &&
+      !path.posix.isAbsolute(entry.path) &&
+      !entry.path.includes("\\") &&
+      !entry.path.split("/").includes("..") &&
+      (index === 0 ||
+        manifest.diff.entries[index - 1]!.path < entry.path) &&
+      ["added", "modified", "deleted"].includes(entry.status) &&
+      (entry.beforeSha256 === undefined ||
+        /^[a-f0-9]{64}$/.test(entry.beforeSha256)) &&
+      (entry.afterSha256 === undefined ||
+        /^[a-f0-9]{64}$/.test(entry.afterSha256)),
+  );
+  const sourceManifest = {
+    schemaVersion: 2 as const,
+    role: "candidate-source" as const,
+    selection: manifest.source.selection,
+    files: manifest.source.files,
+  };
+  const deploymentManifest = {
+    schemaVersion: 1 as const,
+    role: "vercel-cli-source" as const,
+    selection: manifest.deploymentSource.selection,
+    files: manifest.deploymentSource.files,
+  };
+  const diffCore = {
+    added: manifest.diff.added,
+    modified: manifest.diff.modified,
+    deleted: manifest.diff.deleted,
+    unchanged: manifest.diff.unchanged,
+    entries: manifest.diff.entries,
+  };
+  if (
+    canonicalJson(manifest.source.selection) !==
+      canonicalJson(selectionValue()) ||
+    canonicalJson(manifest.deploymentSource.selection) !==
+      canonicalJson({
+        roots: [...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.roots],
+        topLevelFiles: [
+          ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.topLevelFiles,
+        ],
+        extraFiles: [
+          ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.extraFiles,
+        ],
+      }) ||
+    manifest.source.files.some(
+      (file) =>
+        !/^[a-f0-9]{40}$/.test(file.sha1 ?? "") ||
+        path.posix.isAbsolute(file.path) ||
+        file.path.includes("\\") ||
+        file.path.split("/").includes(".."),
+    ) ||
+    manifest.deploymentSource.files.some(
+      (file) =>
+        !/^[a-f0-9]{40}$/.test(file.sha1 ?? "") ||
+        path.posix.isAbsolute(file.path) ||
+        file.path.includes("\\") ||
+        file.path.split("/").includes(".."),
+    ) ||
+    !validEntries ||
+    manifest.diff.added !==
+      manifest.diff.entries.filter(({ status }) => status === "added")
+        .length ||
+    manifest.diff.modified !==
+      manifest.diff.entries.filter(({ status }) => status === "modified")
+        .length ||
+    manifest.diff.deleted !==
+      manifest.diff.entries.filter(({ status }) => status === "deleted")
+        .length ||
+    !Number.isSafeInteger(manifest.diff.unchanged) ||
+    manifest.diff.unchanged < 0 ||
+    sha256Bytes(canonicalJson(sourceManifest)) !==
+      manifest.source.manifestSha256 ||
+    sha256Bytes(canonicalJson(deploymentManifest)) !==
+      manifest.deploymentSource.manifestSha256 ||
+    sha256Bytes(canonicalJson(diffCore)) !== manifest.diff.sha256
+  ) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
   }
   return manifest;

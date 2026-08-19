@@ -7,6 +7,7 @@ import {
 } from "./airport-release-health";
 import {
   providerReleaseExpectationSha256,
+  type PrebuiltProviderReleaseExpectation,
   type ProviderReleaseExpectation,
 } from "./vercel-provider-proof";
 
@@ -28,10 +29,10 @@ const expectedCodes: Record<string, string> = {
   KUIL: "UIL",
 };
 
-function expectationFixture(): ProviderReleaseExpectation {
+function expectationFixture(): PrebuiltProviderReleaseExpectation {
   const fileContents = "{}\n";
   const core = {
-    schemaVersion: 6 as const,
+    schemaVersion: 7 as const,
     proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
     deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
@@ -118,7 +119,9 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
   });
 }
 
-function providerFetchFor(expectation: ProviderReleaseExpectation) {
+function providerFetchFor(
+  expectation: PrebuiltProviderReleaseExpectation,
+) {
   return vi.fn<FetchImplementation>(async (input) => {
     const url = new URL(String(input));
     if (url.pathname.startsWith("/v4/aliases/")) {

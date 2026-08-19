@@ -245,9 +245,10 @@ npm run deploy:production
 The wrapper creates a Production-targeted immutable deployment with
 `--skip-domain`; it does not change `flight-map-one.vercel.app`. It writes a
 maximum-30-minute provider expectation that binds the commit, source hashes,
-prebuilt file tree, project/team, deployment ID, immutable URL, prior alias
-owner, release claims, and write pause. Verify the immutable URL before
-promotion, then promote through the fail-closed wrapper:
+provider source, project/team, deployment ID, immutable URL, prior alias
+owner, release claims, and write pause. This wrapper remains strictly
+prebuilt-only and binds the exact prebuilt file tree. Verify the immutable URL
+before promotion, then promote through the fail-closed wrapper:
 
 ```powershell
 $env:AIRPORT_RELEASE_PROVIDER_EXPECTATION_PATH = "data/private/release-approvals/vercel-provider-expectation-<hash>.json"
@@ -381,8 +382,15 @@ After deploying the exact reviewed database-released build and promoting that
 exact deployment to `flight-map-one.vercel.app`, obtain a
 content-addressed provider expectation under
 `data/private/release-approvals/`. Generate it from the same clean pinned Git
-checkout after deployment. It binds the expected deployment ID/URL, exact
-Vercel prebuilt-file UIDs, candidate manifest, target fingerprint, migration
+checkout after a prebuilt deployment. For an already approved CLI remote
+source deployment, generation may run from a later clean `main` checkout only
+when the deployed commit is still on `origin/main`; authoritative provider
+file metadata must contain the uploaded source archive rather than a prebuilt
+output tree, select source mode, and match that exact approved commit. Source
+mode binds the exact deployment-source manifest and file count, downloaded
+archive bytes and file contents, provider archive-part UIDs, and immutable
+build-event evidence. Mixed source/prebuilt provenance is refused. The
+expectation binds the deployment ID/URL, candidate manifest, migration
 manifest, catalog checksum, database evidence, and active write pause. Configure
 the expectation and an ephemeral dedicated health-account session:
 

@@ -1,4 +1,5 @@
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import {
   createLocalJWKSet,
   exportJWK,
@@ -7,9 +8,17 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { releaseRuntimeClaimsFromEnvironment } from "../src/lib/release-attestation";
 import {
+  canonicalJson,
+  DEPLOYMENT_SOURCE_MANIFEST_SELECTION,
+} from "./airport-release-provenance";
+import {
   providerReleaseExpectationSha256,
   RELEASE_DEPLOYMENT_TRUST,
+  sourceArchiveProviderParts,
+  sourceBuildEventEvidence,
+  type PrebuiltProviderReleaseExpectation,
   type ProviderReleaseExpectation,
+  type SourceProviderReleaseExpectation,
   verifyDeploymentEndpoint,
   verifyImmutableDeploymentCandidate,
   verifyImmutableReleaseCandidate,
@@ -38,12 +47,75 @@ const files = [
     sha256: createHash("sha256").update("export {};\n").digest("hex"),
   },
 ];
+const sourceContents = new Map([
+  ["package.json", Buffer.from("{}\n")],
+  ["src/app.ts", Buffer.from("export {};\n")],
+]);
+
+function tarArchive(
+  entries: readonly { path: string; contents: Buffer }[],
+): Buffer {
+  const blocks: Buffer[] = [];
+  for (const entry of entries) {
+    const header = Buffer.alloc(512);
+    header.write(entry.path, 0, 100, "utf8");
+    header.write("0000644\0", 100, 8, "ascii");
+    header.write("0000000\0", 108, 8, "ascii");
+    header.write("0000000\0", 116, 8, "ascii");
+    header.write(
+      `${entry.contents.length.toString(8).padStart(11, "0")}\0`,
+      124,
+      12,
+      "ascii",
+    );
+    header.write("00000000000\0", 136, 12, "ascii");
+    header.fill(0x20, 148, 156);
+    header.write("0", 156, 1, "ascii");
+    header.write("ustar\0", 257, 6, "ascii");
+    header.write("00", 263, 2, "ascii");
+    const checksum = header.reduce((sum, byte) => sum + byte, 0);
+    header.write(
+      `${checksum.toString(8).padStart(6, "0")}\0 `,
+      148,
+      8,
+      "ascii",
+    );
+    blocks.push(header, entry.contents);
+    const padding = (512 - (entry.contents.length % 512)) % 512;
+    if (padding) blocks.push(Buffer.alloc(padding));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
+}
+
+const sourceArchive = tarArchive(
+  files.map(({ path: filePath }) => ({
+    path: filePath,
+    contents: sourceContents.get(filePath)!,
+  })),
+);
+const sourceArchiveSha1 = createHash("sha1")
+  .update(sourceArchive)
+  .digest("hex");
+const sourceEvents = [
+  {
+    date: 1,
+    type: "stdout",
+    text: "Extracted 2 deployment files...",
+  },
+  {
+    date: 2,
+    type: "stderr",
+    text: "Build Completed in /vercel/output [6m]",
+  },
+  { date: 3, type: "stdout", text: "Deploying outputs..." },
+];
 
 function expectationFixture(
-  overrides: Partial<ProviderReleaseExpectation> = {},
-): ProviderReleaseExpectation {
+  overrides: Partial<PrebuiltProviderReleaseExpectation> = {},
+): PrebuiltProviderReleaseExpectation {
   const core = {
-    schemaVersion: 6 as const,
+    schemaVersion: 7 as const,
     proofMode: "vercel-cli-prebuilt-provider-oidc-alias" as const,
     deploymentMethod: "vercel-cli-prebuilt" as const,
     platform: "vercel" as const,
@@ -90,15 +162,91 @@ function expectationFixture(
   if (!overrides.expectationSha256) {
     const rehashCore = { ...expectation };
     delete (
-      rehashCore as Partial<ProviderReleaseExpectation>
+      rehashCore as Partial<PrebuiltProviderReleaseExpectation>
     ).expectationSha256;
     expectation.expectationSha256 =
       providerReleaseExpectationSha256(
         rehashCore as Omit<
-          ProviderReleaseExpectation,
+          PrebuiltProviderReleaseExpectation,
           "expectationSha256"
         >,
       );
+  }
+  return expectation;
+}
+
+function sourceExpectationFixture(
+  overrides: Partial<SourceProviderReleaseExpectation> = {},
+): SourceProviderReleaseExpectation {
+  const prebuilt = expectationFixture();
+  const {
+    prebuiltArtifact: _prebuiltArtifact,
+    expectationSha256: _expectationSha256,
+    proofMode: _proofMode,
+    deploymentMethod: _deploymentMethod,
+    ...base
+  } = prebuilt;
+  void _prebuiltArtifact;
+  void _expectationSha256;
+  void _proofMode;
+  void _deploymentMethod;
+  const core = {
+    ...base,
+    deploymentSource: {
+      manifestSha256: createHash("sha256")
+        .update(
+          canonicalJson({
+            schemaVersion: 1,
+            role: "vercel-cli-source",
+            selection: {
+              roots: [...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.roots],
+              topLevelFiles: [
+                ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.topLevelFiles,
+              ],
+              extraFiles: [
+                ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.extraFiles,
+              ],
+            },
+            files,
+          }),
+        )
+        .digest("hex"),
+    },
+    proofMode: "vercel-cli-source-provider-oidc-alias" as const,
+    deploymentMethod: "vercel-cli-source" as const,
+    runtimeAttestation: {
+      schemaVersion: 6 as const,
+      deploymentMethod: "vercel-cli-prebuilt" as const,
+    },
+    sourceArchive: {
+      format: "tgz" as const,
+      fileCount: files.length,
+      files,
+      providerRootDirectory: "artifacts/source-deploy-stage",
+      providerParts: [
+        {
+          path: ".vercel/source.tgz.part1",
+          sha1: sourceArchiveSha1,
+        },
+      ],
+      archiveSha256: createHash("sha256")
+        .update(sourceArchive)
+        .digest("hex"),
+      ...sourceBuildEventEvidence(sourceEvents),
+    },
+  };
+  const expectation = {
+    ...core,
+    expectationSha256: providerReleaseExpectationSha256(core),
+    ...overrides,
+  } as SourceProviderReleaseExpectation;
+  if (!overrides.expectationSha256) {
+    const rehashCore = { ...expectation };
+    delete (
+      rehashCore as Partial<SourceProviderReleaseExpectation>
+    ).expectationSha256;
+    expectation.expectationSha256 =
+      providerReleaseExpectationSha256(rehashCore);
   }
   return expectation;
 }
@@ -113,7 +261,11 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
     VERCEL_URL: new URL(expectation.deploymentUrl).hostname,
     VERCEL_PROJECT_ID: expectation.projectId,
     VERCEL_PROJECT_PRODUCTION_URL: expectation.productionAlias,
-    FLIGHT_MAP_DEPLOYMENT_METHOD: expectation.deploymentMethod,
+    FLIGHT_MAP_DEPLOYMENT_METHOD:
+      expectation.proofMode ===
+      "vercel-cli-source-provider-oidc-alias"
+        ? expectation.runtimeAttestation.deploymentMethod
+        : expectation.deploymentMethod,
     FLIGHT_MAP_GIT_PROVIDER: expectation.sourceCommit.type,
     FLIGHT_MAP_GIT_REPO_OWNER: expectation.sourceCommit.owner,
     FLIGHT_MAP_GIT_REPO_NAME: expectation.sourceCommit.repo,
@@ -139,6 +291,43 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
 }
 
 function providerFileTree(expectation: ProviderReleaseExpectation) {
+  if (
+    expectation.proofMode ===
+    "vercel-cli-source-provider-oidc-alias"
+  ) {
+    return [
+      {
+        name: "src",
+        type: "directory",
+        children: [
+          {
+            name: ".vercel",
+            type: "directory",
+            children: [
+              {
+                name: "source.tgz.part1",
+                type: "invalid",
+                uid: expectation.sourceArchive.providerParts[0]!.sha1,
+                mode: 438,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        name: "out",
+        type: "directory",
+        children: [
+          {
+            name: "index",
+            type: "lambda",
+            uid: "provider-lambda",
+            mode: 49590,
+          },
+        ],
+      },
+    ];
+  }
   return [
     {
       name: "package.json",
@@ -168,7 +357,9 @@ function providerFetchFor(
     aliasDeploymentIds?: string[];
     deploymentOverrides?: Record<string, unknown>;
     hostDeploymentOverrides?: Record<string, unknown>;
+    aliasOverrides?: Record<string, unknown>;
     fileTree?: unknown;
+    events?: unknown;
     failPath?: string;
     immutable?: boolean;
   } = {},
@@ -192,12 +383,21 @@ function providerFetchFor(
         projectId: expectation.projectId,
         redirect: null,
         redirectStatusCode: null,
+        ...options.aliasOverrides,
       });
     }
     if (url.pathname.endsWith("/files")) {
       return Response.json(
         options.fileTree ?? providerFileTree(expectation),
       );
+    }
+    if (url.pathname.endsWith("/events")) {
+      return Response.json(options.events ?? sourceEvents);
+    }
+    if (/\/files\/[a-f0-9]{40}$/.test(url.pathname)) {
+      return Response.json({
+        data: sourceArchive.toString("base64"),
+      });
     }
     const base = {
       id: expectation.deploymentId,
@@ -213,6 +413,21 @@ function providerFetchFor(
       readyState: "READY",
       aliases: options.immutable ? [] : [expectation.productionAlias],
       gitSource: null,
+      ...(expectation.proofMode ===
+      "vercel-cli-source-provider-oidc-alias"
+        ? {
+            source: "cli",
+            buildSkipped: false,
+            meta: {
+              githubCommitOrg: expectation.sourceCommit.owner,
+              githubCommitRef: expectation.sourceCommit.ref,
+              githubCommitRepo: expectation.sourceCommit.repo,
+              githubCommitSha: expectation.sourceCommit.commitSha,
+              gitRootDirectory:
+                expectation.sourceArchive.providerRootDirectory,
+            },
+          }
+        : {}),
     };
     const byHost = decodeURIComponent(url.pathname).includes(
       new URL(expectation.deploymentUrl).hostname,
@@ -262,6 +477,35 @@ function applicationFetchFor(
 }
 
 describe("Vercel provider proof", () => {
+  it("orders multipart source archives by numeric suffix", () => {
+    const children = Array.from({ length: 10 }, (_, index) => ({
+      name: `source.tgz.part${index + 1}`,
+      type: "invalid",
+      uid: (index + 1).toString(16).padStart(40, "0"),
+      mode: 438,
+    })).sort((left, right) => left.name.localeCompare(right.name));
+    expect(
+      sourceArchiveProviderParts([
+        {
+          name: "src",
+          type: "directory",
+          children: [
+            {
+              name: ".vercel",
+              type: "directory",
+              children,
+            },
+          ],
+        },
+      ]).map(({ path: filePath }) => filePath),
+    ).toEqual(
+      Array.from(
+        { length: 10 },
+        (_, index) => `.vercel/source.tgz.part${index + 1}`,
+      ),
+    );
+  });
+
   it("verifies a Vercel-signed, challenge-bound OIDC identity", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
@@ -472,6 +716,98 @@ describe("Vercel provider proof", () => {
       origin: `https://${expectation.productionAlias}`,
       aliasDeploymentId: expectation.deploymentId,
     });
+  });
+
+  it("verifies an authoritative CLI source archive without a prebuilt tree", async () => {
+    const expectation = sourceExpectationFixture({
+      releasePhase: "control-plane",
+      catalogChecksum: undefined,
+      databaseEvidenceSha256: undefined,
+    });
+    await expect(
+      verifyDeploymentEndpoint(expectation, {
+        providerFetch:
+          providerFetchFor(expectation) as typeof fetch,
+        applicationFetch:
+          applicationFetchFor(expectation) as typeof fetch,
+        oidcVerify: oidcEvidence,
+        challenge,
+      }),
+    ).resolves.toMatchObject({
+      deploymentId: expectation.deploymentId,
+      providerSourceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
+  it.each([
+    [
+      "provider source",
+      { deploymentOverrides: { source: "git" } },
+    ],
+    [
+      "provider project",
+      { deploymentOverrides: { projectId: "prj_attacker123" } },
+    ],
+    [
+      "extracted file count",
+      {
+        events: sourceEvents.map((event) => ({
+          ...event,
+          text: event.text.replace(
+            "Extracted 2",
+            "Extracted 3",
+          ),
+        })),
+      },
+    ],
+    [
+      "archive substitution",
+      {
+        fileTree: [
+          {
+            name: "src",
+            type: "directory",
+            children: [
+              {
+                name: ".vercel",
+                type: "directory",
+                children: [
+                  {
+                    name: "source.tgz.part1",
+                    type: "invalid",
+                    uid: "f".repeat(40),
+                    mode: 438,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "alias redirect",
+      { aliasOverrides: { redirectStatusCode: 308 } },
+    ],
+  ])("rejects source-mode %s mismatch", async (_label, options) => {
+    const expectation = sourceExpectationFixture({
+      releasePhase: "control-plane",
+      catalogChecksum: undefined,
+      databaseEvidenceSha256: undefined,
+    });
+    const applicationFetch = applicationFetchFor(expectation);
+    await expect(
+      verifyDeploymentEndpoint(expectation, {
+        providerFetch: providerFetchFor(
+          expectation,
+          options,
+        ) as typeof fetch,
+        applicationFetch: applicationFetch as typeof fetch,
+        oidcVerify: oidcEvidence,
+        challenge,
+      }),
+    ).rejects.toMatchObject({ diagnosticCode: "health-check-failed" });
+    expect(applicationFetch).not.toHaveBeenCalled();
   });
 
   it.each([

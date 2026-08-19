@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import {
   createRemoteJWKSet,
   jwtVerify,
@@ -13,6 +14,7 @@ import {
 } from "../src/lib/release-attestation.ts";
 import {
   canonicalJson,
+  DEPLOYMENT_SOURCE_MANIFEST_SELECTION,
   sha256Bytes,
 } from "./airport-release-provenance.ts";
 import { requireRepositoryPath } from "./airport-release-safety.ts";
@@ -44,10 +46,8 @@ const OIDC_JWKS = createRemoteJWKSet(
   new URL("https://oidc.vercel.com/.well-known/jwks"),
 );
 
-export interface ProviderReleaseExpectation {
-  schemaVersion: 6;
-  proofMode: "vercel-cli-prebuilt-provider-oidc-alias";
-  deploymentMethod: "vercel-cli-prebuilt";
+interface ProviderReleaseExpectationBase {
+  schemaVersion: 7;
   platform: "vercel";
   projectId: string;
   orgId: string;
@@ -71,10 +71,6 @@ export interface ProviderReleaseExpectation {
   deploymentSource: {
     manifestSha256: string;
   };
-  prebuiltArtifact: {
-    manifestSha256: string;
-    files: readonly VercelPrebuiltArtifactFile[];
-  };
   candidateManifestSha256: string;
   approvedAirportCandidateSha256: string;
   migrationManifestSha256: string;
@@ -85,6 +81,46 @@ export interface ProviderReleaseExpectation {
   expiresAt: string;
   expectationSha256: string;
 }
+
+export interface PrebuiltProviderReleaseExpectation
+  extends ProviderReleaseExpectationBase {
+  proofMode: "vercel-cli-prebuilt-provider-oidc-alias";
+  deploymentMethod: "vercel-cli-prebuilt";
+  prebuiltArtifact: {
+    manifestSha256: string;
+    files: readonly VercelPrebuiltArtifactFile[];
+  };
+}
+
+export interface SourceProviderReleaseExpectation
+  extends ProviderReleaseExpectationBase {
+  proofMode: "vercel-cli-source-provider-oidc-alias";
+  deploymentMethod: "vercel-cli-source";
+  runtimeAttestation: {
+    schemaVersion: 6;
+    deploymentMethod: "vercel-cli-prebuilt";
+  };
+  sourceArchive: {
+    format: "tgz";
+    fileCount: number;
+    files: readonly VercelPrebuiltArtifactFile[];
+    providerRootDirectory: string;
+    providerParts: readonly {
+      path: string;
+      sha1: string;
+    }[];
+    archiveSha256: string;
+    extractedFileCount: number;
+    buildEventsSha256: string;
+  };
+}
+
+export type ProviderReleaseExpectation =
+  | PrebuiltProviderReleaseExpectation
+  | SourceProviderReleaseExpectation;
+export type ProviderReleaseExpectationCore =
+  | Omit<PrebuiltProviderReleaseExpectation, "expectationSha256">
+  | Omit<SourceProviderReleaseExpectation, "expectationSha256">;
 
 export interface ProviderDeploymentVerification {
   deploymentOrigin: URL;
@@ -142,7 +178,7 @@ export interface ReleaseEndpointOptions {
   challenge?: string;
 }
 
-interface VercelDeploymentResponse {
+export interface VercelDeploymentResponse {
   id?: string;
   name?: string;
   url?: string;
@@ -150,6 +186,8 @@ interface VercelDeploymentResponse {
   ownerId?: string;
   target?: string | null;
   readyState?: string;
+  source?: string;
+  buildSkipped?: boolean;
   aliases?: string[];
   alias?: string[];
   team?: {
@@ -163,10 +201,17 @@ interface VercelDeploymentResponse {
     repoId?: string | number;
     ref?: string | null;
     sha?: string;
+  } | null;
+  meta?: {
+    githubCommitOrg?: string;
+    githubCommitRef?: string;
+    githubCommitRepo?: string;
+    githubCommitSha?: string;
+    gitRootDirectory?: string;
   };
 }
 
-interface VercelAliasResponse {
+export interface VercelAliasResponse {
   alias?: string;
   deploymentId?: string;
   projectId?: string;
@@ -174,12 +219,27 @@ interface VercelAliasResponse {
   redirectStatusCode?: number | null;
 }
 
-interface VercelFileTreeEntry {
+export interface VercelFileTreeEntry {
   name?: string;
   type?: string;
   uid?: string;
   mode?: number;
   children?: VercelFileTreeEntry[];
+}
+
+export interface VercelBuildEvent {
+  date?: number;
+  type?: string;
+  text?: string;
+}
+
+export interface VercelFileContentsResponse {
+  data?: string;
+}
+
+export interface ProviderSourceArchivePart {
+  uid: string;
+  data: string;
 }
 
 interface VercelOidcPayload extends JWTPayload {
@@ -217,14 +277,14 @@ function validDeploymentUrl(value: unknown): value is string {
 
 function expectationCore(
   expectation: ProviderReleaseExpectation,
-): Omit<ProviderReleaseExpectation, "expectationSha256"> {
+): ProviderReleaseExpectationCore {
   const core = { ...expectation };
   delete (core as Partial<ProviderReleaseExpectation>).expectationSha256;
   return core;
 }
 
 export function providerReleaseExpectationSha256(
-  expectation: Omit<ProviderReleaseExpectation, "expectationSha256">,
+  expectation: ProviderReleaseExpectationCore,
 ): string {
   return sha256Bytes(canonicalJson(expectation));
 }
@@ -261,12 +321,82 @@ function validateExpectation(
   const hasDatabaseEvidence =
     validSha256(expectation.catalogChecksum) &&
     validSha256(expectation.databaseEvidenceSha256);
-  validateDeploymentSourceFiles(expectation.prebuiltArtifact?.files ?? []);
+  const prebuilt =
+    expectation.proofMode ===
+    "vercel-cli-prebuilt-provider-oidc-alias";
+  const source =
+    expectation.proofMode === "vercel-cli-source-provider-oidc-alias";
+  const providerFiles = prebuilt
+    ? expectation.prebuiltArtifact.files
+    : expectation.sourceArchive.files;
+  validateDeploymentSourceFiles(providerFiles);
+  const sourceArchiveManifestSha256 = source
+    ? sha256Bytes(
+        canonicalJson({
+          schemaVersion: 1,
+          role: "vercel-cli-source",
+          selection: {
+            roots: [...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.roots],
+            topLevelFiles: [
+              ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.topLevelFiles,
+            ],
+            extraFiles: [
+              ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.extraFiles,
+            ],
+          },
+          files: expectation.sourceArchive.files,
+        }),
+      )
+    : undefined;
   if (
-    expectation.schemaVersion !== 6 ||
-    expectation.proofMode !==
-      "vercel-cli-prebuilt-provider-oidc-alias" ||
-    expectation.deploymentMethod !== "vercel-cli-prebuilt" ||
+    expectation.schemaVersion !== 7 ||
+    (!prebuilt && !source) ||
+    (prebuilt &&
+      (expectation.deploymentMethod !== "vercel-cli-prebuilt" ||
+        !validSha256(expectation.prebuiltArtifact.manifestSha256) ||
+        Object.prototype.hasOwnProperty.call(
+          expectation,
+          "sourceArchive",
+        ) ||
+        Object.prototype.hasOwnProperty.call(
+          expectation,
+          "runtimeAttestation",
+        ))) ||
+    (source &&
+      (expectation.deploymentMethod !== "vercel-cli-source" ||
+        expectation.runtimeAttestation.schemaVersion !== 6 ||
+        expectation.runtimeAttestation.deploymentMethod !==
+          "vercel-cli-prebuilt" ||
+        Object.prototype.hasOwnProperty.call(
+          expectation,
+          "prebuiltArtifact",
+        ) ||
+        expectation.sourceArchive.format !== "tgz" ||
+        expectation.sourceArchive.fileCount !==
+          expectation.sourceArchive.files.length ||
+        expectation.sourceArchive.extractedFileCount !==
+          expectation.sourceArchive.fileCount ||
+        expectation.sourceArchive.fileCount < 1 ||
+        !validSha256(expectation.sourceArchive.buildEventsSha256) ||
+        !expectation.sourceArchive.providerRootDirectory ||
+        path.posix.isAbsolute(
+          expectation.sourceArchive.providerRootDirectory,
+        ) ||
+        expectation.sourceArchive.providerRootDirectory.includes(
+          "\\",
+        ) ||
+        expectation.sourceArchive.providerRootDirectory
+          .split("/")
+          .includes("..") ||
+        expectation.sourceArchive.providerParts.length < 1 ||
+        !validSha256(expectation.sourceArchive.archiveSha256) ||
+        expectation.sourceArchive.providerParts.some(
+          (part, index) =>
+            part.path !== `.vercel/source.tgz.part${index + 1}` ||
+            !/^[a-f0-9]{40}$/.test(part.sha1),
+        ) ||
+        sourceArchiveManifestSha256 !==
+          expectation.deploymentSource.manifestSha256)) ||
     expectation.platform !== RELEASE_DEPLOYMENT_TRUST.platform ||
     expectation.projectId !== RELEASE_DEPLOYMENT_TRUST.projectId ||
     expectation.orgId !== RELEASE_DEPLOYMENT_TRUST.orgId ||
@@ -294,7 +424,6 @@ function validateExpectation(
     !validCommitSha(expectation.sourceCommit.commitSha) ||
     !validSha256(expectation.sourceManifestSha256) ||
     !validSha256(expectation.deploymentSource.manifestSha256) ||
-    !validSha256(expectation.prebuiltArtifact.manifestSha256) ||
     !validSha256(expectation.candidateManifestSha256) ||
     !validSha256(expectation.approvedAirportCandidateSha256) ||
     Object.prototype.hasOwnProperty.call(
@@ -412,7 +541,7 @@ function flattenProviderFileTree(
 }
 
 function verifyProviderSource(
-  expectation: ProviderReleaseExpectation,
+  expectation: PrebuiltProviderReleaseExpectation,
   entries: VercelFileTreeEntry[],
 ): string {
   const providerFiles = flattenProviderFileTree(entries).sort((left, right) =>
@@ -433,6 +562,352 @@ function verifyProviderSource(
     canonicalJson({
       deploymentId: expectation.deploymentId,
       files: providerFiles,
+    }),
+  );
+}
+
+function walkProviderFileTree(
+  entries: VercelFileTreeEntry[],
+  parent = "",
+): Array<{
+  path: string;
+  type: string;
+  uid?: string;
+  mode?: number;
+}> {
+  const results: Array<{
+    path: string;
+    type: string;
+    uid?: string;
+    mode?: number;
+  }> = [];
+  for (const entry of entries) {
+    const name = entry.name ?? "";
+    if (
+      !name ||
+      name === "." ||
+      name === ".." ||
+      name.includes("/") ||
+      name.includes("\\") ||
+      typeof entry.type !== "string"
+    ) {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    const filePath = parent ? `${parent}/${name}` : name;
+    if (entry.type === "directory") {
+      if (!Array.isArray(entry.children)) {
+        throw new AirportCatalogSafetyError("health-check-failed");
+      }
+      results.push(...walkProviderFileTree(entry.children, filePath));
+    } else {
+      results.push({
+        path: filePath,
+        type: entry.type,
+        uid: entry.uid,
+        mode: entry.mode,
+      });
+    }
+  }
+  return results;
+}
+
+export function sourceBuildEventEvidence(
+  events: readonly VercelBuildEvent[],
+): {
+  extractedFileCount: number;
+  buildEventsSha256: string;
+} {
+  const evidence = events
+    .filter(
+      (event) =>
+        typeof event.date === "number" &&
+        Number.isSafeInteger(event.date) &&
+        typeof event.type === "string" &&
+        typeof event.text === "string" &&
+        (/^Extracted \d+ deployment files\.\.\.$/.test(event.text) ||
+          /^Build Completed in \/vercel\/output \[(?:\d+(?:\.\d+)?ms|\d+(?:\.\d+)?s|\d+m(?: \d+(?:\.\d+)?s)?)\]$/.test(
+            event.text,
+          ) ||
+          event.text === "Deploying outputs..."),
+    )
+    .map(({ date, type, text }) => ({ date, type, text }))
+    .sort((left, right) => left.date! - right.date!);
+  const extracted = evidence.filter(({ text }) =>
+    /^Extracted \d+ deployment files\.\.\.$/.test(text!),
+  );
+  if (
+    extracted.length !== 1 ||
+    !evidence.some(({ text }) =>
+      /^Build Completed in \/vercel\/output /.test(text!),
+    ) ||
+    !evidence.some(({ text }) => text === "Deploying outputs...")
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const count = Number(
+    /^Extracted (\d+) deployment files/.exec(extracted[0]!.text!)?.[1],
+  );
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return {
+    extractedFileCount: count,
+    buildEventsSha256: sha256Bytes(canonicalJson(evidence)),
+  };
+}
+
+export function sourceArchiveProviderParts(
+  entries: VercelFileTreeEntry[],
+): Array<{ path: string; sha1: string }> {
+  const files = walkProviderFileTree(entries);
+  const sourceFiles = files.filter(({ path: filePath }) =>
+    filePath.startsWith("src/"),
+  );
+  const parts = sourceFiles
+    .filter(({ path: filePath }) =>
+      /^src\/\.vercel\/source\.tgz\.part\d+$/.test(filePath),
+    )
+    .sort((left, right) => {
+      const leftPart = Number(
+        /\.part(\d+)$/.exec(left.path)?.[1],
+      );
+      const rightPart = Number(
+        /\.part(\d+)$/.exec(right.path)?.[1],
+      );
+      return leftPart - rightPart;
+    });
+  if (
+    sourceFiles.length !== parts.length ||
+    parts.length === 0 ||
+    parts.some(
+      (part, index) =>
+        part.path !==
+          `src/.vercel/source.tgz.part${index + 1}` ||
+        part.type !== "invalid" ||
+        !/^[a-f0-9]{40}$/.test(part.uid ?? ""),
+    )
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return parts.map((part) => ({
+    path: part.path.slice("src/".length),
+    sha1: part.uid!,
+  }));
+}
+
+function parseTarOctal(field: Buffer): number {
+  const value = field
+    .toString("ascii")
+    .replace(/\0.*$/, "")
+    .trim();
+  if (!/^[0-7]+$/.test(value)) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const parsed = Number.parseInt(value, 8);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return parsed;
+}
+
+function parseSourceTar(
+  archive: Buffer,
+): VercelPrebuiltArtifactFile[] {
+  const files: VercelPrebuiltArtifactFile[] = [];
+  let offset = 0;
+  let terminated = false;
+  while (offset + 512 <= archive.length) {
+    const header = archive.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) {
+      terminated = true;
+      if (
+        archive
+          .subarray(offset)
+          .some((byte) => byte !== 0)
+      ) {
+        throw new AirportCatalogSafetyError("health-check-failed");
+      }
+      break;
+    }
+    const checksum = parseTarOctal(header.subarray(148, 156));
+    const checksumHeader = Buffer.from(header);
+    checksumHeader.fill(0x20, 148, 156);
+    const actualChecksum = checksumHeader.reduce(
+      (sum, byte) => sum + byte,
+      0,
+    );
+    const type = String.fromCharCode(header[156]!);
+    const name = header
+      .subarray(0, 100)
+      .toString("utf8")
+      .replace(/\0.*$/, "");
+    const prefix = header
+      .subarray(345, 500)
+      .toString("utf8")
+      .replace(/\0.*$/, "");
+    const filePath = prefix ? `${prefix}/${name}` : name;
+    const bytes = parseTarOctal(header.subarray(124, 136));
+    const dataOffset = offset + 512;
+    const nextOffset =
+      dataOffset + Math.ceil(bytes / 512) * 512;
+    if (
+      checksum !== actualChecksum ||
+      !filePath ||
+      path.posix.isAbsolute(filePath) ||
+      filePath.includes("\\") ||
+      filePath.split("/").includes("..") ||
+      (type !== "0" && type !== "\0") ||
+      nextOffset > archive.length
+    ) {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    const contents = archive.subarray(dataOffset, dataOffset + bytes);
+    files.push({
+      path: filePath,
+      bytes,
+      sha1: createHash("sha1").update(contents).digest("hex"),
+      sha256: sha256Bytes(contents),
+    });
+    offset = nextOffset;
+  }
+  if (!terminated) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return files.sort((left, right) => left.path.localeCompare(right.path));
+}
+
+export function verifyProviderSourceArchiveContents(
+  parts: readonly ProviderSourceArchivePart[],
+  expectedParts: readonly { path: string; sha1: string }[],
+  expectedFiles: readonly {
+    path: string;
+    bytes: number;
+    sha1?: string;
+    sha256: string;
+  }[],
+): { archiveSha256: string } {
+  const normalizedExpectedFiles = expectedFiles.map((file) => {
+    if (!/^[a-f0-9]{40}$/.test(file.sha1 ?? "")) {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    return { ...file, sha1: file.sha1! };
+  });
+  if (parts.length !== expectedParts.length || parts.length === 0) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const buffers = parts.map((part, index) => {
+    const expected = expectedParts[index]!;
+    if (
+      part.uid !== expected.sha1 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(part.data) ||
+      part.data.length % 4 !== 0
+    ) {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    let contents: Buffer;
+    try {
+      contents = Buffer.from(part.data, "base64");
+    } catch {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    if (
+      contents.length === 0 ||
+      createHash("sha1").update(contents).digest("hex") !==
+        expected.sha1
+    ) {
+      throw new AirportCatalogSafetyError("health-check-failed");
+    }
+    return contents;
+  });
+  const archive = Buffer.concat(buffers);
+  let tar: Buffer;
+  try {
+    tar = gunzipSync(archive);
+  } catch {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const archiveFiles = parseSourceTar(tar);
+  if (
+    canonicalJson(archiveFiles) !==
+    canonicalJson(normalizedExpectedFiles)
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return {
+    archiveSha256: sha256Bytes(archive),
+  };
+}
+
+export function detectVercelProviderDeploymentMode(
+  entries: VercelFileTreeEntry[],
+): "prebuilt" | "source" {
+  const files = walkProviderFileTree(entries);
+  const sourceArchive = files.some(({ path: filePath }) =>
+    /^src\/\.vercel\/source\.tgz\.part\d+$/.test(filePath),
+  );
+  const prebuilt = files.some(({ path: filePath }) =>
+    /^(?:src\/)?\.vercel\/output\//.test(filePath),
+  );
+  if (sourceArchive === prebuilt) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+  return sourceArchive ? "source" : "prebuilt";
+}
+
+function verifyProviderSourceArchive(
+  expectation: SourceProviderReleaseExpectation,
+  deployment: VercelDeploymentResponse,
+  entries: VercelFileTreeEntry[],
+  events: readonly VercelBuildEvent[],
+  archiveParts: readonly ProviderSourceArchivePart[],
+): string {
+  const parts = sourceArchiveProviderParts(entries);
+  const buildEvidence = sourceBuildEventEvidence(events);
+  const archiveEvidence = verifyProviderSourceArchiveContents(
+    archiveParts,
+    parts,
+    expectation.sourceArchive.files,
+  );
+  const meta = deployment.meta;
+  if (
+    deployment.source !== "cli" ||
+    deployment.gitSource != null ||
+    deployment.buildSkipped !== false ||
+    meta?.githubCommitOrg?.toLowerCase() !==
+      expectation.sourceCommit.owner.toLowerCase() ||
+    meta.githubCommitRepo?.toLowerCase() !==
+      expectation.sourceCommit.repo.toLowerCase() ||
+    meta.githubCommitRef !== expectation.sourceCommit.ref ||
+    meta.githubCommitSha !== expectation.sourceCommit.commitSha ||
+    meta.gitRootDirectory !==
+      expectation.sourceArchive.providerRootDirectory ||
+    canonicalJson(parts) !==
+      canonicalJson(expectation.sourceArchive.providerParts) ||
+    buildEvidence.extractedFileCount !==
+      expectation.sourceArchive.extractedFileCount ||
+    buildEvidence.buildEventsSha256 !==
+      expectation.sourceArchive.buildEventsSha256 ||
+    archiveEvidence.archiveSha256 !==
+      expectation.sourceArchive.archiveSha256
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return sha256Bytes(
+    canonicalJson({
+      buildEvidence,
+      deploymentId: expectation.deploymentId,
+      deploymentSourceManifestSha256:
+        expectation.deploymentSource.manifestSha256,
+      meta: {
+        githubCommitOrg: meta.githubCommitOrg,
+        githubCommitRef: meta.githubCommitRef,
+        githubCommitRepo: meta.githubCommitRepo,
+        githubCommitSha: meta.githubCommitSha,
+        gitRootDirectory: meta.gitRootDirectory,
+      },
+      parts,
+      archiveEvidence,
+      source: deployment.source,
     }),
   );
 }
@@ -514,6 +989,16 @@ export async function verifyVercelProductionDeployment(
     "https://api.vercel.com",
   );
   filesUrl.searchParams.set("teamId", RELEASE_DEPLOYMENT_TRUST.orgId);
+  const eventsUrl = new URL(
+    `/v3/now/deployments/${encodeURIComponent(
+      expectation.deploymentId,
+    )}/events`,
+    "https://api.vercel.com",
+  );
+  eventsUrl.searchParams.set("direction", "backward");
+  eventsUrl.searchParams.set("follow", "");
+  eventsUrl.searchParams.set("limit", "500");
+  eventsUrl.searchParams.set("teamId", RELEASE_DEPLOYMENT_TRUST.orgId);
 
   const aliasBefore =
     await providerRequest<VercelAliasResponse>(aliasUrl);
@@ -523,6 +1008,36 @@ export async function verifyVercelProductionDeployment(
     await providerRequest<VercelDeploymentResponse>(deploymentUrlByHost);
   const providerFiles =
     await providerRequest<VercelFileTreeEntry[]>(filesUrl);
+  const providerEvents =
+    expectation.proofMode ===
+    "vercel-cli-source-provider-oidc-alias"
+      ? await providerRequest<VercelBuildEvent[]>(eventsUrl)
+      : [];
+  const providerArchiveParts =
+    expectation.proofMode ===
+    "vercel-cli-source-provider-oidc-alias"
+      ? await Promise.all(
+          expectation.sourceArchive.providerParts.map(
+            async ({ sha1 }) => {
+              const contentsUrl = new URL(
+                `/v8/deployments/${encodeURIComponent(
+                  expectation.deploymentId,
+                )}/files/${encodeURIComponent(sha1)}`,
+                "https://api.vercel.com",
+              );
+              contentsUrl.searchParams.set(
+                "teamId",
+                RELEASE_DEPLOYMENT_TRUST.orgId,
+              );
+              const contents =
+                await providerRequest<VercelFileContentsResponse>(
+                  contentsUrl,
+                );
+              return { uid: sha1, data: contents.data ?? "" };
+            },
+          ),
+        )
+      : [];
   const aliasAfter =
     await providerRequest<VercelAliasResponse>(aliasUrl);
   const aliases = deployment.aliases ?? deployment.alias ?? [];
@@ -558,17 +1073,26 @@ export async function verifyVercelProductionDeployment(
     deployment.target !== RELEASE_DEPLOYMENT_TRUST.environment ||
     deployment.readyState !== "READY" ||
     deployment.url !== deploymentUrl.hostname ||
-    (aliasMode === "production-alias") !==
-      aliases.includes(expectation.productionAlias) ||
+    (expectation.proofMode ===
+      "vercel-cli-prebuilt-provider-oidc-alias" &&
+      (aliasMode === "production-alias") !==
+        aliases.includes(expectation.productionAlias)) ||
     !sameDeployment ||
     deployment.gitSource != null
   ) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
-  const providerSourceSha256 = verifyProviderSource(
-    expectation,
-    providerFiles,
-  );
+  const providerSourceSha256 =
+    expectation.proofMode ===
+    "vercel-cli-prebuilt-provider-oidc-alias"
+      ? verifyProviderSource(expectation, providerFiles)
+      : verifyProviderSourceArchive(
+          expectation,
+          deployment,
+          providerFiles,
+          providerEvents,
+          providerArchiveParts,
+        );
   const requestCompletedAt = new Date().toISOString();
   if (
     Date.parse(requestCompletedAt) - Date.parse(requestStartedAt) >
@@ -698,9 +1222,14 @@ function runtimeClaimsMatch(
   claims: ReleaseRuntimeClaims,
   expectation: ProviderReleaseExpectation,
 ): boolean {
+  const runtimeDeploymentMethod =
+    expectation.proofMode ===
+    "vercel-cli-source-provider-oidc-alias"
+      ? expectation.runtimeAttestation.deploymentMethod
+      : expectation.deploymentMethod;
   return Boolean(
     claims.schemaVersion === 6 &&
-      claims.deploymentMethod === expectation.deploymentMethod &&
+      claims.deploymentMethod === runtimeDeploymentMethod &&
       releaseRuntimeClaimsSha256(
         Object.fromEntries(
           Object.entries(claims).filter(
