@@ -20,6 +20,21 @@ function databaseUrl(): string {
 export const RUNTIME_READ_ONLY_POSTGRES_OPTIONS =
   "-c default_transaction_read_only=on";
 
+export function runtimeDatabaseUrl(
+  value: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  if (environment.FLIGHT_MAP_RELEASE_WRITES_PAUSED?.trim() !== "true") {
+    return value;
+  }
+  const url = new URL(value);
+  if (url.hostname.endsWith(".neon.tech")) {
+    url.hostname = url.hostname.replace(/-pooler(?=\.)/u, "");
+    return url.toString();
+  }
+  return value;
+}
+
 export function databasePoolMax(
   environment: NodeJS.ProcessEnv = process.env,
 ): number {
@@ -56,7 +71,10 @@ export function runtimeDatabaseClientOptions(
 function createDatabase() {
   const client =
     globalDatabase.flightMapSql ??
-    postgres(databaseUrl(), runtimeDatabaseClientOptions());
+    postgres(
+      runtimeDatabaseUrl(databaseUrl()),
+      runtimeDatabaseClientOptions(),
+    );
   const db = drizzle(client, { schema });
 
   if (process.env.NODE_ENV !== "production") {

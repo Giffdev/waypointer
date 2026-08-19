@@ -21,6 +21,7 @@ import {
   RUNTIME_READ_ONLY_POSTGRES_OPTIONS,
   runtimeDatabaseClientOptions,
   runtimeDatabaseConnectionParameters,
+  runtimeDatabaseUrl,
 } from "./index";
 import {
   createWorkerDatabases,
@@ -106,6 +107,25 @@ describe("database pool sizing", () => {
     expect(workerDatabaseClientOptions({ NODE_ENV: "test" }).connection).toEqual(
       {},
     );
+  });
+
+  it("bypasses Neon transaction pooling only for paused runtime connections", () => {
+    const pooled =
+      "postgres://ep-example-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require";
+    expect(
+      runtimeDatabaseUrl(pooled, {
+        FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+      }),
+    ).toBe(
+      "postgres://ep-example.us-east-1.aws.neon.tech/neondb?sslmode=require",
+    );
+    expect(runtimeDatabaseUrl(pooled, {})).toBe(pooled);
+    const local = "postgres://localhost:5432/neondb";
+    expect(
+      runtimeDatabaseUrl(local, {
+        FLIGHT_MAP_RELEASE_WRITES_PAUSED: "true",
+      }),
+    ).toBe(local);
   });
 
   it("fails workers and health closed while preserving normal mode", () => {
