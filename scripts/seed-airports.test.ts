@@ -254,6 +254,91 @@ describe("airport catalog refresh identity planning", () => {
     );
   });
 
+  it("preserves an exact legacy airport when its source identifier is reassigned", () => {
+    const replacement = airportReference(
+      "REASSIGNED",
+      "Replacement Airport",
+      41,
+      -121,
+    );
+    const historical = airportReference(
+      "NEW-SOURCE",
+      "Original Historical Airport",
+      40,
+      -120,
+      "REASSIGNED",
+    );
+    const migrated = existingAirport(
+      "historical-id",
+      "REASSIGNED",
+      "REASSIGNED",
+      null,
+      "Original Historical Airport",
+      40,
+      -120,
+      "legacy-code-backfill",
+    );
+
+    const assignment = assignAirportSeedIds(
+      [replacement, historical],
+      [migrated],
+      (reference) => reference.gpsCode,
+      () => undefined,
+      () => "replacement-id",
+    );
+
+    expect(assignment.ids).toEqual([
+      "replacement-id",
+      "historical-id",
+    ]);
+  });
+
+  it("uses distinct source identifiers to preserve colocated legacy rows", () => {
+    const first = airportReference(
+      "SOURCE-A",
+      "Duplicate Helipad",
+      40,
+      -120,
+    );
+    const second = airportReference(
+      "SOURCE-B",
+      "Duplicate Helipad",
+      40,
+      -120,
+    );
+    const existing = [
+      existingAirport(
+        "first-id",
+        "SOURCE-A",
+        null,
+        null,
+        "Duplicate Helipad",
+        40,
+        -120,
+        "legacy-code-backfill",
+      ),
+      existingAirport(
+        "second-id",
+        "SOURCE-B",
+        null,
+        null,
+        "Duplicate Helipad",
+        40,
+        -120,
+        "legacy-code-backfill",
+      ),
+    ];
+
+    expect(
+      assignAirportSeedIds(
+        [first, second],
+        existing,
+        () => undefined,
+        () => undefined,
+      ).ids,
+    ).toEqual(["first-id", "second-id"]);
+  });
+
   it("preserves systematic FAA LID and ICAO-prefixed regional identities from 0009", () => {
     const references = [
       {

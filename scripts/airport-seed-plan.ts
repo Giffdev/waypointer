@@ -86,7 +86,6 @@ function requireExactLegacyMatch(
       referenceIndex,
     });
   }
-  requireUnambiguous(exactMatches, referenceIndex);
   if (!exactMatches.has(airport.id)) {
     throw new AirportCatalogSafetyError("identity-reassignment", {
       candidateCount: 1,
@@ -132,28 +131,61 @@ export function assignAirportSeedIds(
     });
   }
 
+  const referenceExactMatches = new Map<string, AirportReference[]>();
+  for (const reference of references) {
+    const key = coordinateNameKey(
+      reference.latitude,
+      reference.longitude,
+      reference.name,
+    );
+    referenceExactMatches.set(key, [
+      ...(referenceExactMatches.get(key) ?? []),
+      reference,
+    ]);
+  }
+  const normalizedExistingAirports = existingAirports.map((airport) => {
+    if (isVerifiedSourceIdentity(airport) || !airport.sourceIdent) {
+      return airport;
+    }
+    const exactReferences =
+      referenceExactMatches.get(
+        coordinateNameKey(
+          airport.latitude,
+          airport.longitude,
+          airport.name,
+        ),
+      ) ?? [];
+    const compatibleReferences = exactReferences.filter((reference) =>
+      compatibleLegacySourceIdentifiers(reference).has(
+        airport.sourceIdent!,
+      ),
+    );
+    return compatibleReferences.length === 1
+      ? { ...airport, sourceIdent: compatibleReferences[0].ident }
+      : airport;
+  });
   const existingById = new Map(
-    existingAirports.map((airport) => [airport.id, airport]),
+    normalizedExistingAirports.map((airport) => [airport.id, airport]),
   );
   const sourceIds = groupedIds(
-    existingAirports,
+    normalizedExistingAirports,
     (airport) => airport.sourceIdent ?? undefined,
   );
   const icaoIds = groupedIds(
-    existingAirports,
+    normalizedExistingAirports,
     (airport) => airport.icao ?? undefined,
   );
   const iataIds = groupedIds(
-    existingAirports,
+    normalizedExistingAirports,
     (airport) => airport.iata ?? undefined,
   );
   const exactIdentityIds = groupedIds(
-    existingAirports,
+    normalizedExistingAirports,
     (airport) =>
       coordinateNameKey(airport.latitude, airport.longitude, airport.name),
   );
   const exactUnclaimedLegacyIds = groupedIds(
-    existingAirports.filter((airport) => !airport.sourceIdent),
+    normalizedExistingAirports.filter((airport) => !airport.sourceIdent),
     (airport) =>
       coordinateNameKey(airport.latitude, airport.longitude, airport.name),
   );
