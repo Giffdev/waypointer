@@ -1,10 +1,15 @@
-import { spawnSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createSnapshotAttestation,
   queryNeonSnapshotProviderState,
+  runNeonCli,
   type OperatorTargetInspection,
 } from "../ops/airport-release-operator.ts";
 import {
@@ -184,6 +189,30 @@ describe("guided airport release operator", () => {
     expect(payload.endpoints).toEqual(providerEndpoints);
   });
 
+  it("executes the npx neonctl pair through a Windows child process", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+    const scratch = path.resolve(
+      import.meta.dirname,
+      `.neon-child-${process.pid}-${Date.now()}`,
+    );
+    const executable = path.join(scratch, "npx.cmd");
+    await mkdir(scratch, { recursive: true });
+    await writeFile(executable, "@echo {\"projects\":[]}\r\n", "ascii");
+    try {
+      await expect(
+        runNeonCli(
+          executable,
+          ["--yes", "neonctl"],
+          ["projects", "list", "--output", "json"],
+        ),
+      ).resolves.toContain('{"projects":[]}');
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an authenticated Neon provider query failure", async () => {
     await expect(
       queryNeonSnapshotProviderState(
@@ -263,8 +292,13 @@ describe("guided airport release operator", () => {
     );
     expect(script).toContain("git worktree add --detach");
     expect(script).toContain("git worktree remove --force");
-    expect(script).toContain('$failureMessage = "neonctl auth"');
+    expect(script).toContain("$failureMessage = $neonAuthAction");
+    expect(script).toContain('"neonctl auth"');
+    expect(script).toContain('"npx --yes neonctl auth"');
+    expect(script).toContain('$failureMessage = "vercel login"');
     expect(script).toContain('"provider-verify"');
+    expect(script).toContain('"--neon-prefix-arg"');
+    expect(script).toContain('"--restore-prefix-arg"');
     expect(script).toContain("--provider-branch-base64");
     expect(script).toContain("--provider-endpoints-base64");
     expect(script).not.toContain("--created-at");
@@ -273,10 +307,24 @@ describe("guided airport release operator", () => {
       script.indexOf('"provider-verify"'),
     );
     expect(
-      script.indexOf('if ($failureMessage -eq "neonctl auth")'),
+      script.indexOf(
+        '$failureMessage -eq "neonctl auth"',
+      ),
     ).toBeLessThan(script.indexOf("$operatorStatus = if"));
-    expect(script.indexOf('$stage = "Neon authentication"')).toBeLessThan(
-      script.indexOf('$stage = "artifact verification"'),
+    expect(
+      script.indexOf('$stage = "Vercel provider verification"'),
+    ).toBeGreaterThan(script.indexOf('$stage = "artifact verification"'));
+    expect(
+      script.indexOf('$stage = "Vercel provider verification"'),
+    ).toBeLessThan(script.indexOf('$stage = "Neon authentication"'));
+    expect(script).toContain(
+      "git status --porcelain --untracked-files=all",
+    );
+    expect(script).toContain(
+      '"https://github.com/giffdev/waypointer"',
+    );
+    expect(script.indexOf('$stage = "artifact verification"')).toBeLessThan(
+      script.indexOf('$stage = "Neon authentication"'),
     );
     expect(script.indexOf("$releaseStarted = $true")).toBeLessThan(
       script.indexOf("Invoke-ReleaseNode $releaseScript"),
@@ -284,32 +332,28 @@ describe("guided airport release operator", () => {
     expect(
       script.indexOf('Remove-Item -Path "Env:NEON_API_KEY"'),
     ).toBeLessThan(script.indexOf("git worktree add --detach"));
+    expect(script).toContain('"VERCEL_TOKEN"');
     expect(script).not.toMatch(/postgres(?:ql)?:\/\/[^"\s]+/i);
   });
 
-  it("stops the normal path with only the exact auth action", () => {
-    const shell = process.platform === "win32" ? "powershell.exe" : "pwsh";
-    const result = spawnSync(
-      shell,
-      [
-        "-NoProfile",
-        "-File",
-        path.resolve(
-          import.meta.dirname,
-          "../ops/finish-airport-production-release.ps1",
-        ),
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NEON_API_KEY: "",
-        },
-      },
-    );
+  it("records an npx restore command without leaking authentication", () => {
+    const attestation = createSnapshotAttestation(verifiedInput({
+      restoreExecutable: "npx",
+      restoreArgumentsPrefix: ["--yes", "neonctl"],
+    }));
 
-    expect(result.status).toBe(1);
-    expect(result.stdout.trim()).toBe("");
-    expect(result.stderr.trim()).toBe("neonctl auth");
+    expect(attestation.restoreProcedure.restoreCommand).toEqual({
+      executable: "npx",
+      args: [
+        "--yes",
+        "neonctl",
+        "branches",
+        "restore",
+        providerBranch.parent_id,
+        providerBranch.id,
+        "--project-id",
+        providerBranch.project_id,
+      ],
+    });
   });
 });

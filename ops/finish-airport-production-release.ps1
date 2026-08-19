@@ -4,15 +4,24 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$providerSha256 = "1cb8af7afc10feca2196ec1480787382a37b1b594b184346aef97346e222c1f9"
+$supportScript = Join-Path $PSScriptRoot "airport-release-runner-support.ps1"
+. $supportScript
+
+$providerSha256 = $null
+$providerPath = $null
 $candidateSha256 = "e75537fa3a8313ddcf7ce1081bfbbf59286255702a48f4aac89b8a1d5105ac4e"
 $approvedAirportCandidateSha256 = "12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3"
 $expectedDeploymentId = "dpl_63kfw6a2YJzQR2xQ6zHgHyCSwGXH"
+$expectedDeploymentUrl = "https://flight-mo2umz51b-giffdevs-projects.vercel.app"
+$priorAliasDeploymentId = "dpl_G8NQm4S1r68s5UwysyCKEUdYVpWX"
 $providerCommit = "7fc3cafa61177290f37a33416411ee04aaba4278"
+$migrationManifestSha256 = "1cd475a39203cec05f0ca6cd5cfc7c41678042c41c154d4a3f919e543fb5a5b9"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $releaseRoot = Join-Path $root ".operator-release-worktree"
 $tsx = Join-Path $root "node_modules\tsx\dist\cli.mjs"
 $operatorHelper = Join-Path $PSScriptRoot "airport-release-operator.ts"
+$providerExpectationScript =
+  Join-Path $root "scripts\create-vercel-provider-expectation.ts"
 $prepareScript = Join-Path $releaseRoot "scripts\prepare-airport-production-release.ts"
 $releaseScript = Join-Path $releaseRoot "scripts\release-airport-catalog.ts"
 $healthScript = Join-Path $releaseRoot "scripts\airport-release-health.ts"
@@ -20,7 +29,8 @@ $evidenceDirectory = Join-Path $root "artifacts\release-evidence\airport-catalog
 $secretEnvironmentNames = @(
   "MIGRATION_DATABASE_URL",
   "AIRPORT_RELEASE_HEALTH_SESSION_COOKIE",
-  "AIRPORT_RELEASE_VERCEL_API_TOKEN"
+  "AIRPORT_RELEASE_VERCEL_API_TOKEN",
+  "VERCEL_TOKEN"
 )
 
 $stage = "initialization"
@@ -33,6 +43,7 @@ $databaseEvidenceSha256 = $null
 $healthStatus = "not-run"
 $releaseStarted = $false
 $worktreeCreated = $false
+$neonAuthAction = "npx --yes neonctl auth"
 
 function Get-Sha256([string]$Path) {
   return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
@@ -156,20 +167,11 @@ function Invoke-ReleaseNode([string]$Script) {
   return $output
 }
 
-function Get-NeonCommand {
-  $neonCommand = Get-Command neonctl, neon -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-  if ($null -eq $neonCommand) {
-    throw "neon-authentication-required"
-  }
-  return $neonCommand
-}
-
 function Invoke-NeonJson(
-  [object]$NeonCommand,
+  [object]$NeonInvocation,
   [string[]]$Arguments
 ) {
-  $output = @(& $NeonCommand.Source @Arguments 2>$null)
+  $output = @(Invoke-NeonCliOutput $NeonInvocation $Arguments)
   if ($LASTEXITCODE -ne 0) {
     throw "neon-provider-query-failed"
   }
@@ -181,8 +183,10 @@ function Invoke-NeonJson(
   }
 }
 
-function Get-AuthenticatedNeonProjects([object]$NeonCommand) {
-  $output = @(& $NeonCommand.Source projects list --output json 2>$null)
+function Get-AuthenticatedNeonProjects([object]$NeonInvocation) {
+  $output = @(Invoke-NeonCliOutput $NeonInvocation @(
+    "projects", "list", "--output", "json"
+  ))
   if ($LASTEXITCODE -ne 0) {
     throw "neon-authentication-required"
   }
@@ -196,11 +200,11 @@ function Get-AuthenticatedNeonProjects([object]$NeonCommand) {
 }
 
 function Assert-NeonProductionBranch(
-  [object]$NeonCommand,
+  [object]$NeonInvocation,
   [string]$ProjectId,
   [string]$ProductionBranchId
 ) {
-  $branches = @(Invoke-NeonJson $NeonCommand @(
+  $branches = @(Invoke-NeonJson $NeonInvocation @(
     "branches", "list",
     "--project-id", $ProjectId,
     "--output", "json"
@@ -216,18 +220,18 @@ function Assert-NeonProductionBranch(
 }
 
 function New-NeonSnapshot(
-  [object]$NeonCommand,
+  [object]$NeonInvocation,
   [string]$SnapshotName,
   [string]$ProjectId,
   [string]$ProductionBranchId
 ) {
-  $output = @(
-    & $NeonCommand.Source branches create `
-      --name $SnapshotName `
-      --parent $ProductionBranchId `
-      --project-id $ProjectId `
-      --output json 2>$null
-  )
+  $output = @(Invoke-NeonCliOutput $NeonInvocation @(
+    "branches", "create",
+    "--name", $SnapshotName,
+    "--parent", $ProductionBranchId,
+    "--project-id", $ProjectId,
+    "--output", "json"
+  ))
   if ($LASTEXITCODE -ne 0) {
     return $null
   }
@@ -318,13 +322,92 @@ foreach ($name in $secretEnvironmentNames) {
 
 Push-Location $root
 try {
+  $stage = "artifact verification"
+  $candidatePath = Join-Path $root "artifacts\release-evidence\airport-catalog\candidate-$candidateSha256.json"
+  if (
+    -not (Test-Path -LiteralPath $candidatePath) -or
+    (Get-Sha256 $candidatePath) -ne $candidateSha256
+  ) {
+    throw "approved-artifact-missing"
+  }
+  $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
+  $currentCommit = (git rev-parse HEAD).Trim()
+  $originMain = (git rev-parse origin/main).Trim()
+  $trackedStatus = @(git status --porcelain --untracked-files=all)
+  $originUrl = (git remote get-url origin).Trim()
+  $normalizedOriginUrl = $originUrl `
+    -replace '^git@github\.com:', 'https://github.com/' `
+    -replace '\.git$', ''
+  git merge-base --is-ancestor $providerCommit origin/main
+  if (
+    $LASTEXITCODE -ne 0 -or
+    $currentBranch -ne "main" -or
+    $currentCommit -ne $originMain -or
+    $trackedStatus.Count -ne 0 -or
+    $normalizedOriginUrl.ToLowerInvariant() -ne
+      "https://github.com/giffdev/waypointer"
+  ) {
+    throw "main-checkout-not-clean"
+  }
+
+  $stage = "Vercel provider verification"
+  Assert-VercelCliAuthentication
+  foreach ($name in @(
+    "FLIGHT_MAP_PREBUILT_ARTIFACT_MANIFEST_PATH",
+    "FLIGHT_MAP_PREBUILT_ARTIFACT_MANIFEST_SHA256"
+  )) {
+    Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+  }
+  $env:AIRPORT_RELEASE_CANDIDATE_MANIFEST_PATH =
+    "artifacts\release-evidence\airport-catalog\candidate-$candidateSha256.json"
+  $env:AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256 = $candidateSha256
+  $env:FLIGHT_MAP_APPROVED_COMMIT_SHA = $providerCommit
+  $env:FLIGHT_MAP_RELEASE_PHASE = "control-plane"
+  $env:AIRPORT_RELEASE_DEPLOYMENT_ID = $expectedDeploymentId
+  $env:AIRPORT_RELEASE_DEPLOYMENT_URL = $expectedDeploymentUrl
+  $env:AIRPORT_RELEASE_PRIOR_ALIAS_DEPLOYMENT_ID =
+    $priorAliasDeploymentId
+  $env:AIRPORT_RELEASE_APPROVED_AIRPORT_CANDIDATE_SHA256 =
+    $approvedAirportCandidateSha256
+  $env:FLIGHT_MAP_MIGRATION_MANIFEST_SHA256 =
+    $migrationManifestSha256
+  $freshProvider = Resolve-FreshProviderExpectation $root {
+    Invoke-JsonNode $providerExpectationScript @()
+  }
+  $providerPath = [string]$freshProvider.Path
+  $providerSha256 = [string]$freshProvider.Sha256
+  $provider = Get-Content -Raw -LiteralPath $providerPath | ConvertFrom-Json
+  if (
+    $provider.deploymentId -ne $expectedDeploymentId -or
+    $provider.deploymentUrl -ne $expectedDeploymentUrl -or
+    $provider.priorAliasDeploymentId -ne $priorAliasDeploymentId -or
+    $provider.sourceCommit.commitSha -ne $providerCommit -or
+    $provider.approvedAirportCandidateSha256 -ne
+      $approvedAirportCandidateSha256 -or
+    $provider.candidateManifestSha256 -ne $candidateSha256 -or
+    $provider.migrationManifestSha256 -ne $migrationManifestSha256 -or
+    $provider.releasePhase -ne "control-plane" -or
+    [DateTimeOffset]::Parse($provider.expiresAt) -le
+      [DateTimeOffset]::UtcNow
+  ) {
+    throw "vercel-provider-verification-failed"
+  }
+
   $stage = "Neon authentication"
-  $neonCommand = Get-NeonCommand
+  $neonInvocation = Resolve-NeonCliInvocation
+  $neonAuthAction = if (
+    $neonInvocation.AttestationExecutable -eq "neonctl"
+  ) {
+    "neonctl auth"
+  }
+  else {
+    "npx --yes neonctl auth"
+  }
   if ($null -ne $neonApiKeySecure) {
     Set-EnvironmentFromSecureString "NEON_API_KEY" $neonApiKeySecure
   }
   try {
-    $neonProjects = @(Get-AuthenticatedNeonProjects $neonCommand)
+    $neonProjects = @(Get-AuthenticatedNeonProjects $neonInvocation)
     $neonProjectId = [string]$env:NEON_PROJECT_ID
     $productionBranchId = [string]$env:NEON_PRODUCTION_BRANCH_ID
     if (
@@ -340,45 +423,19 @@ try {
       throw "neon-project-verification-failed"
     }
     Assert-NeonProductionBranch `
-      $neonCommand $neonProjectId $productionBranchId
+      $neonInvocation $neonProjectId $productionBranchId
   }
   finally {
     Remove-Item -Path "Env:NEON_API_KEY" -ErrorAction SilentlyContinue
   }
-
   $stage = "artifact verification"
-  $providerPath = Join-Path $root "data\private\release-approvals\vercel-provider-expectation-$providerSha256.json"
-  $candidatePath = Join-Path $root "artifacts\release-evidence\airport-catalog\candidate-$candidateSha256.json"
+  $stage = "artifact verification"
   if (
     -not (Test-Path -LiteralPath $providerPath) -or
-    -not (Test-Path -LiteralPath $candidatePath) -or
     (Get-Sha256 $providerPath) -ne $providerSha256 -or
     (Get-Sha256 $candidatePath) -ne $candidateSha256
   ) {
     throw "approved-artifact-missing"
-  }
-  $provider = Get-Content -Raw -LiteralPath $providerPath | ConvertFrom-Json
-  if (
-    $provider.deploymentId -ne $expectedDeploymentId -or
-    $provider.sourceCommit.commitSha -ne $providerCommit -or
-    $provider.approvedAirportCandidateSha256 -ne $approvedAirportCandidateSha256 -or
-    $provider.candidateManifestSha256 -ne $candidateSha256 -or
-    [DateTimeOffset]::Parse($provider.expiresAt) -le [DateTimeOffset]::UtcNow
-  ) {
-    throw "provider-expectation-invalid"
-  }
-  $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
-  $currentCommit = (git rev-parse HEAD).Trim()
-  $originMain = (git rev-parse origin/main).Trim()
-  $trackedStatus = @(git status --porcelain --untracked-files=no)
-  git merge-base --is-ancestor $providerCommit origin/main
-  if (
-    $LASTEXITCODE -ne 0 -or
-    $currentBranch -ne "main" -or
-    $currentCommit -ne $originMain -or
-    $trackedStatus.Count -ne 0
-  ) {
-    throw "main-checkout-not-clean"
   }
   if (Test-Path -LiteralPath $releaseRoot) {
     throw "release-worktree-already-exists"
@@ -454,7 +511,7 @@ void (async () => {
   }
   try {
     $snapshotId = New-NeonSnapshot `
-      $neonCommand $snapshotName $neonProjectId $productionBranchId
+      $neonInvocation $snapshotName $neonProjectId $productionBranchId
     $snapshotAttempts = 15
     if ($null -eq $snapshotId) {
       Write-Host ""
@@ -467,20 +524,26 @@ void (async () => {
     if ($snapshotId -notmatch '^br-[a-z0-9-]{3,240}$') {
       throw "snapshot-id-invalid"
     }
-    $verifiedSnapshot = Invoke-JsonNode $operatorHelper @(
+    $verifiedSnapshotArguments = @(
       "provider-verify",
-      "--neon-executable", [string]$neonCommand.Source,
+      "--neon-executable", [string]$neonInvocation.Executable,
       "--neon-project-id", $neonProjectId,
       "--production-branch-id", $productionBranchId,
       "--snapshot-id", $snapshotId,
       "--attempts", [string]$snapshotAttempts
     )
+    foreach ($prefixArgument in $neonInvocation.PrefixArguments) {
+      $verifiedSnapshotArguments += @(
+        "--neon-prefix-arg", [string]$prefixArgument
+      )
+    }
+    $verifiedSnapshot = Invoke-JsonNode `
+      $operatorHelper $verifiedSnapshotArguments
   }
   finally {
     Remove-Item -Path "Env:NEON_API_KEY" -ErrorAction SilentlyContinue
   }
   Write-Host "Neon snapshot verified by provider: $snapshotId"
-  $restoreWithNeonctl = $neonCommand.Name -eq "neonctl"
 
   $stage = "snapshot attestation"
   $attestArguments = @(
@@ -492,13 +555,17 @@ void (async () => {
     "--pre-change-state-sha256", [string]$target.preChangeStateSha256,
     "--neon-project-id", $neonProjectId,
     "--production-branch-id", $productionBranchId,
+    "--restore-executable",
+    [string]$neonInvocation.AttestationExecutable,
     "--provider-branch-base64",
     (ConvertTo-Base64Json $verifiedSnapshot.branch),
     "--provider-endpoints-base64",
     (ConvertTo-Base64Json @($verifiedSnapshot.endpoints))
   )
-  if ($restoreWithNeonctl) {
-    $attestArguments += "--restore-with-neonctl"
+  foreach ($prefixArgument in $neonInvocation.PrefixArguments) {
+    $attestArguments += @(
+      "--restore-prefix-arg", [string]$prefixArgument
+    )
   }
   $snapshot = Invoke-JsonNode $operatorHelper $attestArguments
   $env:AIRPORT_RELEASE_SNAPSHOT_ATTESTATION_PATH = [string]$snapshot.path
@@ -594,7 +661,13 @@ catch {
     -not $releaseStarted -and
     $_.Exception.Message -eq "neon-authentication-required"
   ) {
-    $failureMessage = "neonctl auth"
+    $failureMessage = $neonAuthAction
+  }
+  elseif (
+    -not $releaseStarted -and
+    $_.Exception.Message -eq "vercel-authentication-required"
+  ) {
+    $failureMessage = "vercel login"
   }
   elseif ($releaseStarted) {
     $failureMessage =
@@ -625,7 +698,15 @@ finally {
     "AIRPORT_RELEASE_PRODUCTION_PREFLIGHT_SHA256",
     "AIRPORT_RELEASE_CONFIRMATION",
     "AIRPORT_RELEASE_DATABASE_EVIDENCE_PATH",
-    "AIRPORT_RELEASE_DATABASE_EVIDENCE_SHA256"
+    "AIRPORT_RELEASE_DATABASE_EVIDENCE_SHA256",
+    "FLIGHT_MAP_PREBUILT_ARTIFACT_MANIFEST_PATH",
+    "FLIGHT_MAP_PREBUILT_ARTIFACT_MANIFEST_SHA256",
+    "FLIGHT_MAP_APPROVED_COMMIT_SHA",
+    "FLIGHT_MAP_RELEASE_PHASE",
+    "AIRPORT_RELEASE_DEPLOYMENT_ID",
+    "AIRPORT_RELEASE_DEPLOYMENT_URL",
+    "AIRPORT_RELEASE_PRIOR_ALIAS_DEPLOYMENT_ID",
+    "FLIGHT_MAP_MIGRATION_MANIFEST_SHA256"
   )) {
     Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
   }
@@ -650,7 +731,11 @@ finally {
   Pop-Location
 }
 
-if ($failureMessage -eq "neonctl auth") {
+if (
+  $failureMessage -eq "neonctl auth" -or
+  $failureMessage -eq "npx --yes neonctl auth" -or
+  $failureMessage -eq "vercel login"
+) {
   [Console]::Error.WriteLine($failureMessage)
   exit 1
 }

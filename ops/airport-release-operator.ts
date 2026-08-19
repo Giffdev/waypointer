@@ -45,7 +45,8 @@ export interface NeonSnapshotVerificationInput {
 export interface SnapshotAttestationInput
   extends NeonSnapshotVerificationInput {
   target: OperatorTargetInspection;
-  restoreExecutable?: "neon" | "neonctl";
+  restoreExecutable?: "neonctl" | "npx";
+  restoreArgumentsPrefix?: readonly string[];
 }
 
 interface NeonProviderBranch {
@@ -335,8 +336,27 @@ export function createSnapshotAttestation(
       endpointType: verifiedSnapshot.endpointType,
     },
   };
-  const restoreExecutable = input.restoreExecutable ?? "neon";
+  const restoreExecutable = input.restoreExecutable ?? "neonctl";
+  const restoreArgumentsPrefix = input.restoreArgumentsPrefix ?? [];
+  if (
+    !["neonctl", "npx"].includes(restoreExecutable) ||
+    (
+      restoreExecutable === "neonctl" &&
+      restoreArgumentsPrefix.length !== 0
+    ) ||
+    (
+      restoreExecutable === "npx" &&
+      (
+        restoreArgumentsPrefix.length !== 2 ||
+        restoreArgumentsPrefix[0] !== "--yes" ||
+        restoreArgumentsPrefix[1] !== "neonctl"
+      )
+    )
+  ) {
+    throw new AirportCatalogSafetyError("snapshot-approval-missing");
+  }
   const restoreArgs = [
+    ...restoreArgumentsPrefix,
     "branches",
     "restore",
     verifiedSnapshot.parentBranchId,
@@ -425,6 +445,22 @@ function requireArgument(name: string): string {
   return value;
 }
 
+function argumentsFor(name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < process.argv.length; index += 1) {
+    if (process.argv[index] === name) {
+      const value = process.argv[index + 1]?.trim() ?? "";
+      if (!value) {
+        throw new AirportCatalogSafetyError(
+          "target-configuration-invalid",
+        );
+      }
+      values.push(value);
+    }
+  }
+  return values;
+}
+
 function requireBase64JsonArgument(name: string): unknown {
   try {
     return JSON.parse(
@@ -435,14 +471,38 @@ function requireBase64JsonArgument(name: string): unknown {
   }
 }
 
-function runNeonCli(
+export function runNeonCli(
   executable: string,
+  prefixArguments: readonly string[],
   arguments_: readonly string[],
 ): Promise<string> {
+  const executableName = path.basename(executable).toLowerCase();
+  const isNeonctl =
+    /^neonctl(?:\.cmd|\.exe)?$/u.test(executableName) &&
+    prefixArguments.length === 0;
+  const isNpx =
+    /^npx(?:\.cmd|\.exe)?$/u.test(executableName) &&
+    prefixArguments.length === 2 &&
+    prefixArguments[0] === "--yes" &&
+    prefixArguments[1] === "neonctl";
+  if (!isNeonctl && !isNpx) {
+    return Promise.reject(
+      new AirportCatalogSafetyError("snapshot-approval-missing"),
+    );
+  }
+  const allArguments = [...prefixArguments, ...arguments_];
   return new Promise((resolve, reject) => {
+    const commandIsCmd =
+      process.platform === "win32" && executableName.endsWith(".cmd");
+    const childExecutable = commandIsCmd
+      ? process.env.ComSpec ?? "cmd.exe"
+      : executable;
+    const childArguments = commandIsCmd
+      ? ["/d", "/s", "/c", "call", executable, ...allArguments]
+      : allArguments;
     execFile(
-      executable,
-      [...arguments_],
+      childExecutable,
+      childArguments,
       {
         encoding: "utf8",
         maxBuffer: 1024 * 1024,
@@ -483,6 +543,7 @@ async function verifyProviderSnapshot() {
         (arguments_) =>
           runNeonCli(
             requireArgument("--neon-executable"),
+            argumentsFor("--neon-prefix-arg"),
             arguments_,
           ),
       );
@@ -528,10 +589,12 @@ async function createAttestation() {
     snapshotId: requireArgument("--snapshot-id"),
     verifiedAt: target.inspectedAt,
     target,
-    restoreExecutable:
-      process.argv.includes("--restore-with-neonctl")
-        ? "neonctl"
-        : "neon",
+    restoreExecutable: requireArgument(
+      "--restore-executable",
+    ) as "neonctl" | "npx",
+    restoreArgumentsPrefix: argumentsFor(
+      "--restore-prefix-arg",
+    ),
     expectedNeonProjectId: requireArgument("--neon-project-id"),
     expectedProductionBranchId: requireArgument(
       "--production-branch-id",
