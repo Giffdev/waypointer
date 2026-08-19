@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   mkdir,
   readFile,
@@ -208,6 +209,56 @@ describe("guided airport release operator", () => {
           ["projects", "list", "--output", "json"],
         ),
       ).resolves.toContain('{"projects":[]}');
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("parses multi-line JSON from the Node gate", async () => {
+    const scratch = path.resolve(
+      import.meta.dirname,
+      `.json-node-${process.pid}-${Date.now()}`,
+    );
+    const script = path.join(scratch, "output.ts");
+    await mkdir(scratch, { recursive: true });
+    await writeFile(
+      script,
+      'console.log(JSON.stringify({ status: "ready" }, null, 2));\n',
+      "utf8",
+    );
+    try {
+      const runner = path.resolve(
+        import.meta.dirname,
+        "../ops/finish-airport-production-release.ps1",
+      );
+      const tsx = path.resolve(
+        import.meta.dirname,
+        "../node_modules/tsx/dist/cli.mjs",
+      );
+      const result = spawnSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-Command",
+          `
+$source = Get-Content -Raw -LiteralPath '${runner.replaceAll("'", "''")}'
+$functionSource = [regex]::Match(
+  $source,
+  '(?s)function Invoke-JsonNode.+?(?=\\r?\\nfunction Invoke-ReleaseNode)'
+).Value
+Invoke-Expression $functionSource
+$tsx = '${tsx.replaceAll("'", "''")}'
+$result = Invoke-JsonNode '${script.replaceAll("'", "''")}' @()
+$result | ConvertTo-Json -Compress
+`,
+        ],
+        { encoding: "utf8", cwd: path.resolve(import.meta.dirname, "..") },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout.trim())).toEqual({
+        status: "ready",
+      });
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }

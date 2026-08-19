@@ -149,7 +149,7 @@ function Invoke-JsonNode([string]$Script, [string[]]$Arguments) {
     throw "node-gate-failed"
   }
   try {
-    return ($output[-1] | ConvertFrom-Json)
+    return (($output -join [Environment]::NewLine) | ConvertFrom-Json)
   }
   catch {
     throw "node-output-invalid"
