@@ -56,6 +56,14 @@ import {
 
 const PAGE_SIZE = 25;
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const IMPORT_POLL_BASE_INTERVAL_MS = 2_000;
+const IMPORT_POLL_MAX_INTERVAL_MS = 60_000;
+const IMPORT_POLL_HIDDEN_BASE_INTERVAL_MS = 15_000;
+const IMPORT_POLL_HIDDEN_MAX_INTERVAL_MS = 5 * 60_000;
+const IMPORT_POLL_STALE_WARNING_AFTER_MS = 2 * 60_000;
+const IMPORT_POLL_STALE_STOP_AFTER_MS = 20 * 60_000;
+const IMPORT_POLL_REQUEST_TIMEOUT_MS = 30_000;
+const IMPORT_POLL_BACKOFF_EXPONENT_CAP = 6;
 
 type ClientPhase =
   | "idle"
@@ -78,6 +86,50 @@ type FilePreparation =
       previewError?: string;
     }
   | { kind: "error"; message: string };
+
+type ImportPollingProgress = {
+  unchangedPolls: number;
+  failedPolls: number;
+  startedAtMs: number;
+};
+
+type ImportPollingState = {
+  batchId: string;
+  lastUpdatedAt?: string;
+  progress: ImportPollingProgress;
+};
+
+export type ImportPollDelayInput = {
+  visible: boolean;
+  unchangedPolls: number;
+  failedPolls: number;
+};
+
+export function nextImportPollDelayMs({
+  visible,
+  unchangedPolls,
+  failedPolls,
+}: ImportPollDelayInput): number {
+  const base = visible
+    ? IMPORT_POLL_BASE_INTERVAL_MS
+    : IMPORT_POLL_HIDDEN_BASE_INTERVAL_MS;
+  const maximum = visible
+    ? IMPORT_POLL_MAX_INTERVAL_MS
+    : IMPORT_POLL_HIDDEN_MAX_INTERVAL_MS;
+  const exponent = Math.min(
+    IMPORT_POLL_BACKOFF_EXPONENT_CAP,
+    Math.max(0, unchangedPolls, failedPolls),
+  );
+  return Math.min(maximum, base * 2 ** exponent);
+}
+
+export function shouldWarnImportPolling(elapsedMs: number): boolean {
+  return elapsedMs >= IMPORT_POLL_STALE_WARNING_AFTER_MS;
+}
+
+export function shouldPauseImportPolling(elapsedMs: number): boolean {
+  return elapsedMs >= IMPORT_POLL_STALE_STOP_AFTER_MS;
+}
 
 export default function ImportRouteClient({
   data,
@@ -154,6 +206,7 @@ function ImportWorkflow({
   const mappingPreviewRequest = useRef(0);
   const detailRequest = useRef(0);
   const navigatedBatchId = useRef<string | undefined>(undefined);
+  const polling = useRef<ImportPollingState | undefined>(undefined);
   const [file, setFile] = useState<File | null>(null);
   const [filePreparation, setFilePreparation] = useState<FilePreparation>({
     kind: "idle",
@@ -167,6 +220,11 @@ function ImportWorkflow({
   const [busyRowId, setBusyRowId] = useState<string>();
   const [completion, setCompletion] = useState<ImportCompletionSummary>();
   const [redirectBatchId, setRedirectBatchId] = useState<string>();
+  const [pausedPollingBatchId, setPausedPollingBatchId] = useState<string>();
+  const [pollingRestartGeneration, setPollingRestartGeneration] = useState(0);
+  const [visible, setVisible] = useState(
+    typeof document === "undefined" || document.visibilityState === "visible",
+  );
 
   async function selectFile(nextFile: File) {
     const validationError = validateCsvFile(nextFile, maxFileBytes);
@@ -242,6 +300,27 @@ function ImportWorkflow({
     }
   }
 
+  const resetPollingState = useCallback(() => {
+    polling.current = undefined;
+    setPausedPollingBatchId(undefined);
+  }, []);
+
+  const restartPollingState = useCallback(() => {
+    resetPollingState();
+    setPollingRestartGeneration((current) => current + 1);
+  }, [resetPollingState]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const handleVisibilityChange = () => {
+      setVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
   const loadBatches = useCallback(async () => {
     const response = await apiRequest<{ batches: unknown[] }>(
       "/api/import/batches",
@@ -250,17 +329,28 @@ function ImportWorkflow({
   }, []);
 
   const loadDetail = useCallback(
-    async (batchId: string, requestedPage: number) => {
+    async (
+      batchId: string,
+      requestedPage: number,
+      signal?: AbortSignal,
+      canCommit?: () => boolean,
+    ): Promise<OwnerImportBatchDetail | undefined> => {
       const requestId = ++detailRequest.current;
       const response = await apiRequest<
         OwnerImportBatchDetail | { batch: unknown }
       >(
         `/api/import/batches/${encodeURIComponent(batchId)}?page=${requestedPage}&pageSize=${PAGE_SIZE}`,
+        { signal },
       );
       const next = normalizeBatchDetail(
         "batch" in response ? response.batch : response,
       );
-      if (requestId !== detailRequest.current) return;
+      if (
+        requestId !== detailRequest.current ||
+        (canCommit && !canCommit())
+      ) {
+        return undefined;
+      }
       setDetail(next);
       setCompletion(completionFromCounts(next.counts));
       setPage(next.rows.page);
@@ -271,7 +361,12 @@ function ImportWorkflow({
       ]);
       if (next.status === "failed") {
         setError(next.error?.message ?? "The import failed.");
+      } else {
+        setError((current) =>
+          current && isPollingStatusMessage(current) ? undefined : current,
+        );
       }
+      return next;
     },
     [],
   );
@@ -286,29 +381,175 @@ function ImportWorkflow({
   }, [loadBatches]);
 
   useEffect(() => {
-    if (!activeBatchId) return;
+    if (!activeBatchId || phase === "processing" || phase === "committing") {
+      return;
+    }
     const timer = window.setTimeout(() => {
       loadDetail(activeBatchId, page).catch(() => {
         setError("The import status could not be refreshed.");
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeBatchId, loadDetail, page]);
+  }, [activeBatchId, loadDetail, page, phase]);
 
   useEffect(() => {
-    if (
-      !activeBatchId ||
-      (phase !== "processing" && phase !== "committing")
-    ) {
+    if (!activeBatchId || (phase !== "processing" && phase !== "committing")) {
+      polling.current = undefined;
       return;
     }
-    const timer = window.setInterval(() => {
-      loadDetail(activeBatchId, page).catch(() => {
-        setError("The import status could not be refreshed.");
+    const pollingPaused = pausedPollingBatchId === activeBatchId;
+    if (pollingPaused) return;
+
+    if (!polling.current || polling.current.batchId !== activeBatchId) {
+      polling.current = {
+        batchId: activeBatchId,
+        progress: {
+          unchangedPolls: 0,
+          failedPolls: 0,
+          startedAtMs: Date.now(),
+        },
+      };
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let requestController: AbortController | undefined;
+
+    const schedule = (delayMs: number) => {
+      timer = window.setTimeout(() => {
+        if (!cancelled) {
+          void poll();
+        }
+      }, delayMs);
+    };
+
+    const evaluateElapsedPolicy = (
+      current: ImportPollingState,
+    ): "paused" | "warned" | "fresh" => {
+      const elapsedMs = Date.now() - current.progress.startedAtMs;
+      if (shouldPauseImportPolling(elapsedMs)) {
+        setPausedPollingBatchId(activeBatchId);
+        setError(
+          "Import status checks paused after a long-running batch with no terminal update. Resume checks or cancel/retry the batch.",
+        );
+        return "paused";
+      }
+      if (shouldWarnImportPolling(elapsedMs)) {
+        setError(
+          "This import is taking longer than expected. Status checks are still active with slower backoff.",
+        );
+        return "warned";
+      }
+      return "fresh";
+    };
+
+    const loadPollingDetail = async () => {
+      const controller = new AbortController();
+      requestController = controller;
+      let commitAllowed = true;
+      let timeout: number | undefined;
+      const timedOut = new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => {
+          commitAllowed = false;
+          controller.abort();
+          reject(new Error("Import status request timed out."));
+        }, IMPORT_POLL_REQUEST_TIMEOUT_MS);
       });
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [activeBatchId, loadDetail, page, phase]);
+      try {
+        return await Promise.race([
+          loadDetail(
+            activeBatchId,
+            page,
+            controller.signal,
+            () => commitAllowed && !cancelled,
+          ),
+          timedOut,
+        ]);
+      } finally {
+        commitAllowed = false;
+        if (timeout !== undefined) window.clearTimeout(timeout);
+        if (requestController === controller) {
+          requestController = undefined;
+        }
+      }
+    };
+
+    const poll = async () => {
+      if (cancelled) return;
+      const current = polling.current;
+      if (!current || current.batchId !== activeBatchId) return;
+
+      try {
+        const next = await loadPollingDetail();
+        if (cancelled) return;
+        if (!next) {
+          schedule(
+            nextImportPollDelayMs({
+              visible,
+              unchangedPolls: current.progress.unchangedPolls,
+              failedPolls: current.progress.failedPolls,
+            }),
+          );
+          return;
+        }
+        current.progress.failedPolls = 0;
+        if (current.lastUpdatedAt === next.updatedAt) {
+          current.progress.unchangedPolls += 1;
+        } else {
+          current.progress.unchangedPolls = 0;
+          current.lastUpdatedAt = next.updatedAt;
+        }
+        const nextPhase = phaseForStatus(next.status);
+        if (nextPhase !== "processing" && nextPhase !== "committing") return;
+        const elapsedPolicy = evaluateElapsedPolicy(current);
+        if (elapsedPolicy === "paused") return;
+        schedule(
+          nextImportPollDelayMs({
+            visible,
+            unchangedPolls: current.progress.unchangedPolls,
+            failedPolls: current.progress.failedPolls,
+          }),
+        );
+      } catch {
+        if (cancelled) return;
+        const currentAfterError = polling.current;
+        if (!currentAfterError || currentAfterError.batchId !== activeBatchId) {
+          return;
+        }
+        currentAfterError.progress.failedPolls += 1;
+        const elapsedPolicy = evaluateElapsedPolicy(currentAfterError);
+        if (elapsedPolicy === "paused") return;
+        if (
+          elapsedPolicy === "fresh" &&
+          currentAfterError.progress.failedPolls >= 2
+        ) {
+          setError("The import status could not be refreshed. Retrying with backoff.");
+        }
+        schedule(
+          nextImportPollDelayMs({
+            visible,
+            unchangedPolls: currentAfterError.progress.unchangedPolls,
+            failedPolls: currentAfterError.progress.failedPolls,
+          }),
+        );
+      }
+    };
+
+    schedule(0);
+    return () => {
+      cancelled = true;
+      requestController?.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    activeBatchId,
+    loadDetail,
+    page,
+    pausedPollingBatchId,
+    phase,
+    pollingRestartGeneration,
+    visible,
+  ]);
 
   useEffect(() => {
     if (
@@ -339,6 +580,7 @@ function ImportWorkflow({
       ? serializeGenericCsvMapping(mapping)
       : undefined;
     detailRequest.current += 1;
+    resetPollingState();
     setRedirectBatchId(undefined);
     setDetail(undefined);
     setCompletion(undefined);
@@ -416,8 +658,8 @@ function ImportWorkflow({
       await apiRequest(`/api/import/batches/${activeBatchId}/cancel`, {
         method: "POST",
       });
-      setPhase("processing");
       await loadDetail(activeBatchId, page);
+      restartPollingState();
       await loadBatches();
     } catch (actionError) {
       setError(messageFor(actionError));
@@ -431,8 +673,8 @@ function ImportWorkflow({
       await apiRequest(`/api/import/batches/${activeBatchId}/retry`, {
         method: "POST",
       });
-      setPhase("processing");
       await loadDetail(activeBatchId, page);
+      restartPollingState();
       await loadBatches();
     } catch (actionError) {
       setError(messageFor(actionError));
@@ -611,6 +853,33 @@ function ImportWorkflow({
                   Retry import
                 </button>
               ) : null}
+              {pausedPollingBatchId === detail.id &&
+              ["pending", "queued", "scanning", "processing", "committing", "retrying"].includes(
+                detail.status,
+              ) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    polling.current = {
+                      batchId: detail.id,
+                      lastUpdatedAt: detail.updatedAt,
+                      progress: {
+                        unchangedPolls: 0,
+                        failedPolls: 0,
+                        startedAtMs: Date.now(),
+                      },
+                    };
+                    setPausedPollingBatchId(undefined);
+                    setError((current) => {
+                      return current && isPollingStatusMessage(current)
+                        ? undefined
+                        : current;
+                    });
+                  }}
+                >
+                  Resume status checks
+                </button>
+              ) : null}
               <BatchReview
                 detail={detail}
                 completion={completion}
@@ -628,6 +897,7 @@ function ImportWorkflow({
             activeBatchId={activeBatchId}
             onSelect={(batchId) => {
               detailRequest.current += 1;
+              resetPollingState();
               setRedirectBatchId(undefined);
               setDetail(undefined);
               setCompletion(undefined);
@@ -2076,6 +2346,14 @@ async function apiRequest<T = unknown>(
 
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : "The import request failed.";
+}
+
+function isPollingStatusMessage(message: string): boolean {
+  return [
+    "This import is taking longer than expected. Status checks are still active with slower backoff.",
+    "The import status could not be refreshed. Retrying with backoff.",
+    "Import status checks paused after a long-running batch with no terminal update. Resume checks or cancel/retry the batch.",
+  ].includes(message);
 }
 
 function formatBytes(bytes: number): string {

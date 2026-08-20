@@ -113,14 +113,44 @@ restricted pooled worker database role are provisioned. Railway must build
 `Dockerfile.worker` through `railway.json`; the image runs Node 22, `clamd`,
 and `freshclam`. The worker requires `WORKER_ID`, `WORKER_HEALTH_SECRET`, a
 worker-sized `DB_POOL_MAX` (normally 5), R2 configuration, and the documented
-ClamAV/job timing variables from `.env.example`. `/live` exposes no queue
-data; authenticated `/health` reports scanner health and aggregate queue
-metrics. Do not place signed URLs, object keys, filenames, or row data in logs.
-After provisioning, run `npm run check:durable-import-worker`, apply the
-migration, and execute `npm run smoke:durable-import` with a dedicated verified
-test account. The hosted smoke requires both a clean CSV review/deduplication
-result and a quarantined EICAR fixture before the feature flag may replace
-`sync-mvp`.
+ClamAV/job timing variables from `.env.example`. Set
+`WORKER_EXECUTION_MODE=continuous` for the hosted Railway service. Production
+defaults to `disabled`, which never opens database or storage clients and must
+not be treated as processing-ready. `on-demand` drains until the queue is idle
+and exits successfully, so use it only from an external scheduler rather than
+for the always-on Railway service. Continuous mode uses bounded exponential
+polling backoff from `JOB_POLL_INTERVAL_MS` (minimum 5000) up to
+`JOB_POLL_MAX_INTERVAL_MS` so an empty queue does not keep Neon awake.
+
+Set the complete worker environment, including `WORKER_EXECUTION_MODE`, before
+deploying and run `npm run check:durable-import-worker` against those exact
+values. The checker and worker runtime both require
+`FLIGHT_MAP_RELEASE_WRITES_PAUSED=false` exactly. The check rejects disabled
+mode as safe-off rather than deployment-ready. `/live` reports process
+liveness, mode, and whether processing is enabled. Authenticated `/health`
+reports processing readiness and returns 503 while disabled, after a loop
+failure, when polling progress is stale, or when scanner or queue checks fail.
+Health probes share a five-second deadline and do not overlap.
+After the check passes, apply the migration and execute
+`npm run smoke:durable-import` with a dedicated verified test account. The
+hosted smoke requires both a clean CSV review/deduplication result and a
+quarantined EICAR fixture before the feature flag may replace `sync-mvp`.
+
+### Production recovery
+
+The Gmail failure is caused by the deployed runtime inheriting
+`FLIGHT_MAP_RELEASE_WRITES_PAUSED=true`, which blocks database-backed session
+creation after successful Google OAuth. Keep exactly one persistent Production
+value of `FLIGHT_MAP_RELEASE_WRITES_PAUSED=false`, then create a fresh normal
+Production deployment:
+
+```powershell
+vercel deploy --prod --yes --archive=tgz
+```
+
+Do not use the airport control-plane `npm run deploy:production` script for
+this recovery because it injects the paused value. Verify one clean-browser
+Google sign-in reaches `/map` after the new deployment is Ready.
 
 Run launch-schema checks with `npm run test:schema`. To also exercise clean and
 upgrade migration paths, use a PostgreSQL role allowed to create temporary
@@ -215,7 +245,7 @@ See [`docs/product-architecture.md`](docs/product-architecture.md) for MVP bound
 See [`docs/logbook-csv-imports.md`](docs/logbook-csv-imports.md) for exact
 automatic formats, evidence-backed mapping presets, generic CSV behavior, and
 known limitations.
-See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the deliberately gated giffdev/Vercel release path.
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the normal giffdev/Vercel deployment path.
 
 The explicit development preview still uses representative/local data. The
 persisted path uses authenticated, per-user PostgreSQL records and private
