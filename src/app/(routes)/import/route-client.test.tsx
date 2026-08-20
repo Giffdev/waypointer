@@ -174,7 +174,7 @@ describe("development import preview", () => {
     );
   });
 
-  it("keeps configured API mode on the authenticated upload flow", async () => {
+  it("auto-starts the configured authenticated upload flow", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -236,7 +236,6 @@ describe("development import preview", () => {
       input,
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -249,8 +248,22 @@ describe("development import preview", () => {
     );
   });
 
-  it("supports drag and drop and reflects the production upload limit", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ batches: [] })));
+  it("auto-starts the same import path for drag and drop", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/import/upload") {
+        return new Response(
+          JSON.stringify({
+            error: { code: "test-stop", message: "Drop upload captured." },
+          }),
+          {
+            status: 422,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(
       <ImportRouteClientView
         data={data}
@@ -274,16 +287,27 @@ describe("development import preview", () => {
         ],
       },
     });
-    expect(await screen.findByText(/flightdiary\.csv/)).toBeInTheDocument();
-    expect(await screen.findByText(/flightdiary\.csv/)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Drop upload captured.",
+    );
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
-    ).toBeEnabled();
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
   });
 
-  it("makes a valid ForeFlight upload visibly and accessibly ready", async () => {
+  it("makes an auto-started upload visibly and accessibly busy", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ batches: [] })));
+    let resolveUpload!: (response: Response) => void;
+    const uploadResponse = new Promise<Response>((resolve) => {
+      resolveUpload = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/import/upload") return uploadResponse;
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(
       <ImportRouteClientView
         data={data}
@@ -293,11 +317,9 @@ describe("development import preview", () => {
       />,
     );
 
-    const upload = screen.getByRole("button", { name: "Upload and process" });
-    expect(upload).toBeDisabled();
-    expect(upload).toHaveClass("import-upload-button", "disabled");
-    expect(upload).toHaveAttribute("aria-busy", "false");
-    expect(screen.getByText("Choose or drop a CSV to enable upload."))
+    expect(screen.queryByRole("button", { name: /upload|import/i }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("Choose or drop a CSV to start an import."))
       .toBeInTheDocument();
 
     await user.upload(
@@ -305,12 +327,352 @@ describe("development import preview", () => {
       new File([foreFlightCsv], "foreflight.csv", { type: "text/csv" }),
     );
 
-    expect(upload).toBeEnabled();
-    expect(upload).toHaveClass("ready");
-    expect(upload).not.toHaveClass("disabled");
-    expect(screen.getByText(
-      "ForeFlight Logbook Import detected. Ready to upload and process.",
-    )).toBeInTheDocument();
+    const uploading = await screen.findByRole("button", { name: "Uploading…" });
+    expect(uploading).toBeDisabled();
+    expect(uploading).toHaveClass("import-upload-button", "loading");
+    expect(uploading).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByLabelText("CSV file drop area")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+
+    resolveUpload(
+      new Response(
+        JSON.stringify({
+          error: { code: "test-stop", message: "Upload captured." },
+        }),
+        {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Upload captured.",
+    );
+  });
+
+  it("does nothing when the file picker is cancelled", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL) => Promise<Response>
+    >(
+      async () => jsonResponse({ batches: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Choose one supported CSV"), {
+      target: { files: [] },
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(0);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("Choose or drop a CSV to start an import."))
+      .toBeInTheDocument();
+  });
+
+  it("rejects invalid CSV content locally without submitting it", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL) => Promise<Response>
+    >(
+      async () => jsonResponse({ batches: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("Choose one supported CSV"),
+      new File(
+        [`${fr24Csv.split("\n")[0]}\n2026-04-05,short`],
+        "broken.csv",
+        { type: "text/csv" },
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /unexpected number of columns/i,
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Try import again" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stays busy through post-upload refresh and prevents a second submission", async () => {
+    const user = userEvent.setup();
+    let resolveDetail!: (response: Response) => void;
+    const detailResponse = new Promise<Response>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        return jsonResponse({
+          batchId: "batch-busy-refresh",
+          status: "review",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-busy-refresh")) {
+        return (await detailResponse).clone();
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    const file = new File([fr24Csv], "one-upload.csv", {
+      type: "text/csv",
+    });
+    await user.upload(input, file);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([request]) =>
+          String(request).includes("/api/import/batches/batch-busy-refresh"),
+        ),
+      ).toBe(true),
+    );
+    const uploading = await screen.findByRole("button", { name: "Uploading…" });
+    expect(input).toBeDisabled();
+    expect(screen.getByLabelText("CSV file drop area")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    fireEvent.click(uploading);
+    fireEvent.drop(screen.getByLabelText("CSV file drop area"), {
+      dataTransfer: { files: [file] },
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([request]) => String(request) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([request]) =>
+        String(request).includes("/api/import/batches/batch-busy-refresh"),
+      ),
+    ).toHaveLength(1);
+
+    resolveDetail(
+      jsonResponse({
+        batch: {
+          contractVersion: 1,
+          id: "batch-busy-refresh",
+          fileName: "one-upload.csv",
+          status: "review",
+          counts: {
+            totalRows: 1,
+            parsedRows: 1,
+            readyRows: 0,
+            acceptedRows: 0,
+            skippedRows: 0,
+            pendingRows: 1,
+            committedFlights: 0,
+            attachedSources: 0,
+          },
+          createdAt: "2026-08-20T00:00:00.000Z",
+          updatedAt: "2026-08-20T00:00:01.000Z",
+          rows: {
+            page: 1,
+            pageSize: 25,
+            totalRows: 0,
+            totalPages: 1,
+            rows: [],
+          },
+        },
+      }),
+    );
+    expect(await screen.findByText("Import summary")).toBeInTheDocument();
+    expect(input).toBeEnabled();
+    expect(
+      fetchMock.mock.calls.filter(([request]) =>
+        String(request).includes("/api/import/batches/batch-busy-refresh"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not offer upload retry after the server accepts a batch", async () => {
+    const user = userEvent.setup();
+    let batchAccepted = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        batchAccepted = true;
+        return jsonResponse({
+          batchId: "batch-refresh-failed",
+          status: "review",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-refresh-failed")) {
+        return new Response(null, { status: 503 });
+      }
+      if (url === "/api/import/batches" && batchAccepted) {
+        return new Response(null, { status: 503 });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("Choose one supported CSV"),
+      new File([fr24Csv], "accepted.csv", { type: "text/csv" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Uploading…" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /import (?:was accepted, but its )?status could not be refreshed/i,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Try import again" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([request]) => String(request) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("allows the same file after both a failed and completed attempt", async () => {
+    const user = userEvent.setup();
+    let uploadCount = 0;
+    const completion = {
+      totalRows: 1,
+      importedRows: 1,
+      duplicateRows: 0,
+      skippedRows: 0,
+      invalidRows: 0,
+      reviewRequiredRows: 0,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        uploadCount += 1;
+        if (uploadCount === 2) {
+          return jsonResponse({
+            batchId: "batch-complete-reselect",
+            status: "committed",
+            reused: false,
+            completion,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "test-stop",
+              message:
+                uploadCount === 1
+                  ? "First attempt failed."
+                  : "Same file selected after completion.",
+            },
+          }),
+          {
+            status: 422,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url.startsWith("/api/import/batches/batch-complete-reselect")) {
+        return jsonResponse({
+          batch: {
+            contractVersion: 1,
+            id: "batch-complete-reselect",
+            fileName: "repeat.csv",
+            status: "committed",
+            counts: {
+              totalRows: 1,
+              parsedRows: 1,
+              readyRows: 1,
+              acceptedRows: 1,
+              skippedRows: 0,
+              pendingRows: 0,
+              committedFlights: 1,
+              attachedSources: 1,
+            },
+            createdAt: "2026-08-20T00:00:00.000Z",
+            updatedAt: "2026-08-20T00:00:01.000Z",
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    const file = new File([fr24Csv], "repeat.csv", { type: "text/csv" });
+    await user.upload(input, file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "First attempt failed.",
+    );
+
+    await user.upload(input, file);
+    expect(await screen.findByText("Import finished")).toBeInTheDocument();
+
+    await user.upload(input, file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Same file selected after completion.",
+    );
+    expect(uploadCount).toBe(3);
   });
 
   it("automatically maps an unambiguous generic CSV", async () => {
@@ -352,18 +714,10 @@ describe("development import preview", () => {
       ),
     );
     expect(
-      await screen.findByText(
-        "Generic CSV detected. Ready to upload and process.",
-      ),
-    ).toBeInTheDocument();
-    expect(
       screen.queryByRole("heading", {
         name: "Match this CSV to flight fields",
       }),
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
-    );
     await screen.findByText("Mapping captured.");
 
     const uploadCall = fetchMock.mock.calls.find(
@@ -465,7 +819,7 @@ describe("development import preview", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("3 required")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeDisabled();
 
     await user.selectOptions(screen.getByLabelText(/Flight date/), "TripDay");
@@ -482,12 +836,12 @@ describe("development import preview", () => {
     expect(screen.getByText("0 need attention")).toBeInTheDocument();
     expect(screen.getByText("SEA → JFK")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeEnabled();
     expect(screen.queryByText(/do-not-display/)).not.toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     );
     await screen.findByText("Unknown mapping captured.");
     const uploadCall = fetchMock.mock.calls.find(
@@ -581,7 +935,7 @@ describe("development import preview", () => {
       name: "Match this CSV to flight fields",
     });
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeDisabled();
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/import/upload/initiate",
@@ -598,7 +952,7 @@ describe("development import preview", () => {
     );
     await screen.findByText("1 valid");
     await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     );
     await screen.findByRole("button", { name: "Cancel import" });
 
@@ -696,7 +1050,6 @@ describe("development import preview", () => {
       type: "text/csv",
     });
     await user.upload(screen.getByLabelText("Choose one supported CSV"), file);
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -796,12 +1149,13 @@ describe("development import preview", () => {
 
     await user.upload(
       screen.getByLabelText("Choose one supported CSV"),
-      new File([`${fr24Csv},${eicar}`], "durable-eicar.csv", {
-        type: "text/csv",
-      }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      new File(
+        [fr24Csv.replace("Leisure,,101", `Leisure,${eicar},101`)],
+        "durable-eicar.csv",
+        {
+          type: "text/csv",
+        },
+      ),
     );
 
     expect(await screen.findByText("Import quarantined")).toBeInTheDocument();
@@ -877,9 +1231,6 @@ describe("development import preview", () => {
     await user.upload(
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "already-imported.csv", { type: "text/csv" }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
     );
 
     expect(await screen.findByText("Already imported")).toBeInTheDocument();
@@ -969,9 +1320,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "scanner-retry.csv", { type: "text/csv" }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
-    );
     await user.click(await screen.findByRole("button", { name: "Retry import" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1021,7 +1369,6 @@ describe("development import preview", () => {
         { type: "text/csv" },
       ),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This CSV does not match a supported ForeFlight or myFlightradar24 export.",
@@ -1101,7 +1448,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByText("Import finished")).toBeInTheDocument();
     expect(screen.getByText("2 imported")).toBeInTheDocument();
@@ -1179,7 +1525,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "real-export.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByText("Import complete")).toBeInTheDocument();
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/map"));
@@ -1211,7 +1556,7 @@ describe("development import preview", () => {
         });
       }
       if (url.startsWith("/api/import/batches/batch-raced-review")) {
-        return detailResponse;
+        return (await detailResponse).clone();
       }
       return jsonResponse({ batches: [] });
     });
@@ -1228,7 +1573,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "raced.csv", { type: "text/csv" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Upload and process" }));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -1419,7 +1763,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "review.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
     expect(await screen.findByText("Import summary")).toBeInTheDocument();
     expect(screen.getByText("1 need review")).toBeInTheDocument();
     expect(

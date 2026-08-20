@@ -25,6 +25,7 @@ import {
 } from "@/lib/import/registry";
 import {
   detectGenericCsvPreset,
+  GenericCsvImportError,
   inspectGenericCsv,
   previewGenericCsv,
   serializeGenericCsvMapping,
@@ -204,6 +205,8 @@ function ImportWorkflow({
   const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const mappingPreviewRequest = useRef(0);
+  const fileSelectionRequest = useRef(0);
+  const uploadInFlight = useRef(false);
   const detailRequest = useRef(0);
   const navigatedBatchId = useRef<string | undefined>(undefined);
   const polling = useRef<ImportPollingState | undefined>(undefined);
@@ -211,6 +214,7 @@ function ImportWorkflow({
   const [filePreparation, setFilePreparation] = useState<FilePreparation>({
     kind: "idle",
   });
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [phase, setPhase] = useState<ClientPhase>("idle");
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [activeBatchId, setActiveBatchId] = useState<string>();
@@ -227,6 +231,7 @@ function ImportWorkflow({
   );
 
   async function selectFile(nextFile: File) {
+    const requestId = ++fileSelectionRequest.current;
     const validationError = validateCsvFile(nextFile, maxFileBytes);
     setError(validationError);
     setFile(validationError ? null : nextFile);
@@ -234,13 +239,24 @@ function ImportWorkflow({
     if (validationError) return;
 
     try {
-      const content = await nextFile.text();
+      const content = await readPreviewCsv(nextFile, maxFileBytes);
+      if (requestId !== fileSelectionRequest.current) return;
       const detection = detectFlightImportFormat(content);
       if (detection.status === "recognized") {
-        setFilePreparation({
+        const parsed = parseFlightImport(content);
+        if (parsed.status !== "parsed") {
+          const message = previewParseError(parsed);
+          setFile(null);
+          setFilePreparation({ kind: "error", message });
+          setError(message);
+          return;
+        }
+        const preparation: FilePreparation = {
           kind: "automatic",
           label: detection.label,
-        });
+        };
+        setFilePreparation(preparation);
+        await uploadSelectedFile(nextFile, preparation);
         return;
       }
       const inspection = inspectGenericCsv(content);
@@ -250,11 +266,14 @@ function ImportWorkflow({
       const mapping = prepareSuggestedMapping(suggestion);
       const normalized = validGenericMapping(mapping);
       if (normalized) {
-        setFilePreparation({
+        previewGenericCsv(content, normalized);
+        const preparation: FilePreparation = {
           kind: "automatic",
           label: inspection.preset?.label ?? "Generic CSV",
           mapping: normalized,
-        });
+        };
+        setFilePreparation(preparation);
+        await uploadSelectedFile(nextFile, preparation);
         return;
       }
       setFilePreparation({
@@ -262,12 +281,18 @@ function ImportWorkflow({
         inspection,
         mapping,
       });
-    } catch {
+    } catch (selectionError) {
+      if (requestId !== fileSelectionRequest.current) return;
+      const message =
+        selectionError instanceof GenericCsvImportError
+          ? "We could not inspect this CSV. Check that it has one header row and UTF-8 text."
+          : messageFor(selectionError);
+      setFile(null);
       setFilePreparation({
         kind: "error",
-        message:
-          "We could not inspect this CSV. Check that it has one header row and UTF-8 text.",
+        message,
       });
+      setError(message);
     }
   }
 
@@ -381,7 +406,13 @@ function ImportWorkflow({
   }, [loadBatches]);
 
   useEffect(() => {
-    if (!activeBatchId || phase === "processing" || phase === "committing") {
+    if (
+      uploadBusy ||
+      !activeBatchId ||
+      phase === "processing" ||
+      phase === "committing" ||
+      (detail?.id === activeBatchId && detail.rows.page === page)
+    ) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -390,9 +421,10 @@ function ImportWorkflow({
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeBatchId, loadDetail, page, phase]);
+  }, [activeBatchId, detail, loadDetail, page, phase, uploadBusy]);
 
   useEffect(() => {
+    if (uploadBusy) return;
     if (!activeBatchId || (phase !== "processing" && phase !== "committing")) {
       polling.current = undefined;
       return;
@@ -548,6 +580,7 @@ function ImportWorkflow({
     pausedPollingBatchId,
     phase,
     pollingRestartGeneration,
+    uploadBusy,
     visible,
   ]);
 
@@ -567,18 +600,29 @@ function ImportWorkflow({
     router.refresh();
   }, [activeBatchId, detail, redirectBatchId, router]);
 
-  async function uploadSelectedFile() {
-    if (!file) return;
+  async function uploadSelectedFile(
+    selectedFile = file,
+    preparation = filePreparation,
+  ) {
+    if (
+      !selectedFile ||
+      uploadInFlight.current ||
+      (preparation.kind !== "automatic" && preparation.kind !== "mapping")
+    ) {
+      return;
+    }
     const mapping =
-      filePreparation.kind === "mapping"
-        ? validGenericMapping(filePreparation.mapping)
-        : filePreparation.kind === "automatic"
-          ? filePreparation.mapping
+      preparation.kind === "mapping"
+        ? validGenericMapping(preparation.mapping)
+        : preparation.kind === "automatic"
+          ? preparation.mapping
         : undefined;
-    if (filePreparation.kind === "mapping" && !mapping) return;
+    if (preparation.kind === "mapping" && !mapping) return;
     const serializedMapping = mapping
       ? serializeGenericCsvMapping(mapping)
       : undefined;
+    uploadInFlight.current = true;
+    setUploadBusy(true);
     detailRequest.current += 1;
     resetPollingState();
     setRedirectBatchId(undefined);
@@ -589,7 +633,7 @@ function ImportWorkflow({
     try {
       let response: UploadImportResponse;
       if (durableImportEnabled) {
-        const contentType = file.type || "text/csv";
+        const contentType = selectedFile.type || "text/csv";
         const initiated = await apiRequest<{
           batchId: string;
           uploadUrl: string;
@@ -598,16 +642,16 @@ function ImportWorkflow({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            fileName: file.name,
+            fileName: selectedFile.name,
             contentType,
-            sizeBytes: file.size,
+            sizeBytes: selectedFile.size,
             idempotencyKey: crypto.randomUUID(),
           }),
         });
         const uploaded = await fetch(initiated.uploadUrl, {
           method: "PUT",
           headers: initiated.headers,
-          body: file,
+          body: selectedFile,
         });
         if (!uploaded.ok) {
           throw new Error("The private upload could not be completed.");
@@ -627,7 +671,7 @@ function ImportWorkflow({
         );
       } else {
         const body = new FormData();
-        body.set("file", file);
+        body.set("file", selectedFile);
         if (serializedMapping) body.set("mapping", serializedMapping);
         response = await apiRequest<UploadImportResponse>(
           "/api/import/upload",
@@ -639,16 +683,32 @@ function ImportWorkflow({
       setActiveBatchId(response.batchId);
       setPage(1);
       setPhase(phaseForStatus(response.status));
-      await loadDetail(response.batchId, 1);
-      await loadBatches();
       setFile(null);
       setFilePreparation({ kind: "idle" });
       if (fileInput.current) fileInput.current.value = "";
+      let refreshFailed = false;
+      try {
+        await loadDetail(response.batchId, 1);
+      } catch {
+        refreshFailed = true;
+      }
+      try {
+        await loadBatches();
+      } catch {
+        refreshFailed = true;
+      }
+      if (refreshFailed) {
+        setError(
+          "The import was accepted, but its status could not be refreshed.",
+        );
+      }
     } catch (uploadError) {
       setPhase("failed");
       setError(messageFor(uploadError));
+    } finally {
+      uploadInFlight.current = false;
+      setUploadBusy(false);
     }
-
   }
 
   async function cancelActiveImport() {
@@ -740,12 +800,17 @@ function ImportWorkflow({
 
   const uploadDisabled =
     !file ||
-    phase === "uploading" ||
-    filePreparation.kind === "inspecting" ||
+    uploadBusy ||
     (filePreparation.kind === "mapping" &&
       !validGenericMapping(filePreparation.mapping));
+  const showUploadAction =
+    uploadBusy ||
+    filePreparation.kind === "mapping" ||
+    (phase === "failed" &&
+      file !== null &&
+      filePreparation.kind === "automatic");
   const uploadState =
-    phase === "uploading" ? "loading" : uploadDisabled ? "disabled" : "ready";
+    uploadBusy ? "loading" : uploadDisabled ? "disabled" : "ready";
 
   return (
     <main className="app-shell" id="main-content" tabIndex={-1}>
@@ -770,7 +835,10 @@ function ImportWorkflow({
               id="flight-import-file"
               inputRef={fileInput}
               file={file}
-              disabled={phase === "uploading"}
+              disabled={
+                uploadBusy ||
+                filePreparation.kind === "inspecting"
+              }
               maxFileBytes={maxFileBytes}
               onSelect={selectFile}
             />
@@ -787,37 +855,45 @@ function ImportWorkflow({
               the default applies to the whole file and can be changed before
               upload.
             </p>
-            <button
-              type="button"
-              className={`import-upload-button ${uploadState}`}
-              disabled={uploadDisabled}
-              onClick={uploadSelectedFile}
-              aria-describedby="import-upload-readiness"
-              aria-busy={phase === "uploading"}
-            >
-              {phase === "uploading" ? (
-                <LoaderCircle size={16} aria-hidden="true" />
-              ) : (
-                <CloudUpload size={16} aria-hidden="true" />
-              )}
-              {phase === "uploading" ? "Uploading…" : "Upload and process"}
-            </button>
+            {showUploadAction ? (
+              <button
+                type="button"
+                className={`import-upload-button ${uploadState}`}
+                disabled={uploadDisabled}
+                onClick={() => void uploadSelectedFile()}
+                aria-describedby="import-upload-readiness"
+                aria-busy={uploadBusy}
+              >
+                {uploadBusy ? (
+                  <LoaderCircle size={16} aria-hidden="true" />
+                ) : (
+                  <CloudUpload size={16} aria-hidden="true" />
+                )}
+                {uploadBusy
+                  ? "Uploading…"
+                  : phase === "failed"
+                    ? "Try import again"
+                    : "Import mapped CSV"}
+              </button>
+            ) : null}
             <small id="import-upload-readiness" aria-live="polite">
-              {phase === "uploading"
+              {uploadBusy
                 ? "Uploading securely. Keep this page open."
                 : file
                   ? filePreparation.kind === "mapping"
                     ? validGenericMapping(filePreparation.mapping)
-                    ? "Column mapping is complete. Ready to upload and process."
+                    ? "Column mapping is complete. Ready to import."
                       : "Map the date, origin, and destination columns to continue."
                     : filePreparation.kind === "inspecting"
                       ? "Inspecting CSV headers."
                       : filePreparation.kind === "error"
-                        ? "Header preview unavailable. The server will validate this file."
+                        ? filePreparation.message
                         : filePreparation.kind === "automatic"
-                          ? `${filePreparation.label} detected. Ready to upload and process.`
-                          : "Ready to upload and process."
-                  : "Choose or drop a CSV to enable upload."}
+                          ? phase === "failed"
+                            ? `${filePreparation.label} detected. Ready to try again.`
+                            : `${filePreparation.label} detected. Import starts automatically.`
+                          : "Ready to import."
+                  : "Choose or drop a CSV to start an import."}
             </small>
           </div>
 
