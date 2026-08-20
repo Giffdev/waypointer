@@ -25,6 +25,13 @@ const representatives = [
   "S43",
   "3U2",
   "0S7",
+  "REP",
+  "VDSR",
+  "SAI",
+  "VDSA",
+  "SXF",
+  "BER",
+  "EDDB",
 ].map((code) => {
   const result = resolve(code);
   return {
