@@ -32,12 +32,6 @@ const journey = [
   },
 ] as const;
 
-const previewFlights = [
-  { date: "JUN 18", route: "SEA → SFO", detail: "2h 08m · A320" },
-  { date: "MAY 04", route: "SFO → HNL", detail: "5h 31m · B789" },
-  { date: "MAR 22", route: "HNL → KOA", detail: "0h 47m · C172" },
-] as const;
-
 function Brand() {
   return (
     <span className={styles.brand}>
@@ -47,51 +41,121 @@ function Brand() {
   );
 }
 
-function ProductPreview() {
+function MapExperiencePreview() {
   return (
-    <div className={styles.productWindow} data-preview="synthetic">
-      <div className={styles.windowBar}>
-        <Brand />
-        <span className={styles.syntheticBadge}>Synthetic preview</span>
-      </div>
-      <div className={styles.productBody}>
-        <aside className={styles.previewSidebar} aria-label="Example flight statistics">
-          <p className={styles.previewEyebrow}>All flight history</p>
-          <h2>Across oceans and runways.</h2>
-          <div className={styles.previewStats}>
-            <div><strong>128</strong><span>Flights</span></div>
-            <div><strong>186h</strong><span>Air time</span></div>
-            <div><strong>42</strong><span>Airports</span></div>
-            <div><strong>68k</strong><span>Miles</span></div>
+    <figure
+      className={styles.productWindow}
+      data-preview="demo-fixture"
+      data-visual="map-experience"
+      role="img"
+      aria-label="Waypointer map showing demo flight routes across an interactive globe with map controls and flight statistics."
+    >
+      <div aria-hidden="true">
+        <div className={styles.windowBar}>
+          <Brand />
+          <div className={styles.previewNavigation}>
+            <strong>Map</strong>
+            <span>Flights</span>
+            <span>Import</span>
           </div>
-          <div className={styles.previewList}>
-            {previewFlights.map((flight) => (
-              <div key={flight.date + flight.route}>
-                <span>{flight.date}</span>
-                <p><strong>{flight.route}</strong><small>{flight.detail}</small></p>
-              </div>
-            ))}
+        </div>
+        <div className={styles.mapExperience}>
+          <svg
+            className={styles.previewGlobe}
+            viewBox="0 0 720 430"
+            preserveAspectRatio="xMidYMid slice"
+          >
+            <defs>
+              <radialGradient id="preview-ocean" cx="35%" cy="28%" r="72%">
+                <stop offset="0%" stopColor="#1d5263" />
+                <stop offset="58%" stopColor="#0b2d3d" />
+                <stop offset="100%" stopColor="#061822" />
+              </radialGradient>
+              <clipPath id="preview-globe-clip">
+                <circle cx="415" cy="203" r="186" />
+              </clipPath>
+              <filter id="preview-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            <rect width="720" height="430" fill="#061720" />
+            <circle
+              cx="415"
+              cy="203"
+              r="193"
+              fill="#071c27"
+              stroke="#315c66"
+              strokeOpacity=".55"
+            />
+            <circle cx="415" cy="203" r="186" fill="url(#preview-ocean)" />
+            <g clipPath="url(#preview-globe-clip)">
+              <g className={styles.globeGrid}>
+                <ellipse cx="415" cy="203" rx="176" ry="55" />
+                <ellipse cx="415" cy="203" rx="176" ry="112" />
+                <ellipse cx="415" cy="203" rx="86" ry="181" />
+                <ellipse cx="415" cy="203" rx="143" ry="181" />
+              </g>
+              <g className={styles.globeLand}>
+                <path d="M239 141 264 111 307 91 347 101 364 124 346 145 317 151 304 174 277 174 256 160Z" />
+                <path d="M322 178 352 184 368 211 357 236 369 263 350 296 326 277 319 240 301 213Z" />
+                <path d="M459 109 492 92 535 101 566 127 557 150 525 160 503 151 484 171 453 160 438 137Z" />
+                <path d="M467 176 501 171 523 194 514 223 495 243 482 277 457 257 446 218Z" />
+                <path d="M544 242 575 235 597 254 585 275 551 272 533 255Z" />
+              </g>
+              <g className={styles.previewRoutes} filter="url(#preview-glow)">
+                <path d="M290 139 Q339 87 389 139" />
+                <path d="M290 139 Q252 210 224 277" />
+                <path d="M290 139 Q398 34 505 130" />
+                <path d="M224 277 Q364 140 505 130" />
+              </g>
+              <g className={styles.previewAirports}>
+                <circle cx="290" cy="139" r="5" />
+                <circle cx="389" cy="139" r="5" />
+                <circle cx="224" cy="277" r="5" />
+                <circle cx="505" cy="130" r="5" />
+                <text x="277" y="128">SEA</text>
+                <text x="395" y="133">JFK</text>
+                <text x="203" y="297">HNL</text>
+                <text x="512" y="124">LHR</text>
+              </g>
+            </g>
+          </svg>
+
+          <div className={styles.previewMapIntro}>
+            <span>Your saved flight history</span>
+            <strong>Your world,<br />flight by flight.</strong>
+            <small>128 flights · 68 routes</small>
           </div>
-        </aside>
-        <div className={styles.previewMap} aria-label="Synthetic route map preview">
-          <div className={styles.mapGrid} />
-          <span className={`${styles.routeLine} ${styles.routeOne}`} />
-          <span className={`${styles.routeLine} ${styles.routeTwo}`} />
-          <span className={`${styles.routeLine} ${styles.routeThree}`} />
-          <span className={`${styles.airportDot} ${styles.seattle}`}><i />SEA</span>
-          <span className={`${styles.airportDot} ${styles.sanFrancisco}`}><i />SFO</span>
-          <span className={`${styles.airportDot} ${styles.honolulu}`}><i />HNL</span>
-          <span className={`${styles.airportDot} ${styles.kona}`}><i />KOA</span>
-          <div className={styles.mapLegend}><Route size={14} /> 3 routes shown</div>
+
+          <div className={styles.previewControls}>
+            <span>Explore globe &amp; regions</span>
+            <div>
+              <i>+</i>
+              <i>−</i>
+              <i><RotateCcw size={11} /></i>
+            </div>
+            <small>Globe view</small>
+          </div>
+
+          <div className={styles.previewStatsRibbon}>
+            <span><small>Flights</small><strong>128</strong></span>
+            <span><small>Air time</small><strong>186h</strong></span>
+            <span><small>Airports</small><strong>42</strong></span>
+            <span><small>Distance</small><strong>68k mi</strong></span>
+          </div>
         </div>
       </div>
-    </div>
+    </figure>
   );
 }
 
 function ImportPreview() {
   return (
-    <div className={styles.importPreview} data-preview="synthetic">
+    <div className={styles.importPreview} data-preview="demo-fixture">
       <div className={styles.importTop}>
         <div>
           <span className={styles.previewEyebrow}>Import progress</span>
@@ -144,7 +208,7 @@ export function LandingPage() {
             </div>
             <p className={styles.ctaNote}><LockKeyhole size={15} /> Private by default. You decide what leaves your account.</p>
           </div>
-          <ProductPreview />
+          <MapExperiencePreview />
         </section>
 
         <section className={styles.sourceStrip} aria-label="Supported import sources">

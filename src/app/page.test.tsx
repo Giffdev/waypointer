@@ -78,11 +78,20 @@ describe("signed-out homepage", () => {
     );
   });
 
-  it("uses explicitly synthetic product previews and a responsive journey structure", async () => {
+  it("uses a safe demo map experience and a responsive journey structure", async () => {
     const { container } = render(await Home());
 
-    expect(screen.getByText("Synthetic preview")).toBeTruthy();
-    expect(container.querySelectorAll('[data-preview="synthetic"]')).toHaveLength(2);
+    const mapPreview = screen.getByRole("img", {
+      name: /Waypointer map showing demo flight routes across an interactive globe/i,
+    });
+    expect(mapPreview.getAttribute("data-visual")).toBe("map-experience");
+    expect(mapPreview.querySelector("svg")).toBeTruthy();
+    expect(
+      Array.from(mapPreview.querySelectorAll("text"), (label) => label.textContent),
+    ).toEqual(["SEA", "JFK", "HNL", "LHR"]);
+    expect(container.querySelectorAll('[data-preview="demo-fixture"]')).toHaveLength(2);
+    expect(screen.queryByText("Synthetic preview")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("ol")?.querySelectorAll("li")).toHaveLength(3);
     expect(screen.getByText("ForeFlight")).toBeTruthy();
     expect(screen.getByText("Generic CSV")).toBeTruthy();
