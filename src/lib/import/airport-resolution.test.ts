@@ -48,6 +48,48 @@ const quillayute = reference("KUIL", {
   iataCode: "UIL",
   localCode: "UIL",
 });
+const formerSiemReap = reference("KH-0003", {
+  type: "closed",
+  name: "Siem Reap International Airport",
+  isoCountry: "KH",
+  municipality: "Siem Reap",
+  latitude: 13.410676,
+  longitude: 103.812074,
+  keywords: "REP, VDSR",
+});
+const siemReapAngkor = reference("VDSA", {
+  type: "large_airport",
+  name: "Siem Reap-Angkor International Airport",
+  isoCountry: "KH",
+  municipality: "Siem Reap",
+  latitude: 13.36974,
+  longitude: 104.223831,
+  scheduledService: true,
+  gpsCode: "VDSA",
+  iataCode: "SAI",
+  localCode: "VDSA",
+});
+const formerSchonefeld = reference("DE-0440", {
+  type: "closed",
+  name: "Berlin-Schönefeld Airport",
+  isoCountry: "DE",
+  municipality: "Berlin",
+  latitude: 52.380001,
+  longitude: 13.5225,
+  keywords: "BER, EDDB, ETBS, Schoenefeld, Terminal 5, SXF",
+});
+const berlinBrandenburg = reference("EDDB", {
+  type: "large_airport",
+  name: "Berlin Brandenburg Airport",
+  isoCountry: "DE",
+  municipality: "Berlin",
+  latitude: 52.361738,
+  longitude: 13.502341,
+  scheduledService: true,
+  gpsCode: "EDDB",
+  iataCode: "BER",
+  localCode: "EDDB",
+});
 
 describe("airport identifier resolution", () => {
   it("resolves W01 as an FAA LID and preserves OMK IATA/ICAO resolution", () => {
@@ -110,6 +152,75 @@ describe("airport identifier resolution", () => {
     expect(resolve("Forks")).toEqual({
       status: "not-found",
       identifier: "FORKS",
+    });
+  });
+
+  it("preserves former Siem Reap codes without aliasing them to Siem Reap-Angkor", () => {
+    const resolve = createAirportResolver([formerSiemReap, siemReapAngkor]);
+
+    expect(resolve("rep")).toMatchObject({
+      status: "resolved",
+      reference: {
+        ident: "KH-0003",
+        name: "Siem Reap International Airport",
+        type: "closed",
+      },
+    });
+    expect(resolve("VDSR")).toMatchObject({
+      status: "resolved",
+      reference: { ident: "KH-0003" },
+    });
+    expect(resolve("SAI")).toMatchObject({
+      status: "resolved",
+      reference: {
+        ident: "VDSA",
+        name: "Siem Reap-Angkor International Airport",
+      },
+    });
+    expect(resolve("VDSA")).toMatchObject({
+      status: "resolved",
+      reference: { ident: "VDSA" },
+    });
+  });
+
+  it("keeps reassigned Berlin codes on distinct historical and current records", () => {
+    const resolve = createAirportResolver([
+      formerSchonefeld,
+      berlinBrandenburg,
+    ]);
+
+    expect(resolve("SXF")).toMatchObject({
+      status: "resolved",
+      reference: {
+        ident: "DE-0440",
+        name: "Berlin-Schönefeld Airport",
+        type: "closed",
+      },
+    });
+    expect(resolve("BER")).toMatchObject({
+      status: "resolved",
+      reference: {
+        ident: "EDDB",
+        name: "Berlin Brandenburg Airport",
+      },
+    });
+    expect(resolve("EDDB")).toMatchObject({
+      status: "resolved",
+      reference: { ident: "EDDB" },
+    });
+  });
+
+  it("does not apply curated aliases when a source identity no longer matches", () => {
+    expect(
+      createAirportResolver([
+        {
+          ...formerSiemReap,
+          name: "Different Airport",
+        },
+      ])("REP"),
+    ).toEqual({
+      status: "not-found",
+      identifier: "REP",
     });
   });
 
