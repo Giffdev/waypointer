@@ -481,7 +481,7 @@ describe("airport catalog refresh identity planning", () => {
       );
 
       expect(references).toHaveLength(85_836);
-      expect(references.flatMap(airportIdentifierAliases)).toHaveLength(182_149);
+      expect(references.flatMap(airportIdentifierAliases)).toHaveLength(182_152);
       expect(assignment.ids).toEqual(existing.map(({ id }) => id));
       expect(assignment).toMatchObject({
         matchedExisting: 85_836,

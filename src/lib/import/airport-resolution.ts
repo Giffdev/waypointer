@@ -33,6 +33,35 @@ export type AirportIdentifierAlias = {
   priority: number;
 };
 
+type CuratedAirportIdentifierAliases = {
+  name: string;
+  isoCountry: string;
+  type: string;
+  aliases: AirportIdentifierAlias[];
+};
+
+const CURATED_AIRPORT_IDENTIFIER_ALIASES: Readonly<
+  Record<string, CuratedAirportIdentifierAliases>
+> = {
+  "DE-0440": {
+    name: "Berlin-Schönefeld Airport",
+    isoCountry: "DE",
+    type: "closed",
+    aliases: [
+      { code: "SXF", type: "iata", priority: 20 },
+    ],
+  },
+  "KH-0003": {
+    name: "Siem Reap International Airport",
+    isoCountry: "KH",
+    type: "closed",
+    aliases: [
+      { code: "VDSR", type: "icao", priority: 10 },
+      { code: "REP", type: "iata", priority: 20 },
+    ],
+  },
+};
+
 export type AirportCatalogAudit = {
   totalAirports: number;
   usFaaLidAirports: number;
@@ -88,6 +117,14 @@ function canonicalCode(reference: AirportReference): string {
 export function airportIdentifierAliases(
   reference: AirportReference,
 ): AirportIdentifierAlias[] {
+  const curated = CURATED_AIRPORT_IDENTIFIER_ALIASES[reference.ident];
+  const curatedAliases =
+    curated &&
+    reference.name === curated.name &&
+    reference.isoCountry === curated.isoCountry &&
+    reference.type === curated.type
+      ? curated.aliases
+      : [];
   const candidates: AirportIdentifierAlias[] = [
     ...(reference.gpsCode
       ? [{ code: reference.gpsCode, type: "icao" as const, priority: 10 }]
@@ -95,6 +132,7 @@ export function airportIdentifierAliases(
     ...(reference.iataCode
       ? [{ code: reference.iataCode, type: "iata" as const, priority: 20 }]
       : []),
+    ...curatedAliases,
     ...(reference.localCode
       ? [{
           code: reference.localCode,
