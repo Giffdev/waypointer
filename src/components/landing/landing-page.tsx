@@ -22,8 +22,8 @@ const journey = [
   },
   {
     icon: FileSearch,
-    title: "Automatic when resolved",
-    copy: "Clean, resolved rows map, deduplicate, and commit automatically. Only unresolved exceptions wait for review.",
+    title: "See your flights on the map",
+    copy: "Waypointer checks each uploaded flight, asks for help only when something needs attention, and adds ready flights to your map automatically.",
   },
   {
     icon: Map,

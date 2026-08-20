@@ -54,14 +54,19 @@ describe("signed-out homepage", () => {
     ).toBe(true);
   });
 
-  it("describes automatic commit with review only for unresolved exceptions", async () => {
+  it("explains automatic map updates in user-centered language", async () => {
     render(await Home());
 
-    expect(screen.getByText(/Unresolved fields and rows stay available for review/i)).toBeTruthy();
-    expect(screen.getByText(/Clean, resolved rows map, deduplicate, and commit automatically/i)).toBeTruthy();
-    expect(
-      screen.getAllByText(/Only unresolved exceptions wait for review/i).length,
-    ).toBeGreaterThan(0);
+    const heading = screen.getByRole("heading", {
+      name: "See your flights on the map",
+    });
+    const card = heading.closest("li");
+    expect(card?.querySelector("p")?.textContent).toBe(
+      "Waypointer checks each uploaded flight, asks for help only when something needs attention, and adds ready flights to your map automatically.",
+    );
+    expect(card?.textContent).not.toMatch(
+      /\b(commit\w*|resolved|unresolved|exceptions?|pipeline|processing state)\b/i,
+    );
     expect(screen.getByRole("heading", { name: /Private by default/i })).toBeTruthy();
   });
 
