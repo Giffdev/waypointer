@@ -17,6 +17,7 @@ import {
   type DragEvent,
   type RefObject,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   detectFlightImportFormat,
@@ -1043,9 +1044,9 @@ function BatchReview({
               rows. Opening your map now.
             </small>
             <span>
-              <a href="/map">View map</a>
+              <Link href="/map">View map</Link>
               {" · "}
-              <a href="/flights">View flights</a>
+              <Link href="/flights">View flights</Link>
             </span>
           </span>
         </div>
