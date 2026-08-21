@@ -25,6 +25,8 @@ export function SharedMapView({ publicId }: { publicId: string }) {
   const [viewMode, setViewMode] = useState<MapViewMode>("globe");
 
   useEffect(() => {
+    let disposed = false;
+    let activeController: AbortController | null = null;
     const key = new URLSearchParams(window.location.hash.slice(1)).get("key");
     window.history.replaceState(
       window.history.state,
@@ -32,32 +34,71 @@ export function SharedMapView({ publicId }: { publicId: string }) {
       `${window.location.pathname}${window.location.search}`,
     );
     if (!key) {
-      queueMicrotask(() => setState("not-found"));
-      return;
-    }
-    const controller = new AbortController();
-    void fetch(`/api/shared/${encodeURIComponent(publicId)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key }),
-      signal: controller.signal,
-      cache: "no-store",
-    })
-      .then(async (response) => {
-        const body = await response.json();
-        if (response.status === 404) {
-          setState("not-found");
-          return;
-        }
-        if (!response.ok) throw new Error();
-        setProjection(body.map);
-        setState("ready");
-      })
-      .catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setState("error");
+      queueMicrotask(() => {
+        if (!disposed) setState("not-found");
       });
-    return () => controller.abort();
+      return () => {
+        disposed = true;
+      };
+    }
+
+    function loadProjection() {
+      if (disposed || activeController) return;
+      const controller = new AbortController();
+      activeController = controller;
+      setState("loading");
+
+      void fetch(`/api/shared/${encodeURIComponent(publicId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+        signal: controller.signal,
+        cache: "no-store",
+        referrerPolicy: "no-referrer",
+      })
+        .then(async (response) => {
+          const body = await response.json();
+          if (disposed || controller.signal.aborted) return;
+          if (response.status === 404) {
+            setProjection(null);
+            setState("not-found");
+            return;
+          }
+          if (!response.ok) throw new Error();
+          setProjection(body.map);
+          setState("ready");
+        })
+        .catch((error) => {
+          if (
+            disposed ||
+            (error instanceof DOMException && error.name === "AbortError")
+          ) {
+            return;
+          }
+          setProjection(null);
+          setState("error");
+        })
+        .finally(() => {
+          if (activeController === controller) activeController = null;
+        });
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") loadProjection();
+    }
+
+    window.addEventListener("focus", loadProjection);
+    window.addEventListener("pageshow", loadProjection);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    loadProjection();
+
+    return () => {
+      disposed = true;
+      activeController?.abort();
+      window.removeEventListener("focus", loadProjection);
+      window.removeEventListener("pageshow", loadProjection);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [publicId]);
 
   const mapData = useMemo(

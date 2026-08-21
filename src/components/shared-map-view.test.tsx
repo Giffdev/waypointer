@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SharedMapView } from "./shared-map-view";
@@ -26,28 +26,7 @@ describe("SharedMapView", () => {
   it("renders only the coarse view-only projection and offers the same viewer mode toggle", async () => {
     const user = userEvent.setup();
     const replaceState = vi.spyOn(window.history, "replaceState");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({
-      map: {
-        owner: { displayName: null },
-        summary: { flightCount: 3, routeCount: 2 },
-        routes: [
-          {
-            id: "out",
-            kind: "commercial",
-            flightCount: 2,
-            origin: { lat: 34, lon: -118.4, country: "United States" },
-            destination: { lat: 24.1, lon: -110.4, country: "Mexico" },
-          },
-          {
-            id: "back",
-            kind: "commercial",
-            flightCount: 1,
-            origin: { lat: 24.1, lon: -110.4, country: "Mexico" },
-            destination: { lat: 34, lon: -118.4, country: "United States" },
-          },
-        ],
-      },
-    })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
 
     render(<SharedMapView publicId="public-id" />);
 
@@ -62,6 +41,7 @@ describe("SharedMapView", () => {
       expect.objectContaining({
         method: "POST",
         cache: "no-store",
+        referrerPolicy: "no-referrer",
         body: JSON.stringify({ key: "s".repeat(43) }),
       }),
     );
@@ -95,7 +75,122 @@ describe("SharedMapView", () => {
     expect(await screen.findByRole("heading", { name: "Shared map not found" })).toBeVisible();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("clears a loaded projection when focus revalidation reports the link unavailable", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockResolvedValueOnce(json({
+        error: { code: "not-found", message: "Waypointer shared map not found." },
+      }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView publicId="public-id" />);
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    expect(
+      await screen.findByRole("heading", { name: "Shared map not found" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates a loaded projection when the page becomes visible", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockResolvedValueOnce(json({
+        error: { code: "not-found", message: "Waypointer shared map not found." },
+      }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView publicId="public-id" />);
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+    expect(
+      await screen.findByRole("heading", { name: "Shared map not found" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates a restored browser-history page through pageshow", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockResolvedValueOnce(json({
+        error: { code: "not-found", message: "Waypointer shared map not found." },
+      }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView publicId="public-id" />);
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("pageshow")));
+
+    expect(
+      await screen.findByRole("heading", { name: "Shared map not found" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides stale content without claiming revocation when revalidation fails", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockRejectedValueOnce(new TypeError("network unavailable"))
+      .mockResolvedValueOnce(json(sharedMap()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView publicId="public-id" />);
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    expect(
+      await screen.findByRole("heading", { name: "Shared map unavailable" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Shared map not found" }),
+    ).not.toBeInTheDocument();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
+
+function sharedMap() {
+  return {
+    map: {
+      owner: { displayName: null },
+      summary: { flightCount: 3, routeCount: 2 },
+      routes: [
+        {
+          id: "out",
+          kind: "commercial",
+          flightCount: 2,
+          origin: { lat: 34, lon: -118.4, country: "United States" },
+          destination: { lat: 24.1, lon: -110.4, country: "Mexico" },
+        },
+        {
+          id: "back",
+          kind: "commercial",
+          flightCount: 1,
+          origin: { lat: 24.1, lon: -110.4, country: "Mexico" },
+          destination: { lat: 34, lon: -118.4, country: "United States" },
+        },
+      ],
+    },
+  };
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

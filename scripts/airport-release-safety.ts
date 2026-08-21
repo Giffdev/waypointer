@@ -113,7 +113,7 @@ export interface AirportProductionPreflightEvidence {
   };
   migration: {
     manifestSha256: string;
-    boundary: "0014" | "0015";
+    boundary: "0014" | "0015" | "0016";
   };
   snapshot: {
     id: string;
@@ -488,7 +488,7 @@ function parseProductionPreflight(
     preflight.target.fingerprint !== approval.targetFingerprint ||
     preflight.target.databaseName !== approvalTarget.databaseName ||
     preflight.target.databaseOid !== approval.databaseOid ||
-    !["0014", "0015"].includes(preflight.migration.boundary) ||
+    !["0014", "0015", "0016"].includes(preflight.migration.boundary) ||
     !/^[a-f0-9]{64}$/.test(preflight.migration.manifestSha256) ||
     preflight.snapshot.id !== approval.snapshot.id ||
     preflight.snapshot.sha256 !== approval.snapshot.sha256 ||

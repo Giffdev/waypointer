@@ -4,10 +4,11 @@ import {
   publicTokenRateLimitKey,
   ShareNotFoundError,
 } from "@/lib/sharing/service";
+import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
 export const runtime = "nodejs";
 const PUBLIC_HEADERS = {
-  "Cache-Control": "no-store, max-age=0, s-maxage=0, must-revalidate",
+  ...SHARING_NO_STORE_HEADERS,
   "X-Content-Type-Options": "nosniff",
   "X-Robots-Tag": "noindex, nofollow, noarchive",
   "Referrer-Policy": "no-referrer",

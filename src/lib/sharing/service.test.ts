@@ -1,39 +1,42 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  getDb: vi.fn(),
+  withUserDb: vi.fn(),
+}));
+
+vi.mock("@/lib/db", () => ({
+  getDb: mocks.getDb,
+  withUserDb: mocks.withUserDb,
+}));
+
 import {
   formatSharePath,
-  parseShareSelection,
+  getPublicMapProjection,
+  parseShareSettings,
   publicTokenRateLimitKey,
   ShareValidationError,
 } from "./service";
 
-const flightA = "00000000-0000-4000-8000-000000000001";
-const flightB = "00000000-0000-4000-8000-000000000002";
-
 describe("map sharing contracts", () => {
-  it("requires separate explicit identity consent and an explicit selection", () => {
-    expect(() => parseShareSelection({ flightIds: [] })).toThrowError(
+  it("accepts only the identity choice and rejects caller flight selection", () => {
+    expect(() => parseShareSettings({})).toThrowError(
       ShareValidationError,
     );
-    expect(parseShareSelection({
-      flightIds: [],
+    expect(parseShareSettings({
       includeDisplayName: false,
     })).toEqual({
-      flightIds: [],
       includeDisplayName: false,
-    });
-  });
-
-  it("normalizes, deduplicates, and bounds selected owner flight IDs", () => {
-    expect(parseShareSelection({
-      flightIds: [flightB, flightA, flightB],
-      includeDisplayName: true,
-    })).toEqual({
-      flightIds: [flightA, flightB],
-      includeDisplayName: true,
     });
     expect(() =>
-      parseShareSelection({
-        flightIds: ["not-a-flight"],
+      parseShareSettings({
+        flightIds: [],
+        includeDisplayName: false,
+      }),
+    ).toThrowError(ShareValidationError);
+    expect(() =>
+      parseShareSettings({
+        flightIds: ["00000000-0000-4000-8000-000000000001"],
         includeDisplayName: false,
       }),
     ).toThrowError(ShareValidationError);
@@ -55,5 +58,64 @@ describe("map sharing contracts", () => {
     const url = new URL(formatSharePath(publicId, secret), "https://example.test");
     expect(`${url.origin}${url.pathname}${url.search}`).not.toContain(secret);
     expect(url.hash).toBe(`#key=${secret}`);
+  });
+
+  it("returns only aggregate route data from legacy stored projections", async () => {
+    const execute = vi.fn().mockResolvedValue([
+      {
+        projection: {
+          owner: { displayName: null, accountId: "private-owner-id" },
+          summary: { flightCount: 1, routeCount: 1, importedRows: 2 },
+          routes: [
+            {
+              id: "route-1",
+              kind: "private",
+              flightCount: 1,
+              origin: {
+                lat: 47.4,
+                lon: -122.3,
+                country: "US",
+                airportCode: "SEA",
+              },
+              destination: {
+                lat: 40.6,
+                lon: -73.8,
+                country: "US",
+                airportCode: "JFK",
+              },
+              flightIds: ["private-flight-id"],
+            },
+          ],
+          flights: [
+            {
+              id: "public-flight-id",
+              kind: "private",
+              legs: [],
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.getDb.mockReturnValue({ execute });
+
+    const projection = await getPublicMapProjection(
+      "00000000-0000-4000-8000-000000000010",
+      "s".repeat(43),
+    );
+
+    expect(projection).toEqual({
+      owner: { displayName: null },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [
+        {
+          id: "route-1",
+          kind: "private",
+          flightCount: 1,
+          origin: { lat: 47.4, lon: -122.3, country: "US" },
+          destination: { lat: 40.6, lon: -73.8, country: "US" },
+        },
+      ],
+    });
+    expect(projection).not.toHaveProperty("flights");
   });
 });

@@ -102,7 +102,7 @@ export const AIRPORT_RELEASE_SCOPE: AirportReleaseScope = {
 };
 
 export interface AirportMigrationState {
-  boundary: "empty" | "0014" | "0015";
+  boundary: "empty" | "0014" | "0015" | "0016";
   appliedCount: number;
   ledgerSha256: string;
   schemaSha256: string;
@@ -112,6 +112,42 @@ export interface AirportMigrationState {
 export interface AirportMigrationLedgerRow {
   hash: unknown;
   created_at: unknown;
+}
+
+export function airportMigrationBoundaryForState(
+  manifest: AirportReleaseMigrationManifest,
+  state: AirportMigrationState,
+): AirportMigrationBoundary | undefined {
+  if (state.boundary === "empty") return undefined;
+  const tag = {
+    "0014": "0014_fix_flight_share_invalidation",
+    "0015": "0015_airport_source_provenance",
+    "0016": "0016_serialize_owner_flight_sharing",
+  }[state.boundary];
+  return manifest.permittedBefore.find((boundary) => boundary.tag === tag);
+}
+
+export function expectedAirportReleaseMigrationBoundary(
+  manifest: AirportReleaseMigrationManifest,
+  before: AirportMigrationState,
+): AirportMigrationBoundary {
+  const current = airportMigrationBoundaryForState(manifest, before);
+  if (!current) {
+    throw new AirportCatalogSafetyError("migration-ledger-mismatch");
+  }
+  return current.appliedCount < manifest.expectedAfter.appliedCount
+    ? manifest.expectedAfter
+    : current;
+}
+
+export function airportMigrationStateMatchesBoundary(
+  state: AirportMigrationState,
+  boundary: AirportMigrationBoundary,
+): boolean {
+  return (
+    state.appliedCount === boundary.appliedCount &&
+    state.ledgerSha256 === boundary.ledgerSha256
+  );
 }
 
 export interface UnsafeSqlClient {
@@ -231,14 +267,15 @@ export function validateAirportMigrationInventory(
     ]),
   );
   if (
-    allowedBoundaries.size !== 2 ||
-    manifest.permittedBefore.length !== 2
+    allowedBoundaries.size !== 3 ||
+    manifest.permittedBefore.length !== 3
   ) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch");
   }
   for (const requiredTag of [
     "0014_fix_flight_share_invalidation",
     "0015_airport_source_provenance",
+    "0016_serialize_owner_flight_sharing",
   ]) {
     const boundary = allowedBoundaries.get(requiredTag);
     const index = manifest.entries.findIndex(
@@ -335,14 +372,17 @@ export async function applyPendingAirportMigrations(
      from drizzle.__drizzle_migrations`,
   );
   const appliedCount = Number(countRow?.count);
-  if (
-    !manifest.permittedBefore.some(
-      (boundary) => boundary.appliedCount === appliedCount,
-    )
-  ) {
+  const currentBoundary = manifest.permittedBefore.find(
+    (boundary) => boundary.appliedCount === appliedCount,
+  );
+  if (!currentBoundary) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch");
   }
-  for (const migration of manifest.entries.slice(appliedCount)) {
+  if (appliedCount >= manifest.expectedAfter.appliedCount) return;
+  for (const migration of manifest.entries.slice(
+    appliedCount,
+    manifest.expectedAfter.appliedCount,
+  )) {
     const contents = await readFile(
       path.join(migrationsRoot, `${migration.tag}.sql`),
       "utf8",
@@ -494,7 +534,7 @@ async function verifyAirportSchema(
   );
   await verifyProductMigrationState(sql);
   let provenanceConstraint = "";
-  if (boundary === "0015") {
+  if (boundary === "0015" || boundary === "0016") {
     const [constraint] = await sql.unsafe(
       `select pg_get_constraintdef(oid, true) as definition
        from pg_constraint
@@ -596,7 +636,9 @@ export function validateAirportMigrationLedger(
       ? "0014"
       : matched?.tag === "0015_airport_source_provenance"
         ? "0015"
-        : undefined;
+        : matched?.tag === "0016_serialize_owner_flight_sharing"
+          ? "0016"
+          : undefined;
   if (!boundary) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch", {
       actualCount: rows.length,

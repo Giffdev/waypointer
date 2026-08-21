@@ -55,6 +55,15 @@ const sharingTriggerFixMigration = readFileSync(
   ),
   "utf8",
 );
+const sharingSerializationMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../drizzle/migrations/0016_serialize_owner_flight_sharing.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const multiStopMigration = readFileSync(
   fileURLToPath(
     new URL(
@@ -311,6 +320,15 @@ describe("launch schema", () => {
     expect(sharingTriggerFixMigration).toContain("RETURN NEW");
     expect(sharingTriggerFixMigration).toContain(
       "REVOKE ALL ON FUNCTION invalidate_selected_map_share() FROM PUBLIC",
+    );
+    expect(sharingSerializationMigration).toContain(
+      "pg_advisory_xact_lock(hashtextextended(affected_user_id::text, 0))",
+    );
+    expect(sharingSerializationMigration).toContain(
+      'BEFORE INSERT OR UPDATE OR DELETE ON "flights"',
+    );
+    expect(sharingSerializationMigration).toContain(
+      "CREATE OR REPLACE FUNCTION invalidate_selected_map_share_for_stop()",
     );
   });
 

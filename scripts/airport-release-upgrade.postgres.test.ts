@@ -404,7 +404,7 @@ beforeAll(async () => {
     databaseName: database.database_name,
     databaseOid: database.database_oid,
     candidateManifestSha256: candidate.sha256,
-    approvedAt: new Date(now - 5_000).toISOString(),
+    approvedAt: new Date(now - 500).toISOString(),
     expiresAt: new Date(now + 3_600_000).toISOString(),
     changeControl: {
       mechanism: "application-read-only-plus-database-barrier",
@@ -583,7 +583,7 @@ async function createSecondPassEnvironment() {
       databaseOid: database.database_oid,
       candidateManifestSha256:
         releaseEnvironment.AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256,
-      approvedAt: new Date(now - 5_000).toISOString(),
+      approvedAt: new Date(now - 500).toISOString(),
       expiresAt: new Date(now + 3_600_000).toISOString(),
       changeControl: {
         mechanism: "application-read-only-plus-database-barrier",

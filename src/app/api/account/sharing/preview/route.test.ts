@@ -11,31 +11,40 @@ vi.mock("@/lib/auth/guards", () => ({
 }));
 vi.mock("@/lib/sharing/service", () => ({
   previewMapSharing: mocks.previewMapSharing,
+  ShareEmptyMapError: class ShareEmptyMapError extends Error {},
+  ShareFlightLimitError: class ShareFlightLimitError extends Error {},
   ShareValidationError: class ShareValidationError extends Error {},
 }));
 
 import { POST } from "./route";
+
+const NO_STORE =
+  "no-store, max-age=0, s-maxage=0, must-revalidate";
 
 describe("sharing preview API", () => {
   beforeEach(() => {
     mocks.requireAuthenticatedUser.mockReset().mockResolvedValue({ id: "owner-a" });
     mocks.previewMapSharing.mockReset().mockResolvedValue({
       previewId: "a".repeat(64),
-      selection: {
-        flightIds: [],
-        includeDisplayName: false,
-        selectedFlightCount: 0,
-      },
+      includeDisplayName: false,
       projection: {
         owner: { displayName: null },
-        summary: { flightCount: 0, routeCount: 0 },
-        routes: [],
+        summary: { flightCount: 1, routeCount: 1 },
+        routes: [
+          {
+            id: "route-a",
+            kind: "private",
+            flightCount: 1,
+            origin: { lat: 47.4, lon: -122.3, country: "US" },
+            destination: { lat: 40.6, lon: -73.8, country: "US" },
+          },
+        ],
       },
     });
   });
 
-  it("requires an exact owner-scoped preview before enablement", async () => {
-    const input = { flightIds: [], includeDisplayName: false };
+  it("requests an authoritative complete-map preview without flight IDs", async () => {
+    const input = { includeDisplayName: false };
     const response = await POST(
       new Request("https://example.test/api/account/sharing/preview", {
         method: "POST",
@@ -47,6 +56,24 @@ describe("sharing preview API", () => {
       }),
     );
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe(NO_STORE);
     expect(mocks.previewMapSharing).toHaveBeenCalledWith("owner-a", input);
+  });
+
+  it("marks rejected preview responses as no-store", async () => {
+    const response = await POST(
+      new Request("https://example.test/api/account/sharing/preview", {
+        method: "POST",
+        headers: {
+          origin: "https://evil.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ includeDisplayName: false }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("Cache-Control")).toBe(NO_STORE);
+    expect(mocks.previewMapSharing).not.toHaveBeenCalled();
   });
 });

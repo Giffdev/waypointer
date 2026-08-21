@@ -61,12 +61,13 @@ async function main() {
       client as unknown as UnsafeSqlClient,
       "test",
     );
-    const approvedAt = new Date(Date.now() - 4_000);
-    const pausedAt = new Date(Date.now() - 3_000);
-    const pauseVerifiedAt = new Date(Date.now() - 2_000);
-    const snapshotCreatedAt = new Date(Date.now() - 1_500);
-    const snapshotVerifiedAt = new Date(Date.now() - 1_000);
-    const expiresAt = new Date(Date.now() + 3_600_000);
+    const now = Date.now();
+    const pausedAt = new Date(now - 3_000);
+    const pauseVerifiedAt = new Date(now - 2_000);
+    const snapshotCreatedAt = new Date(now - 1_500);
+    const snapshotVerifiedAt = new Date(now - 1_000);
+    const approvedAt = new Date(now - 500);
+    const expiresAt = new Date(now + 3_600_000);
     const snapshotId = "flight-map-local";
     const restoreProcedure = {
       schemaVersion: 1,

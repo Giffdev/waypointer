@@ -8,21 +8,18 @@ import {
   USERNAME_REQUIREMENTS,
 } from "@/lib/auth/username";
 import type { DistanceUnit, OwnerProfile } from "@/lib/profile/service";
-import {
-  MapSharingPanel,
-  type ShareFlightOption,
-} from "@/components/map-sharing-panel";
+import { MapSharingPanel } from "@/components/map-sharing-panel";
 
 export default function SettingsClient({
   initialProfile,
   configured,
   deletionEnabled,
-  shareFlights,
+  sharingAvailable = false,
 }: {
   initialProfile: OwnerProfile;
   configured: boolean;
   deletionEnabled: boolean;
-  shareFlights?: ShareFlightOption[];
+  sharingAvailable?: boolean;
 }) {
   const [profile, setProfile] = useState(initialProfile);
   const [profileStatus, setProfileStatus] = useState("");
@@ -208,9 +205,7 @@ export default function SettingsClient({
           </p>
         </form>
 
-        {configured && shareFlights && (
-          <MapSharingPanel flights={shareFlights} />
-        )}
+        {configured && sharingAvailable && <MapSharingPanel />}
 
         {deletionEnabled ? (
         <form className="settings-panel danger-panel" onSubmit={requestDeletion}>

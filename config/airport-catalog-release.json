@@ -154,6 +154,12 @@
         "tag": "0015_airport_source_provenance",
         "createdAt": 1786975200000,
         "sha256": "70e257b5e80d1539edc54891c12b624c054d916af4e6e98650adac4b859d172f"
+      },
+      {
+        "order": 17,
+        "tag": "0016_serialize_owner_flight_sharing",
+        "createdAt": 1787271075000,
+        "sha256": "0f81bb644c0a0190d5cd9fa1ec341d1203166f820590aff27aa91562340fa5ae"
       }
     ],
     "permittedBefore": [
@@ -166,6 +172,11 @@
         "tag": "0015_airport_source_provenance",
         "appliedCount": 17,
         "ledgerSha256": "214f6adf72d108fbaac60cb558938bfa8ff20935877bad0e588d573a7d6634fc"
+      },
+      {
+        "tag": "0016_serialize_owner_flight_sharing",
+        "appliedCount": 18,
+        "ledgerSha256": "38ed3e12b2b10efefa8e4b4382440dc08a8cb9bb3e317e9790aec843d7fecbea"
       }
     ],
     "expectedAfter": {

@@ -1,7 +1,7 @@
 # Multi-user accounts and sharing
 
-**Status:** Proposed product and architecture specification; pending product, security/privacy, and operational sign-off  
-**Planning constraint:** This document authorizes no application-code, infrastructure, database, authentication-provider, or hosting changes. Implementation begins only after Devin Sinha explicitly approves a phase.  
+**Status:** Current account/share implementation reference plus remaining product plan
+**Implementation note:** The owner-isolated PostgreSQL account, import, and coarse complete-map sharing paths described as implemented below are live code. Items still labeled proposed or open remain future work and are not authorized by this document.
 **Document owner:** Scotty, Backend Engineer  
 **Integrated reconciliation revision:** Uhura, Quality Engineer  
 **Product owner:** Devin Sinha  
@@ -10,6 +10,7 @@
 ## Decision legend and sign-off gates
 
 - **Settled** means an existing product directive or accepted architecture constraint.
+- **Implemented** means the behavior exists in the current application and is covered by repository tests.
 - **Proposed** means the recommended implementation baseline, not yet approved for build.
 - **Open** means a decision with alternatives that must be resolved at the named gate.
 
@@ -22,7 +23,10 @@
 
 ## Executive summary
 
-Waypointer currently reads ignored, machine-local ForeFlight and myFlightradar24 artifacts into one implicit local workspace. Authentication, browser uploads, remote persistence, and sharing are intentionally non-functional. The next major feature will turn that prototype into a secure multi-user product: each person creates an account with a unique username, owns an isolated set of flights and imports, and may deliberately enable one privacy-reduced map URL that can be disabled or rotated.
+Waypointer now has authenticated multi-user workspaces backed by PostgreSQL,
+owner-scoped browser imports, and an opt-in privacy-reduced map capability.
+Each person owns an isolated set of flights and imports and may deliberately
+enable one coarse complete-map snapshot URL that can be disabled or rotated.
 
 The core safety rule is that an immutable internal user ID—not a username, email address, route parameter, share token, or client-supplied owner field—is the authorization boundary. Every request, job, storage key, query, export, and deletion operation must derive its actor and scope on the server. Accounts and maps remain private by default. Sharing is a separately revocable capability over a sanitized projection; it never grants access to raw imports, provenance payloads, corrections, notes, registrations, exact timestamps, or other private fields unless a later, explicit requirement is approved.
 
@@ -33,12 +37,12 @@ The core safety rule is that an immutable internal user ID—not a username, ema
 - Next.js 16 App Router, TypeScript, React 19, Tailwind CSS, and project CSS tokens.
 - MapLibre GL JS 6 for globe and regional cartography.
 - Vitest for current domain tests; Playwright is planned for authenticated journeys.
-- PostgreSQL + PostGIS, Drizzle ORM, Auth.js, S3-compatible object storage, and a background worker are planned but not deployed.
-- The server currently reads `data\private\local-flights.json` (ForeFlight artifact schema v4) and `data\private\fr24-flights.json` (myFlightradar24 artifact schema v3). Both use the synthetic reconciliation owner `local-preview`.
+- PostgreSQL + PostGIS, Drizzle ORM, and Auth.js back the persisted account and sharing paths. Durable S3-compatible storage and the background worker remain separately gated.
+- Ignored local flight artifacts remain preview/development inputs only; production owner routes read authenticated PostgreSQL records.
 
 **Settled directives**
 
-- No implementation occurs as part of this planning task.
+- Implemented behavior and future proposals are labeled separately; proposed sections do not expand the shipped contract.
 - Accounts, flights, imports, and sharing are private by default.
 - No third-party flight-service credentials are requested or retained.
 - Private flight rows must not leak through maps, aggregates, metadata, logs, caches, errors, or timing-sensitive lookup behavior.
@@ -57,7 +61,6 @@ The core safety rule is that an immutable internal user ID—not a username, ema
 
 ## Non-goals
 
-- Implementing any part of this specification now.
 - Any social graph, friend/follow request, follower/following list, contact upload, audience list, feed, comment, like, messaging, group, invitation, or friend-only sharing feature.
 - Public profiles, public username map URLs, directory/search discovery, or search-engine indexing in the initial share-link release.
 - Letting another user view data through account membership or edit another user's flights.
@@ -86,7 +89,7 @@ The core safety rule is that an immutable internal user ID—not a username, ema
 - As an account owner, I can preview exactly what a shared map will expose before enabling sharing.
 - As an account owner, I can explicitly enable or disable one unlisted share URL.
 - As an account owner, I can keep the URL stable while sharing is enabled or rotate it to invalidate the previous URL.
-- As an account owner, I can exclude individual flights from every shared view.
+- As an account owner, I can publish a reviewed snapshot containing every flight currently on my map without manually selecting flights.
 - As a viewer, I can use a valid enabled link without gaining access to private API fields.
 - As an account owner, I can export my data and permanently delete my account.
 - As an existing local user, I can migrate supported local artifacts into one selected account through a dry-run and review flow.
@@ -191,7 +194,7 @@ An account must always retain at least one usable authentication method. Unlinki
 
 ## Storage and database model
 
-**Proposed logical model**
+**Current core model and proposed extensions**
 
 | Table/group | Key fields and constraints |
 | --- | --- |
@@ -202,9 +205,8 @@ An account must always retain at least one usable authentication method. Unlinki
 | `verification_tokens` | purpose, identity reference, digest, expiry, consumed timestamp |
 | `user_profiles` | user ID, unique normalized username, display name, discoverability settings |
 | `username_history` | user ID, old username, reserved-through timestamp |
-| `sharing_policies` | user ID, enabled flag, field/precision options, version, confirmed timestamp |
-| `share_links` | owner user ID, token digest, generation, created/rotated/disabled timestamps, last-used metadata; at most one active link per user |
-| `share_projection_entries` | share generation, owner user ID, flight ID, approved redacted snapshot/version, approval timestamp; explicit membership only |
+| `map_shares` | one row per owner with public ID, token digest/generation, display-name choice, redacted JSON projection, and enabled/disabled/rotated timestamps |
+| `map_share_flights` | owner ID, approved snapshot flight ID, and selection timestamp; membership is derived server-side from the complete eligible map |
 | `flights` | owner user ID, private canonical fields and optimistic version; source-row visibility never grants shared access |
 | `import_batches` / `import_rows` | owner user ID, object key, hashes, adapter versions, states, counts |
 | `flight_sources` / `flight_overrides` / `duplicate_candidates` | owner user ID in addition to parent IDs for explicit scoping and RLS |
@@ -219,38 +221,40 @@ Original imports are private objects with content-type/size enforcement, malware
 
 ### Private default and explicit control
 
-**Proposed**
+**Implemented**
 
-- Every account starts with sharing disabled. The owner workspace remains `/map`.
-- Account settings expose one clear **Enable share link** / **Disable share link** control and a separate **Rotate link** action.
-- Enabling sharing requires a server-generated preview and explicit confirmation of included flight count/date span, airports/regions, private-aviation inclusion, excluded flights, and field redactions.
-- Disabling sharing immediately invalidates the active URL. Re-enabling later creates a new token; it never silently restores a disabled URL.
+- Every account starts with sharing disabled. The owner workspace remains `/map`, and sharing controls are on `/settings`.
+- Account settings expose preview/publish, **Disable sharing**, and **Replace link** actions.
+- Enabling sharing requires a server-generated complete-map preview and explicit confirmation. The preview contains the identity choice, total flight and aggregate-route counts, represented-country count, and the exact coarse aggregate routes that the public DTO can return.
+- Disabling sharing prevents subsequent authorized loads from the active URL. The shared viewer revalidates on focus, visibility restoration, and browser-history `pageshow`, and clears the projection when the generic unavailable response confirms revocation. Re-enabling later creates a new public ID and key generation; it never restores a disabled URL. Revocation cannot recall content already opened, copied, forwarded, or screenshotted.
 - Account suspension or deletion disables the link immediately.
 - Visibility is not a flight-kind label. “Private aviation” and “private visibility” must never be conflated.
 
 ### Stable versus regeneratable token
 
-**Proposed decision**
+**Implemented lifecycle**
 
 - Each user has at most one active share link.
 - The token stays stable while sharing remains enabled so a deliberately shared bookmark keeps working.
 - The owner may rotate the link at any time. Rotation atomically creates a new token generation and revokes the previous generation.
 - Disabling the link revokes the token. Re-enabling generates a different token.
-- Tokens contain at least 128 bits of cryptographic entropy. Store only a digest; display/copy the plaintext token only in the authenticated creation or rotation response. Later settings views show status and a non-secret fingerprint, not the unrecoverable token.
+- The capability key is a 256-bit HMAC-derived value in the URL fragment. The database stores only its digest. Because the authenticated service can derive the active key from the server secret, public ID, and generation, every successful owner status response returns the current `sharePath`; loading or failed status is displayed as unknown rather than as disabled.
 - The link grants only `view-shared-map` for one owner. Query parameters may filter already-authorized data but cannot widen its capability.
-- Revocation/rotation is authoritative in the database and invalidates shared caches. Old tokens return ordinary unavailable/not-found behavior with no owner metadata.
+- Revocation/rotation is authoritative in the database and invalidates shared caches. Old tokens return ordinary unavailable/not-found behavior with no owner metadata. This prevents future authorized loads but cannot erase a viewer's already-open or independently retained copy.
 - Link expiry is deferred; the simple initial model uses owner-controlled disable/rotation rather than multiple links, labels, recipients, or invitations.
 
 ### Shared-data projection and safe redaction
 
-**Proposed default shared projection**
+**Implemented default shared projection**
 
 - The authenticated owner view continues to show the owner's exact canonical airports and full owner-authorized detail. The tokenized shared view is a separate server-side projection and never reuses the owner serializer.
-- The launch-default shared projection uses region/country labels or coarse coordinates, coarse route geometry, and privacy-safe aggregates derived only from explicitly approved flights. Exact airports are off by default and require a separate per-share setting, warning, preview, and confirmation; the simple URL remains `/s/{opaque-token}` because the policy is stored server-side.
-- Enabling or updating a share creates explicit projection membership. Flights do not inherit sharing eligibility from account state, source markings, import batches, or a broad visibility flag.
-- Newly imported or newly added flights are excluded from an enabled share until the owner previews and explicitly adds them.
-- If an included flight is edited in a field that affects shared output or a derived aggregate—including origin, destination, or displayed date precision—it is removed from the active projection and marked pending review. It re-enters only after a new preview and explicit confirmation. Edits solely to fields that the shared allowlist can never serialize do not change projection membership.
-- An excluded or pending-review row is removed before route geometry, airport sets, counts, filters, date ranges, busiest-route calculations, and completeness metadata are computed.
+- The launch-default shared projection uses country labels, coordinates rounded to one decimal degree, coarse route geometry, and privacy-safe aggregates derived from the complete flight set reviewed in that snapshot. Exact airports and per-flight DTOs are not exposed; any future exact-airport mode requires a separate setting, warning, preview, and confirmation.
+- Omitting direct account identifiers and the optional display name does not make travel patterns anonymous. The owner preview and consent warn that repeated coarse endpoints and routes may reveal a home region, routines, employer, or identity, and that recipients may copy, forward, or screenshot the snapshot.
+- Enabling or updating a share creates server-derived projection membership for every eligible owner flight. Request bodies cannot select, exclude, or submit flight IDs, and flights do not inherit public visibility from account state, source markings, import batches, or a broad visibility flag.
+- Newly imported or newly added flights do not mutate an enabled snapshot. The next owner-initiated update preview includes every then-current eligible flight automatically, and enablement fails if that set changes before confirmation.
+- The implemented invalidation is deliberately conservative: any update or delete of a selected flight, plus any insert, update, or delete of a route stop attached to a selected membership, disables the entire share even when only owner-only fields changed. It does not remove one flight or create a per-flight pending-review state.
+- Disabled shares retain their `map_share_flights` rows as the last approved membership record. A later successful complete-map publish atomically replaces those rows and re-enables access from a fresh preview.
+- A row outside the last approved snapshot is excluded before route geometry, airport sets, counts, filters, date ranges, busiest-route calculations, and completeness metadata are computed.
 - No raw import row, object key, provenance ID, source row number, correction history, notes, seat, registration/tail number, account email, provider identity, exact departure time, or session metadata.
 - Per-flight lists and exact dates are off by default. If later enabled, the default date precision is month/year rather than exact date.
 - Shared responses expose neither hidden-row counts nor “data incomplete because N flights are private” metadata.
@@ -268,10 +272,10 @@ Original imports are private objects with content-type/size enforcement, malware
 
 ## URL and navigation design
 
-**Proposed**
+**Implemented sharing routes; other route groups remain as documented by their owning features**
 
-- Owner workspace: `/map`, `/flights`, `/import`, `/settings/account`, `/settings/sharing`, `/settings/sessions`.
-- Enabled share map: `/s/{opaque-token}`.
+- Owner workspace: `/map`, `/flights`, `/import`, and `/settings`.
+- Enabled share map: `/shared/{publicId}#key={capabilityKey}`. The browser removes the fragment from visible history and sends the key only in the JSON body below.
 - Deferred optional public map, only after separate approval: `/u/{normalized-username}/map`.
 - Authentication: `/login`, `/register`, `/verify`, `/recover`, and provider callback routes owned by Auth.js.
 - Existing map filter query parameters may be supported on shared maps only after allowlisting and normalization. They select a subset of already-authorized data and never widen access.
@@ -342,15 +346,18 @@ The multi-user runtime must stop treating repository-global `data\private\*.json
 - APIs return stable error categories and correlation IDs, not stack traces or ownership-sensitive detail.
 - CORS is same-origin only initially.
 
-**Proposed capability groups**
+**Implemented sharing capability group**
 
 | Boundary | Capabilities |
 | --- | --- |
 | `/api/account/*` | profile, username rename, email/password/provider changes, sessions, export, deletion |
 | `/api/imports/*` | create upload, finalize, status, review, commit, cancel; owner-only |
 | `/api/flights/*` | list/read/create/correct/delete; owner-only |
-| `/api/sharing/*` | preview, enable, status, disable, rotate |
-| `/api/shared/links/{token}/map` | enabled capability-link projection only |
+| `GET /api/account/sharing` | owner-only status and active `sharePath` |
+| `POST /api/account/sharing/preview` | owner-only `{ includeDisplayName }`; returns the complete coarse snapshot and `previewId` |
+| `POST`, `DELETE /api/account/sharing` | owner-only enable/update with `{ includeDisplayName, previewId }`, or immediate disable |
+| `POST /api/account/sharing/regenerate` | owner-only capability rotation without changing the approved snapshot |
+| `POST /api/shared/{publicId}` | unauthenticated capability read with `{ key }`; returns only `{ map: { owner, summary, routes } }` |
 
 Username availability, login, and recovery need distinct enumeration policies; they must not share a permissive generic user-search endpoint.
 
@@ -422,8 +429,8 @@ Username availability, login, and recovery need distinct enumeration policies; t
 - Username normalization, reserved names, and rename cooldown/reservation.
 - Password/session/token expiry and single-use behavior.
 - Visibility predicates and redaction serializers for every field.
-- Explicit share-projection membership, new-flight exclusion, edit invalidation, and reapproval.
-- Owner exact-airport rendering versus shared coarse-location default and exact-airport opt-in.
+- Server-derived complete-map snapshot membership, new-flight snapshot isolation, edit invalidation, and reapproval.
+- Owner exact-airport rendering versus the implemented shared coarse-location behavior; future exact-airport sharing controls remain unimplemented.
 - Token generation/digest verification and revocation.
 - Per-user fingerprint/idempotency construction.
 - Share-link enable/disable/rotation state transitions.
@@ -447,9 +454,9 @@ Use at least Alice, Bob, and Mallory:
 1. Alice and Bob register independently and import overlapping flights without cross-user deduplication.
 2. Bob cannot access Alice's flight, batch, export, or object by guessing IDs.
 3. Alice previews and enables her share link; only the approved shared projection appears.
-4. A newly imported flight remains absent, and editing an included origin/destination removes that flight and its derived data until Alice explicitly reapproves it.
-5. Alice's owner view shows exact airports; the shared URL starts coarse, and exact airports appear only after the separate setting, warning, preview, and confirmation.
-6. The URL remains stable while enabled, rotation invalidates the old URL, and disable removes access immediately.
+4. A newly imported flight remains absent, and any selected flight or route-stop edit disables the entire shared URL until Alice explicitly previews and republishes the complete map.
+5. Alice's owner view shows exact airports; the implemented shared URL remains coarse because exact-airport sharing controls are future and unimplemented.
+6. The URL remains stable while enabled; rotation and disable prevent subsequent authorized loads, but cannot recall content already opened or copied.
 7. Mallory with a disabled or rotated token receives no map or owner metadata.
 8. Password reset and provider unlink revoke the intended sessions.
 9. Username rename preserves ownership and leaves the token link unchanged.
@@ -485,7 +492,7 @@ No test fixture may contain Devin Sinha's or any other person's private flight r
 - Recovery, active-session management, Google sign-in/linking, export, deletion, quotas, operational dashboards, and local-artifact migration.
 - Production launch remains private-only.
 
-### Phase 3 — share link
+### Phase 3 — share link (implemented coarse complete-map contract)
 
 - One stable-while-enabled capability link, preview/confirmation, privacy controls, disable/rotation, cache isolation, safe redaction, and abuse controls.
 - No public username profile, audience management, invitations, or social features.
@@ -534,9 +541,9 @@ No test fixture may contain Devin Sinha's or any other person's private flight r
 - Imports and retries are owner-scoped and idempotent; deduplication never crosses users.
 - Corrections preserve immutable source provenance and cannot be overwritten silently.
 - Private is the default. Enabling sharing requires an accurate preview and explicit confirmation.
-- A valid enabled link receives only the explicitly approved shared projection; new flights are excluded and projected-field edits remove affected flights until reapproval.
-- Authenticated owner views may show exact airports; shared views launch with coarse location and require a separate explicit exact-airport setting and preview.
-- Link disable/rotation, suspension, and deletion remove access immediately.
+- A valid enabled link receives only the reviewed complete-map snapshot; new flights wait for an owner-initiated update, whose preview automatically includes the full current set, and any selected flight or route-stop mutation conservatively disables the whole share until reapproval.
+- Authenticated owner views may show exact airports; implemented shared views remain coarse, and exact-airport sharing controls are future and unimplemented.
+- Link disable/rotation, suspension, and deletion prevent subsequent authorized loads; the viewer revalidates an already-open page on focus, visibility restoration, and browser-history `pageshow`, while disclosed copies and screenshots cannot be recalled.
 - Export is complete, private, time-bounded, and excludes credentials/secrets.
 - Deletion revokes access immediately and meets the approved active-store and backup-erasure commitments.
 - Logs, telemetry, alerts, fixtures, and support surfaces contain no raw private flight rows or share-token plaintext.
@@ -551,7 +558,7 @@ No test fixture may contain Devin Sinha's or any other person's private flight r
 | Managed PostgreSQL/PostGIS, object store, and queue | Prefer managed, region-aligned services with RLS, PITR, lifecycle, and least-privilege identities | Backend + operations before Phase 1 |
 | Username cooldown/reservation durations | 30-day cooldown and 90-day reservation | Product + privacy before Phase 1 |
 | Account deletion grace and backup expiry | 7-day grace with normal login disabled and out-of-band cancellation; shortest operationally safe documented backup window | Product + privacy + operations before Phase 2 |
-| Shared location/date/detail controls | Coarse location and aggregate/routes by default; exact airports, per-flight lists, and exact dates off | Product + UX + privacy before Phase 3 |
+| Future shared location/date/detail controls | Implemented sharing remains coarse and aggregate-only; exact-airport, per-flight, and exact-date controls are unimplemented | Product + UX + privacy before Phase 3 |
 | Share-token lifecycle | One stable link while enabled; rotation or disable invalidates it; re-enable creates a new token | Product + privacy before Phase 3 |
 | Optional link expiry | Defer initially; owner-controlled disable/rotation keeps the control simple | Product + privacy before Phase 3 |
 | Optional public username map | Separate future feature with a separate enable control; never implied by token sharing | Product + privacy after Phase 3 |

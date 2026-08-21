@@ -4,86 +4,101 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MapSharingPanel,
-  type ShareFlightOption,
-} from "./map-sharing-panel";
+import { MapSharingPanel } from "./map-sharing-panel";
 
-const flights: ShareFlightOption[] = [
-  {
-    id: "00000000-0000-4000-8000-000000000001",
-    date: "2026-08-01",
-    kind: "commercial",
-    airportCodes: ["LAX", "MEX"],
-    cities: ["Los Angeles", "Mexico City"],
-  },
-  {
-    id: "00000000-0000-4000-8000-000000000002",
-    date: "2026-08-02",
-    kind: "private",
-    airportCodes: ["SEA", "SFO", "HNL"],
-    cities: ["Seattle", "San Francisco", "Honolulu"],
-  },
-  {
-    id: "00000000-0000-4000-8000-000000000003",
-    date: "2026-08-03",
-    kind: "private",
-    airportCodes: ["PDX", "BOI"],
-    cities: ["Portland", "Boise"],
-  },
-];
 const sharePath =
   "/shared/00000000-0000-4000-8000-000000000010#key=" + "s".repeat(43);
 
 describe("MapSharingPanel", () => {
   let enabled = false;
   let currentPath = sharePath;
-  let currentSelected: string[] = [];
+  let currentFlightCount = 0;
   let currentIdentity = false;
+  let previewFlightCount = 3;
+  let previewError: { code: string; message: string } | null = null;
+  let staleEnable = false;
+  let statusFailure: "rejected" | "non-ok" | null = null;
   const writeText = vi.fn();
 
   beforeEach(() => {
     enabled = false;
     currentPath = sharePath;
-    currentSelected = [];
+    currentFlightCount = 0;
     currentIdentity = false;
+    previewFlightCount = 3;
+    previewError = null;
+    staleEnable = false;
+    statusFailure = null;
     writeText.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/account/sharing" && !init?.method) {
-        return json({ sharing: status() });
-      }
-      if (url.endsWith("/preview")) {
-        const selection = JSON.parse(String(init?.body)) as {
-          flightIds: string[];
-          includeDisplayName: boolean;
-        };
-        return json({ preview: makePreview(selection) });
-      }
-      if (url === "/api/account/sharing" && init?.method === "POST") {
-        const selection = JSON.parse(String(init.body)) as {
-          flightIds: string[];
-          includeDisplayName: boolean;
-        };
-        enabled = true;
-        currentSelected = selection.flightIds;
-        currentIdentity = selection.includeDisplayName;
-        return json({ sharing: status() });
-      }
-      if (url.endsWith("/regenerate")) {
-        currentPath = currentPath.replace("s".repeat(43), "r".repeat(43));
-        return json({ sharing: status() });
-      }
-      if (url === "/api/account/sharing" && init?.method === "DELETE") {
-        enabled = false;
-        return json({ sharing: status() });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/account/sharing" && !init?.method) {
+          if (statusFailure === "rejected") {
+            throw new Error("network unavailable");
+          }
+          if (statusFailure === "non-ok") {
+            return json(
+              {
+                error: {
+                  code: "sharing-unavailable",
+                  message: "Sharing status is unavailable.",
+                },
+              },
+              503,
+            );
+          }
+          return json({ sharing: status() });
+        }
+        if (url.endsWith("/preview")) {
+          if (previewError) return json({ error: previewError }, 409);
+          const settings = JSON.parse(String(init?.body)) as {
+            includeDisplayName: boolean;
+          };
+          return json({
+            preview: makePreview(
+              settings.includeDisplayName,
+              previewFlightCount,
+            ),
+          });
+        }
+        if (url === "/api/account/sharing" && init?.method === "POST") {
+          if (staleEnable) {
+            return json(
+              {
+                error: {
+                  code: "sharing-preview-stale",
+                  message:
+                    "The sharing preview changed. Review it again before enabling.",
+                },
+              },
+              409,
+            );
+          }
+          const settings = JSON.parse(String(init.body)) as {
+            includeDisplayName: boolean;
+          };
+          enabled = true;
+          currentFlightCount = previewFlightCount;
+          currentIdentity = settings.includeDisplayName;
+          return json({ sharing: status() });
+        }
+        if (url.endsWith("/regenerate")) {
+          currentPath = currentPath.replace("s".repeat(43), "r".repeat(43));
+          return json({ sharing: status() });
+        }
+        if (url === "/api/account/sharing" && init?.method === "DELETE") {
+          enabled = false;
+          return json({ sharing: status() });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
   });
 
   afterEach(() => {
@@ -91,144 +106,309 @@ describe("MapSharingPanel", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts with no selection and keeps preview and enable disabled", async () => {
-    render(<MapSharingPanel flights={flights} />);
+  it("does not claim sharing is off while status is loading", () => {
+    render(<MapSharingPanel />);
 
-    expect(await screen.findByText("Private · sharing is off")).toBeVisible();
-    expect(screen.getByRole("group", { name: "Select flights to share" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Preview selected flights" })).toBeDisabled();
-    expect(screen.getByText(/Select at least one flight/)).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Enable sharing" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Future flights are never added automatically/)).toBeVisible();
-    expect(screen.getByText(/copy, forward, or screenshot/)).toBeVisible();
+    expect(screen.getByText("Checking sharing status…")).toBeVisible();
+    const statusCall = vi.mocked(fetch).mock.calls.find(
+      ([url]) => String(url) === "/api/account/sharing",
+    );
+    expect(statusCall?.[1]).toMatchObject({ cache: "no-store" });
+    expect(
+      screen.queryByText("Private · sharing is off"),
+    ).not.toBeInTheDocument();
   });
 
-  it("selects one flight and previews only its exact coarse ordered legs", async () => {
+  it("shows an unknown state and recovery when the status request rejects", async () => {
     const user = userEvent.setup();
-    render(<MapSharingPanel flights={flights} />);
-    await screen.findByText("Private · sharing is off");
+    statusFailure = "rejected";
+    render(<MapSharingPanel />);
 
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "Share SEA → SFO → HNL flight on 2026-08-02",
-      }),
+    expect(await screen.findByText("Sharing status unavailable")).toBeVisible();
+    expect(
+      screen.queryByText("Private · sharing is off"),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Sharing status could not be loaded",
     );
-    await user.click(screen.getByRole("button", { name: "Preview selected flights" }));
 
-    expect(await screen.findByRole("heading", { name: "Exactly what will be public" })).toBeVisible();
-    expect(screen.getByText("Flight 1 · private")).toBeVisible();
-    expect(screen.getByText(/US \(47\.6, -122\.3\) → US \(37\.6, -122\.4\)/)).toBeVisible();
-    expect(screen.getByText(/US \(37\.6, -122\.4\) → US \(21\.3, -157\.9\)/)).toBeVisible();
-    expect(screen.getByText("Hidden")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Enable sharing" })).toBeDisabled();
+    statusFailure = null;
+    await user.click(
+      screen.getByRole("button", { name: "Retry sharing status" }),
+    );
+    expect(await screen.findByText("Private · sharing is off")).toBeVisible();
+    const statusCalls = vi.mocked(fetch).mock.calls.filter(
+      ([url]) => String(url) === "/api/account/sharing",
+    );
+    expect(statusCalls).toHaveLength(2);
+    expect(statusCalls.every(([, init]) => init?.cache === "no-store")).toBe(
+      true,
+    );
+  });
 
+  it("does not treat a non-OK status response as private", async () => {
+    statusFailure = "non-ok";
+    render(<MapSharingPanel />);
+
+    expect(await screen.findByText("Sharing status unavailable")).toBeVisible();
+    expect(
+      screen.queryByText("Private · sharing is off"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Retry sharing status" }),
+    ).toBeEnabled();
+  });
+
+  it("previews the authoritative map even when a flight arrives after render", async () => {
+    const user = userEvent.setup();
+    render(<MapSharingPanel />);
+
+    expect(await screen.findByText("Private · sharing is off")).toBeVisible();
+    expect(
+      screen.getByText(/every flight currently on your private map/i),
+    ).toBeVisible();
+
+    previewFlightCount = 4;
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Preview your shared map" }),
+    ).toBeVisible();
+    expect(screen.getByText("4")).toBeVisible();
     const previewCall = vi.mocked(fetch).mock.calls.find(([url]) =>
       String(url).endsWith("/preview"),
     );
     expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
-      flightIds: [flights[1].id],
       includeDisplayName: false,
     });
+    expect(String(previewCall?.[1]?.body)).not.toContain("flightIds");
   });
 
-  it("selects the filtered set and clears it accessibly", async () => {
+  it("shows only the coarse aggregate projection", async () => {
     const user = userEvent.setup();
-    render(<MapSharingPanel flights={flights} />);
+    render(<MapSharingPanel />);
     await screen.findByText("Private · sharing is off");
 
-    await user.selectOptions(screen.getByLabelText("Flight type"), "private");
-    expect(screen.getByText("0 of 500 selected · 2 filtered")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Select filtered flights" }));
-    expect(screen.getByText("2 of 500 selected · 2 filtered")).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: /SEA → SFO → HNL/ })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /PDX → BOI/ })).toBeChecked();
-
-    await user.click(screen.getByRole("button", { name: "Clear selection" }));
-    expect(screen.getByText("0 of 500 selected · 2 filtered")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Preview selected flights" })).toBeDisabled();
-  });
-
-  it("keeps bulk selection within the backend cap and explains how to narrow it", async () => {
-    const oversized = Array.from({ length: 501 }, (_, index) => ({
-      ...flights[0],
-      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-      airportCodes: [`A${index}`, `B${index}`],
-    }));
-    render(<MapSharingPanel flights={oversized} />);
-
-    expect(await screen.findByRole("button", { name: "Select filtered flights" })).toBeDisabled();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "exceed the 500-flight sharing limit",
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
     );
-    expect(screen.getByRole("button", { name: "Show 50 more flights" })).toBeVisible();
+
+    const previewHeading = await screen.findByRole("heading", {
+      name: "Preview your shared map",
+    });
+    const previewSection = previewHeading.closest("section");
+    expect(previewSection).not.toBeNull();
+    expect(within(previewSection!).getByText("Omitted")).toBeVisible();
+    expect(
+      within(previewSection!).getByText("1 approximate route groups"),
+    ).toBeVisible();
+    expect(previewSection).not.toHaveTextContent(
+      /SEA|JFK|2026-08|registration|import|flight-id/i,
+    );
+    expect(
+      screen.getByRole("button", { name: "Publish shared map" }),
+    ).toBeDisabled();
   });
 
-  it("hydrates only an enabled snapshot and does not include future flights", async () => {
+  it("warns about recognizable route patterns before consent can be given", async () => {
+    const user = userEvent.setup();
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    expect(
+      screen.getByText(/Direct account identifiers are omitted/),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Repeated endpoints and route patterns can still reveal/),
+    ).toBeVisible();
+    expect(screen.queryByText(/identity stays hidden/i)).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    const previewHeading = await screen.findByRole("heading", {
+      name: "Preview your shared map",
+    });
+    const previewSection = previewHeading.closest("section");
+    expect(previewSection).not.toBeNull();
+    expect(
+      within(previewSection!).getByText(
+        "Recognizable travel patterns are included in this snapshot.",
+      ),
+    ).toBeVisible();
+    const consent = within(previewSection!).getByRole("checkbox", {
+      name: /repeated endpoints and routes may reveal my home region, routines, employer, or identity/i,
+    });
+    expect(consent).not.toBeChecked();
+    expect(
+      within(previewSection!).getByRole("button", {
+        name: "Publish shared map",
+      }),
+    ).toBeDisabled();
+  });
+
+  it("surfaces the authoritative 500-flight limit without replacing an existing snapshot", async () => {
+    const user = userEvent.setup();
     enabled = true;
-    currentSelected = [flights[0].id];
-    render(<MapSharingPanel flights={flights} />);
+    currentFlightCount = 500;
+    previewError = {
+      code: "sharing-flight-limit",
+      message:
+        "Waypointer supports complete shared maps with up to 500 flights.",
+    };
+    render(<MapSharingPanel />);
+    await screen.findByText("View-only sharing is on");
 
-    expect(await screen.findByText(/Current snapshot:/)).toHaveTextContent(
-      "Current snapshot: 1 flight · identity hidden. New flights remain private.",
+    await user.click(
+      screen.getByRole("button", { name: "Preview map update" }),
     );
-    expect(screen.getByRole("checkbox", { name: /LAX → MEX/ })).toBeChecked();
-    expect(screen.getByText(/Los Angeles → Mexico City · Currently shared/)).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: /SEA → SFO → HNL/ })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /PDX → BOI/ })).not.toBeChecked();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "up to 500 flights",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Publish shared map" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy link" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Disable sharing" })).toBeEnabled();
   });
 
-  it("requires identity opt-in, exact-preview consent, and preserves scope through link rotation", async () => {
+  it("requires explicit consent and enables without submitting flight IDs", async () => {
     const user = userEvent.setup();
-    render(<MapSharingPanel flights={flights} />);
+    render(<MapSharingPanel />);
     await screen.findByText("Private · sharing is off");
 
-    await user.click(screen.getByRole("checkbox", { name: /Share LAX → MEX/ }));
-    await user.click(screen.getByRole("checkbox", { name: "Include my display name" }));
-    await user.click(screen.getByRole("button", { name: "Preview selected flights" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Include my display name" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
     expect(await screen.findByText("Aviator")).toBeVisible();
 
     const consent = screen.getByRole("checkbox", {
-      name: /I reviewed this exact snapshot/,
+      name: /I reviewed this shared-map snapshot/,
     });
     expect(consent).not.toBeChecked();
     await user.click(consent);
-    await user.click(screen.getByRole("button", { name: "Enable sharing" }));
-    expect(await screen.findByText("View-only sharing is on")).toBeVisible();
+    await user.click(
+      screen.getByRole("button", { name: "Publish shared map" }),
+    );
 
-    await user.click(screen.getByRole("button", { name: "Replace link" }));
-    const dialog = screen.getByRole("alertdialog");
-    expect(dialog).toHaveTextContent("snapshotted flight selection will not change");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: /Share LAX → MEX/ })).toBeChecked();
+    expect(await screen.findByText("View-only sharing is on")).toBeVisible();
+    expect(screen.getByText(/Current shared map:/)).toHaveTextContent(
+      "3 flights represented",
+    );
+    const enableCall = vi.mocked(fetch).mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/account/sharing" && init?.method === "POST",
+    );
+    expect(JSON.parse(String(enableCall?.[1]?.body))).toEqual({
+      includeDisplayName: true,
+      previewId: "a".repeat(64),
+    });
+    expect(String(enableCall?.[1]?.body)).not.toContain("flightIds");
   });
 
-  it("enables, copies, rotates, and revokes with explicit confirmations", async () => {
+  it("discards consent when the server rejects a stale preview", async () => {
+    const user = userEvent.setup();
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+    await user.click(
+      await screen.findByRole("checkbox", { name: /I reviewed/ }),
+    );
+    staleEnable = true;
+
+    await user.click(
+      screen.getByRole("button", { name: "Publish shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Review it again before enabling",
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Preview your shared map" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Publish shared map" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("copies, rotates, and revokes the view-only capability", async () => {
     const user = userEvent.setup();
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
-    render(<MapSharingPanel flights={flights} />);
-    await screen.findByText("Private · sharing is off");
-    await user.click(screen.getByRole("checkbox", { name: /Share LAX → MEX/ }));
-    await user.click(screen.getByRole("button", { name: "Preview selected flights" }));
-    await user.click(await screen.findByRole("checkbox", { name: /I reviewed/ }));
-    await user.click(screen.getByRole("button", { name: "Enable sharing" }));
+    enabled = true;
+    currentFlightCount = 3;
+    render(<MapSharingPanel />);
+    await screen.findByText("View-only sharing is on");
 
-    await user.click(await screen.findByRole("button", { name: "Copy link" }));
+    await user.click(screen.getByRole("button", { name: "Copy link" }));
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("/shared/"));
-    expect(await screen.findByText(/Anyone it is forwarded to can open it/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Replace link" }));
-    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Replace link" }));
-    expect(await screen.findByText(/Link replaced/)).toBeVisible();
+    const rotateDialog = screen.getByRole("alertdialog");
+    expect(rotateDialog).toHaveTextContent("blocked from future loads");
+    expect(rotateDialog).toHaveTextContent(
+      "cannot recall content already opened, copied, forwarded, or screenshotted",
+    );
+    expect(rotateDialog).toHaveTextContent(
+      "shared map snapshot will not change",
+    );
+    await user.click(
+      within(rotateDialog).getByRole("button", { name: "Replace link" }),
+    );
+    expect(await screen.findByText(/Link replaced/)).toHaveTextContent(
+      "previous link cannot load the map again",
+    );
 
     await user.click(screen.getByRole("button", { name: "Disable sharing" }));
-    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Disable sharing" }));
-    expect(await screen.findByText(/Sharing disabled/)).toBeVisible();
+    const revokeDialog = screen.getByRole("alertdialog");
+    expect(revokeDialog).toHaveTextContent("blocked from future loads");
+    expect(revokeDialog).toHaveTextContent(
+      "cannot recall content already opened, copied, forwarded, or screenshotted",
+    );
+    await user.click(
+      within(revokeDialog).getByRole("button", {
+        name: "Disable sharing",
+      }),
+    );
+    expect(await screen.findByText(/Sharing disabled/)).toHaveTextContent(
+      "Content already opened, copied, forwarded, or screenshotted cannot be recalled",
+    );
     expect(screen.getByText("Private · sharing is off")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Preview selected flights" })).toBeDisabled();
+  });
+
+  it("shows the server-authoritative empty-map response", async () => {
+    const user = userEvent.setup();
+    previewError = {
+      code: "sharing-map-empty",
+      message: "Your map does not have any flights to share yet.",
+    };
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "does not have any flights to share yet",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Publish shared map" }),
+    ).not.toBeInTheDocument();
   });
 
   function status() {
@@ -236,65 +416,27 @@ describe("MapSharingPanel", () => {
       enabled,
       sharePath: enabled ? currentPath : null,
       includeDisplayName: currentIdentity,
-      selectedFlightCount: currentSelected.length,
-      selectedFlightIds: currentSelected,
+      publishedFlightCount: currentFlightCount,
     };
   }
 });
 
-function makePreview(selection: {
-  flightIds: string[];
-  includeDisplayName: boolean;
-}) {
-  const selected = flights.filter(({ id }) => selection.flightIds.includes(id));
-  const previewFlights = selected.map((flight) => ({
-    id: `public-${flight.id}`,
-    kind: flight.kind,
-    legs:
-      flight.id === flights[1].id
-        ? [
-            {
-              index: 0,
-              origin: { lat: 47.6, lon: -122.3, country: "US" },
-              destination: { lat: 37.6, lon: -122.4, country: "US" },
-            },
-            {
-              index: 1,
-              origin: { lat: 37.6, lon: -122.4, country: "US" },
-              destination: { lat: 21.3, lon: -157.9, country: "US" },
-            },
-          ]
-        : [{
-            index: 0,
-            origin: { lat: 34, lon: -118.4, country: "United States" },
-            destination: { lat: 24.1, lon: -110.4, country: "Mexico" },
-          }],
-  }));
-  const routes = previewFlights.flatMap((flight) =>
-    flight.legs.map((leg, index) => ({
-      id: `${flight.id}-${index}`,
-      kind: flight.kind,
-      flightCount: 1,
-      origin: leg.origin,
-      destination: leg.destination,
-    })),
-  );
+function makePreview(includeDisplayName: boolean, flightCount: number) {
   return {
     previewId: "a".repeat(64),
-    selection: {
-      ...selection,
-      selectedFlightCount: selection.flightIds.length,
-    },
+    includeDisplayName,
     projection: {
-      owner: {
-        displayName: selection.includeDisplayName ? "Aviator" : null,
-      },
-      summary: {
-        flightCount: previewFlights.length,
-        routeCount: routes.length,
-      },
-      routes,
-      flights: previewFlights,
+      owner: { displayName: includeDisplayName ? "Aviator" : null },
+      summary: { flightCount, routeCount: 1 },
+      routes: [
+        {
+          id: "coarse-route",
+          kind: "private",
+          flightCount,
+          origin: { lat: 47.4, lon: -122.3, country: "US" },
+          destination: { lat: 40.6, lon: -73.8, country: "US" },
+        },
+      ],
     },
   };
 }

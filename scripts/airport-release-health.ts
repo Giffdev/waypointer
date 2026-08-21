@@ -11,6 +11,8 @@ import { DrizzleImportRepository } from "../src/lib/db/repositories/drizzle-impo
 import * as schema from "../src/lib/db/schema.ts";
 import { auditAirportCatalog } from "./airport-release-evidence.ts";
 import {
+  airportMigrationBoundaryForState,
+  airportMigrationStateMatchesBoundary,
   loadAirportReleaseMigrationManifest,
   type UnsafeSqlClient,
   verifyAirportMigrationState,
@@ -465,11 +467,20 @@ async function main() {
       client as unknown as UnsafeSqlClient,
       target.approval.environment,
     );
+    const currentMigrationBoundary = airportMigrationBoundaryForState(
+      migrationManifest,
+      migration,
+    );
     if (
-      migration.boundary !== "0015" ||
+      !currentMigrationBoundary ||
+      currentMigrationBoundary.appliedCount <
+        migrationManifest.expectedAfter.appliedCount ||
+      !airportMigrationStateMatchesBoundary(
+        migration,
+        currentMigrationBoundary,
+      ) ||
       migration.migrationManifestSha256 !== migrationManifest.sha256 ||
-      migration.ledgerSha256 !==
-        migrationManifest.expectedAfter.ledgerSha256
+      migration.appliedCount < migrationManifest.expectedAfter.appliedCount
     ) {
       throw new AirportCatalogSafetyError("migration-ledger-mismatch");
     }

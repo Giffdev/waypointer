@@ -47,7 +47,9 @@ describe("public shared map API", () => {
       params: Promise.resolve({ token: publicId }),
     });
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(response.headers.get("cache-control")).toBe(
+      "no-store, max-age=0, s-maxage=0, must-revalidate",
+    );
     expect(response.headers.get("x-robots-tag")).toBe(
       "noindex, nofollow, noarchive",
     );
@@ -57,6 +59,13 @@ describe("public shared map API", () => {
       secretKey,
     );
     expect(mocks.consumeRateLimit).toHaveBeenCalledTimes(2);
+    expect(await response.json()).toEqual({
+      map: {
+        owner: { displayName: null },
+        summary: { flightCount: 0, routeCount: 0 },
+        routes: [],
+      },
+    });
   });
 
   it("uses the same non-enumerating 404 for disabled and guessed capabilities", async () => {

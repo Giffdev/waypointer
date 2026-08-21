@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   AIRPORT_RELEASE_SCOPE,
+  applyPendingAirportMigrations,
   loadAirportReleaseMigrationManifest,
+  type UnsafeSqlClient,
   validateAirportMigrationInventory,
   validateAirportMigrationLedger,
 } from "./airport-release-migrations";
@@ -29,6 +31,7 @@ describe("airport release migration ledger targeting", () => {
       "0013_map_view_mode_preference",
       "0014_fix_flight_share_invalidation",
       "0015_airport_source_provenance",
+      "0016_serialize_owner_flight_sharing",
     ]);
     expect(manifest.releaseScope).toEqual(AIRPORT_RELEASE_SCOPE);
     expect(() =>
@@ -56,6 +59,57 @@ describe("airport release migration ledger targeting", () => {
         "production",
       ),
     ).toBe("0015");
+    expect(
+      validateAirportMigrationLedger(
+        rowsThrough("0016_serialize_owner_flight_sharing"),
+        manifest,
+        "production",
+      ),
+    ).toBe("0016");
+  });
+
+  it("recognizes 0016 without applying it through the airport release", async () => {
+    const manifest = await loadAirportReleaseMigrationManifest();
+    const calls: Array<{ query: string; parameters?: unknown[] }> = [];
+    const sql = {
+      async unsafe(query: string, parameters?: unknown[]) {
+        calls.push({ query, parameters });
+        return query.includes("count(*)")
+          ? [{ count: 16 }]
+          : [];
+      },
+    } as UnsafeSqlClient;
+
+    await applyPendingAirportMigrations(sql);
+
+    const ledgerWrites = calls.filter(({ query }) =>
+      query.includes("insert into drizzle.__drizzle_migrations"),
+    );
+    expect(ledgerWrites).toHaveLength(1);
+    expect(ledgerWrites[0]?.parameters).toEqual([
+      manifest.entries.find(
+        ({ tag }) => tag === "0015_airport_source_provenance",
+      )?.sha256,
+      manifest.entries.find(
+        ({ tag }) => tag === "0015_airport_source_provenance",
+      )?.createdAt,
+    ]);
+    expect(
+      calls.some(({ query }) =>
+        query.includes("invalidate_selected_map_share_for_stop"),
+      ),
+    ).toBe(false);
+
+    const currentCalls: string[] = [];
+    await applyPendingAirportMigrations({
+      async unsafe(query: string) {
+        currentCalls.push(query);
+        return query.includes("count(*)")
+          ? [{ count: 18 }]
+          : [];
+      },
+    });
+    expect(currentCalls).toHaveLength(1);
   });
 
   it("rejects unknown hashes, missing entries, and partial boundaries", async () => {
@@ -113,7 +167,7 @@ describe("airport release migration ledger targeting", () => {
     ).not.toThrow();
     for (const invalidFiles of [
       files.slice(1),
-      [...files, "0016_unreviewed.sql"],
+      [...files, "0017_unreviewed.sql"],
     ]) {
       expect(() =>
         validateAirportMigrationInventory(

@@ -16,12 +16,11 @@ const UUID_PATTERN =
 const CAPABILITY_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const MAX_SHARED_FLIGHTS = 500;
 
-export type ShareSelection = {
-  flightIds: string[];
+export type ShareSettings = {
   includeDisplayName: boolean;
 };
 
-export type EnableMapSharingInput = ShareSelection & {
+export type EnableMapSharingInput = ShareSettings & {
   previewId: string;
 };
 
@@ -31,9 +30,7 @@ export type OwnerShareStatus = {
   enabledAt: string | null;
   disabledAt: string | null;
   includeDisplayName: boolean;
-  scope: "selected_flights";
-  selectedFlightCount: number;
-  selectedFlightIds: string[];
+  publishedFlightCount: number;
 };
 
 export type PublicMapProjection = {
@@ -46,25 +43,18 @@ export type PublicMapProjection = {
     origin: { lat: number; lon: number; country: string };
     destination: { lat: number; lon: number; country: string };
   }>;
-  flights: Array<{
-    id: string;
-    kind: "commercial" | "private";
-    legs: Array<{
-      index: number;
-      origin: { lat: number; lon: number; country: string };
-      destination: { lat: number; lon: number; country: string };
-    }>;
-  }>;
 };
 
 export type MapSharePreview = {
   previewId: string;
-  selection: ShareSelection & { selectedFlightCount: number };
+  includeDisplayName: boolean;
   projection: PublicMapProjection;
 };
 
 export class ShareNotFoundError extends Error {}
 export class ShareValidationError extends Error {}
+export class ShareEmptyMapError extends Error {}
+export class ShareFlightLimitError extends Error {}
 export class SharePreviewMismatchError extends Error {}
 
 function sharingSecret(): string {
@@ -92,10 +82,10 @@ export function formatSharePath(publicId: string, key: string): string {
   return `/shared/${publicId}#key=${key}`;
 }
 
-export function parseShareSelection(
+export function parseShareSettings(
   input: unknown,
   allowPreviewId = false,
-): ShareSelection {
+): ShareSettings {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new ShareValidationError();
   }
@@ -104,30 +94,15 @@ export function parseShareSelection(
     Object.keys(value).some(
       (key) =>
         ![
-          "flightIds",
           "includeDisplayName",
           ...(allowPreviewId ? ["previewId"] : []),
         ].includes(key),
     ) ||
-    !Array.isArray(value.flightIds) ||
-    typeof value.includeDisplayName !== "boolean" ||
-    value.flightIds.length > MAX_SHARED_FLIGHTS
+    typeof value.includeDisplayName !== "boolean"
   ) {
     throw new ShareValidationError();
   }
-  const flightIds = [...new Set(value.flightIds)];
-  if (
-    flightIds.some(
-      (flightId): boolean =>
-        typeof flightId !== "string" || !UUID_PATTERN.test(flightId),
-    )
-  ) {
-    throw new ShareValidationError();
-  }
-  return {
-    flightIds: flightIds.toSorted(),
-    includeDisplayName: value.includeDisplayName,
-  };
+  return { includeDisplayName: value.includeDisplayName };
 }
 
 export async function getOwnerShareStatus(
@@ -150,9 +125,7 @@ export async function getOwnerShareStatus(
         enabledAt: null,
         disabledAt: null,
         includeDisplayName: false,
-        scope: "selected_flights",
-        selectedFlightCount: 0,
-        selectedFlightIds: [],
+        publishedFlightCount: 0,
       };
     }
     const enabled = Boolean(share.enabledAt && !share.disabledAt);
@@ -164,9 +137,7 @@ export async function getOwnerShareStatus(
       enabledAt: share.enabledAt?.toISOString() ?? null,
       disabledAt: share.disabledAt?.toISOString() ?? null,
       includeDisplayName: share.includeDisplayName,
-      scope: "selected_flights",
-      selectedFlightCount: selected.length,
-      selectedFlightIds: selected.map(({ flightId }) => flightId).toSorted(),
+      publishedFlightCount: selected.length,
     };
   });
 }
@@ -175,15 +146,18 @@ export async function previewMapSharing(
   userId: string,
   input: unknown,
 ): Promise<MapSharePreview> {
-  const selection = parseShareSelection(input);
-  return withUserDb(userId, (tx) => createPreview(tx, userId, selection));
+  const settings = parseShareSettings(input);
+  return withUserDb(userId, async (tx) => {
+    const snapshot = await createPreview(tx, userId, settings);
+    return snapshot.preview;
+  });
 }
 
 export async function enableMapSharing(
   userId: string,
   input: unknown,
 ): Promise<OwnerShareStatus> {
-  const selection = parseShareSelection(input, true);
+  const settings = parseShareSettings(input, true);
   const previewId =
     input && typeof input === "object" && !Array.isArray(input)
       ? (input as Record<string, unknown>).previewId
@@ -193,15 +167,21 @@ export async function enableMapSharing(
   }
   await withUserDb(userId, async (tx) => {
     await lockOwnerShare(tx, userId);
-    const preview = await createPreview(tx, userId, selection);
-    if (preview.previewId !== previewId) throw new SharePreviewMismatchError();
+    const snapshot = await createPreview(tx, userId, settings, true);
+    if (snapshot.preview.previewId !== previewId) {
+      throw new SharePreviewMismatchError();
+    }
     const [existing] = await tx
       .select()
       .from(mapShares)
       .where(eq(mapShares.userId, userId))
       .limit(1);
-    const publicId = existing?.publicId ?? randomUUID();
-    const version = existing?.tokenVersion ?? 1;
+    const reactivating = Boolean(existing?.disabledAt);
+    const publicId =
+      !existing || reactivating ? randomUUID() : existing.publicId;
+    const version = existing
+      ? existing.tokenVersion + (reactivating ? 1 : 0)
+      : 1;
     const key = capabilityKey(publicId, version);
     const now = new Date();
     await tx
@@ -211,19 +191,26 @@ export async function enableMapSharing(
         publicId,
         tokenVersion: version,
         tokenHash: capabilityHash(publicId, key),
-        includeDisplayName: selection.includeDisplayName,
+        includeDisplayName: settings.includeDisplayName,
         scopeType: "selected_flights",
-        projection: preview.projection,
+        projection: snapshot.preview.projection,
         enabledAt: now,
         disabledAt: null,
       })
       .onConflictDoUpdate({
         target: mapShares.userId,
         set: {
+          ...(reactivating
+            ? {
+                publicId,
+                tokenVersion: version,
+                rotatedAt: now,
+              }
+            : {}),
           tokenHash: capabilityHash(publicId, key),
-          includeDisplayName: selection.includeDisplayName,
+          includeDisplayName: settings.includeDisplayName,
           scopeType: "selected_flights",
-          projection: preview.projection,
+          projection: snapshot.preview.projection,
           enabledAt: now,
           disabledAt: null,
           updatedAt: now,
@@ -232,15 +219,13 @@ export async function enableMapSharing(
     await tx
       .delete(mapShareFlights)
       .where(eq(mapShareFlights.userId, userId));
-    if (selection.flightIds.length) {
-      await tx.insert(mapShareFlights).values(
-        selection.flightIds.map((flightId) => ({
-          userId,
-          flightId,
-          selectedAt: now,
-        })),
-      );
-    }
+    await tx.insert(mapShareFlights).values(
+      snapshot.flightIds.map((flightId) => ({
+        userId,
+        flightId,
+        selectedAt: now,
+      })),
+    );
   });
   return getOwnerShareStatus(userId);
 }
@@ -305,7 +290,28 @@ export async function getPublicMapProjection(
   );
   const projection = result[0]?.projection;
   if (!projection) throw new ShareNotFoundError();
-  return projection;
+  return {
+    owner: { displayName: projection.owner.displayName },
+    summary: {
+      flightCount: projection.summary.flightCount,
+      routeCount: projection.summary.routeCount,
+    },
+    routes: projection.routes.map((route) => ({
+      id: route.id,
+      kind: route.kind,
+      flightCount: route.flightCount,
+      origin: {
+        lat: route.origin.lat,
+        lon: route.origin.lon,
+        country: route.origin.country,
+      },
+      destination: {
+        lat: route.destination.lat,
+        lon: route.destination.lon,
+        country: route.destination.country,
+      },
+    })),
+  };
 }
 
 export function publicTokenRateLimitKey(
@@ -318,35 +324,34 @@ export function publicTokenRateLimitKey(
 async function createPreview(
   tx: DatabaseTransaction,
   userId: string,
-  selection: ShareSelection,
-): Promise<MapSharePreview> {
-  const selectedFlights = selection.flightIds.length
-    ? await tx
-        .select()
-        .from(flights)
-        .where(
-          and(
-            eq(flights.userId, userId),
-            inArray(flights.id, selection.flightIds),
-          ),
-        )
-        .orderBy(asc(flights.id))
-    : [];
-  if (selectedFlights.length !== selection.flightIds.length) {
-    throw new ShareValidationError();
+  settings: ShareSettings,
+  staleOnInvalidFlightCount = false,
+): Promise<{ preview: MapSharePreview; flightIds: string[] }> {
+  const selectedFlights = await tx
+    .select()
+    .from(flights)
+    .where(eq(flights.userId, userId))
+    .orderBy(asc(flights.id))
+    .limit(MAX_SHARED_FLIGHTS + 1);
+  if (
+    selectedFlights.length === 0 ||
+    selectedFlights.length > MAX_SHARED_FLIGHTS
+  ) {
+    if (staleOnInvalidFlightCount) throw new SharePreviewMismatchError();
+    if (selectedFlights.length === 0) throw new ShareEmptyMapError();
+    throw new ShareFlightLimitError();
   }
-  const selectedStops = selection.flightIds.length
-    ? await tx
-        .select()
-        .from(flightStops)
-        .where(
-          and(
-            eq(flightStops.userId, userId),
-            inArray(flightStops.flightId, selection.flightIds),
-          ),
-        )
-        .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder))
-    : [];
+  const flightIds = selectedFlights.map(({ id }) => id);
+  const selectedStops = await tx
+    .select()
+    .from(flightStops)
+    .where(
+      and(
+        eq(flightStops.userId, userId),
+        inArray(flightStops.flightId, flightIds),
+      ),
+    )
+    .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
   const stopsByFlight = new Map<string, typeof selectedStops>();
   for (const stop of selectedStops) {
     const stops = stopsByFlight.get(stop.flightId) ?? [];
@@ -367,7 +372,7 @@ async function createPreview(
     ? await tx.select().from(airports).where(inArray(airports.id, airportIds))
     : [];
   const airportById = new Map(airportRows.map((airport) => [airport.id, airport]));
-  const [identity] = selection.includeDisplayName
+  const [identity] = settings.includeDisplayName
     ? await tx
         .select({
           profileName: userProfiles.displayName,
@@ -382,7 +387,6 @@ async function createPreview(
     string,
     PublicMapProjection["routes"][number]
   >();
-  const publicFlights: PublicMapProjection["flights"] = [];
   for (const flight of selectedFlights) {
     const stopIds =
       stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
@@ -393,7 +397,7 @@ async function createPreview(
     if (sequence.length < 2 || sequence.some((airport) => !airport)) {
       throw new ShareValidationError();
     }
-    const legs = sequence.slice(0, -1).map((origin, index) => {
+    sequence.slice(0, -1).forEach((origin, index) => {
       const destination = sequence[index + 1]!;
       const coarseOrigin = {
         lat: coarse(origin!.latitude),
@@ -423,24 +427,11 @@ async function createPreview(
           destination: coarseDestination,
         });
       }
-      return {
-        index,
-        origin: coarseOrigin,
-        destination: coarseDestination,
-      };
-    });
-    publicFlights.push({
-      id: createHash("sha256")
-        .update(`shared-flight:${userId}:${flight.id}`)
-        .digest("hex")
-        .slice(0, 24),
-      kind: flight.kind as "commercial" | "private",
-      legs,
     });
   }
   const projection: PublicMapProjection = {
     owner: {
-      displayName: selection.includeDisplayName
+      displayName: settings.includeDisplayName
         ? identity?.profileName ?? identity?.accountName ?? "Waypointer map"
         : null,
     },
@@ -451,22 +442,21 @@ async function createPreview(
     routes: [...routeCounts.values()].toSorted((left, right) =>
       left.id.localeCompare(right.id),
     ),
-    flights: publicFlights,
   };
   const canonical = JSON.stringify({
-    flightIds: selection.flightIds,
-    includeDisplayName: selection.includeDisplayName,
+    flightIds,
+    includeDisplayName: settings.includeDisplayName,
     projection,
   });
   return {
-    previewId: createHmac("sha256", sharingSecret())
-      .update(`flight-map-share-preview:${userId}:${canonical}`)
-      .digest("hex"),
-    selection: {
-      ...selection,
-      selectedFlightCount: selection.flightIds.length,
+    flightIds,
+    preview: {
+      previewId: createHmac("sha256", sharingSecret())
+        .update(`flight-map-share-preview:${userId}:${canonical}`)
+        .digest("hex"),
+      includeDisplayName: settings.includeDisplayName,
+      projection,
     },
-    projection,
   };
 }
 
@@ -475,7 +465,7 @@ async function lockOwnerShare(
   userId: string,
 ): Promise<void> {
   await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+    sql`select pg_advisory_xact_lock(hashtextextended(${userId}::uuid::text, 0))`,
   );
 }
 
