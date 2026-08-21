@@ -126,8 +126,9 @@ defaults to `disabled`, which never opens database or storage clients and must
 not be treated as processing-ready. `on-demand` drains until the queue is idle
 and exits successfully, so use it only from an external scheduler rather than
 for the always-on Railway service. Continuous mode uses bounded exponential
-polling backoff from `JOB_POLL_INTERVAL_MS` (minimum 5000) up to
-`JOB_POLL_MAX_INTERVAL_MS` so an empty queue does not keep Neon awake.
+polling backoff from `JOB_POLL_INTERVAL_MS` (minimum 30000) up to
+`JOB_POLL_MAX_INTERVAL_MS` (default 900000) so an empty queue does not keep
+Neon awake. The production configuration check requires those exact values.
 
 Set the complete worker environment, including `WORKER_EXECUTION_MODE`, before
 deploying and run `npm run check:durable-import-worker` against those exact

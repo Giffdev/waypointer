@@ -25,8 +25,8 @@ const complete = {
   CLAMAV_SIGNATURE_FILE: "/var/lib/clamav/daily.cvd",
   CLAMAV_MAX_SIGNATURE_AGE_HOURS: "48",
   JOB_LEASE_SECONDS: "120",
-  JOB_POLL_INTERVAL_MS: "5000",
-  JOB_POLL_MAX_INTERVAL_MS: "300000",
+  JOB_POLL_INTERVAL_MS: "30000",
+  JOB_POLL_MAX_INTERVAL_MS: "900000",
   IMPORT_MAX_BYTES: "10485760",
   IMPORT_RETENTION_DAYS: "7",
 };
@@ -61,29 +61,28 @@ describe("durable import worker release gate", () => {
     },
   );
 
-  it("uses the same 5000 millisecond polling floor as the worker runtime", () => {
+  it("uses the same 30000 millisecond polling floor as the worker runtime", () => {
     const result = run();
-    const tooFast = run({ JOB_POLL_INTERVAL_MS: "4999" });
+    const tooFast = run({ JOB_POLL_INTERVAL_MS: "29999" });
 
     expect(result.status).toBe(0);
     expect(tooFast.status).toBe(1);
     expect(tooFast.stderr).toContain(
-      "JOB_POLL_INTERVAL_MS must be an integer from 5000 to 30000",
+      "JOB_POLL_INTERVAL_MS must be an integer from 30000 to 30000",
     );
   });
 
-  it.each(["5000", "900000"])(
-    "accepts configured polling maximum %s used by runtime backoff",
-    (maximum) => {
-      const result = run({
-        JOB_POLL_INTERVAL_MS: "5000",
-        JOB_POLL_MAX_INTERVAL_MS: maximum,
-      });
+  it("requires the full production idle backoff ceiling", () => {
+    const result = run();
+    const tooFrequent = run({ JOB_POLL_MAX_INTERVAL_MS: "899999" });
 
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-    },
-  );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(tooFrequent.status).toBe(1);
+    expect(tooFrequent.stderr).toContain(
+      "JOB_POLL_MAX_INTERVAL_MS must be an integer from 900000 to 900000",
+    );
+  });
 
   it("requires the worker runtime write mode to be exactly false", () => {
     expect(run().status).toBe(0);

@@ -13,7 +13,7 @@ import { isDurableImportConfiguration } from "../src/lib/runtime-mode";
 export type WorkerExecutionMode = "disabled" | "on-demand" | "continuous";
 export type WorkerLoopResult = "worked" | "idle" | "error";
 
-export const WORKER_POLL_MIN_INTERVAL_MS = 5_000;
+export const WORKER_POLL_MIN_INTERVAL_MS = 30_000;
 export const WORKER_POLL_MAX_INTERVAL_MS = 30_000;
 export const WORKER_POLL_MAX_BACKOFF_MS = 900_000;
 export const WORKER_HEALTH_FRESHNESS_GRACE_MS = 30_000;
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
     process.env.JOB_POLL_INTERVAL_MS ?? WORKER_POLL_MIN_INTERVAL_MS,
   );
   const maxPollIntervalMs = Number(
-    process.env.JOB_POLL_MAX_INTERVAL_MS ?? 300_000,
+    process.env.JOB_POLL_MAX_INTERVAL_MS ?? WORKER_POLL_MAX_BACKOFF_MS,
   );
   const workerId = process.env.WORKER_ID?.trim();
   const workerEnabled = workerExecutionMode !== "disabled";

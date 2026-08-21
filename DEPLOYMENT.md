@@ -205,8 +205,10 @@ re-check account state. This schema work does not deploy or start a worker.
 When deployed, set `WORKER_EXECUTION_MODE` explicitly: `disabled` is safe-off,
 `on-demand` drains the queue and exits for an external scheduler, and
 `continuous` is the required hosted Railway mode. Continuous mode applies
-bounded exponential idle backoff from `JOB_POLL_INTERVAL_MS` (minimum 5000) to
-`JOB_POLL_MAX_INTERVAL_MS`. Both the checker and runtime require
+bounded exponential idle backoff from `JOB_POLL_INTERVAL_MS` (minimum and
+default 30000) to `JOB_POLL_MAX_INTERVAL_MS` (default 900000). The production
+configuration checker requires those exact values. Both the checker and runtime
+require
 `FLIGHT_MAP_RELEASE_WRITES_PAUSED=false`; run
 `npm run check:durable-import-worker` against the complete target environment.
 

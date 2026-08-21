@@ -1,6 +1,7 @@
 const environment = process.env;
 const failures = [];
-const minimumPollIntervalMs = 5_000;
+const minimumPollIntervalMs = 30_000;
+const productionPollMaxIntervalMs = 900_000;
 
 function required(name) {
   const value = environment[name]?.trim();
@@ -80,8 +81,8 @@ const pollInterval = boundedInteger(
 );
 const pollMaxInterval = boundedInteger(
   "JOB_POLL_MAX_INTERVAL_MS",
-  minimumPollIntervalMs,
-  900_000,
+  productionPollMaxIntervalMs,
+  productionPollMaxIntervalMs,
 );
 if (
   Number.isSafeInteger(pollInterval) &&

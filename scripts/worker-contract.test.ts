@@ -42,29 +42,29 @@ describe("durable worker operational contract", () => {
   });
 
   it("enforces the release polling floor and bounded exponential backoff", () => {
-    expect(() => validateWorkerTiming(4_999, 300_000)).toThrow(
-      "JOB_POLL_INTERVAL_MS must be from 5000 to 30000.",
+    expect(() => validateWorkerTiming(29_999, 900_000)).toThrow(
+      "JOB_POLL_INTERVAL_MS must be from 30000 to 30000.",
     );
-    expect(() => validateWorkerTiming(5_000, 4_999)).toThrow(
+    expect(() => validateWorkerTiming(30_000, 29_999)).toThrow(
       "JOB_POLL_MAX_INTERVAL_MS must be from JOB_POLL_INTERVAL_MS",
     );
     expect(() =>
-      validateWorkerTiming(5_000, WORKER_POLL_MAX_BACKOFF_MS + 1),
+      validateWorkerTiming(30_000, WORKER_POLL_MAX_BACKOFF_MS + 1),
     ).toThrow("JOB_POLL_MAX_INTERVAL_MS");
-    expect(() => validateWorkerTiming(5_000, 300_000)).not.toThrow();
+    expect(() => validateWorkerTiming(30_000, 900_000)).not.toThrow();
     expect(
-      backoffDelayMs(1, WORKER_POLL_MIN_INTERVAL_MS, 300_000),
-    ).toBe(5_000);
+      backoffDelayMs(1, WORKER_POLL_MIN_INTERVAL_MS, 900_000),
+    ).toBe(30_000);
     expect(
-      backoffDelayMs(4, WORKER_POLL_MIN_INTERVAL_MS, 300_000),
-    ).toBe(40_000);
+      backoffDelayMs(4, WORKER_POLL_MIN_INTERVAL_MS, 900_000),
+    ).toBe(240_000);
     expect(
-      backoffDelayMs(99, WORKER_POLL_MIN_INTERVAL_MS, 300_000),
-    ).toBe(300_000);
-    expect(backoffDelayMs(99, 5_000, 5_000)).toBe(5_000);
-    expect(backoffDelayMs(8, 5_000, 900_000)).toBe(640_000);
-    expect(backoffDelayMs(9, 5_000, 900_000)).toBe(900_000);
-    expect(backoffDelayMs(99, 5_000, 900_000)).toBe(900_000);
+      backoffDelayMs(99, WORKER_POLL_MIN_INTERVAL_MS, 900_000),
+    ).toBe(900_000);
+    expect(backoffDelayMs(99, 30_000, 30_000)).toBe(30_000);
+    expect(backoffDelayMs(5, 30_000, 900_000)).toBe(480_000);
+    expect(backoffDelayMs(6, 30_000, 900_000)).toBe(900_000);
+    expect(backoffDelayMs(99, 30_000, 900_000)).toBe(900_000);
   });
 
   it.each([
@@ -434,7 +434,7 @@ describe("durable worker operational contract", () => {
   });
 
   it.each([
-    { maxPollIntervalMs: 5_000, maximumAgeMs: 35_000 },
+    { maxPollIntervalMs: 30_000, maximumAgeMs: 60_000 },
     { maxPollIntervalMs: 900_000, maximumAgeMs: 930_000 },
   ])(
     "uses effective $maxPollIntervalMs ms backoff for idle freshness",
@@ -601,7 +601,7 @@ describe("durable worker operational contract", () => {
     await runWorker({
       mode: "on-demand",
       signal: new AbortController().signal,
-      pollIntervalMs: 5_000,
+      pollIntervalMs: 30_000,
       maxPollIntervalMs: 300_000,
       runOne,
       onError,
@@ -615,7 +615,7 @@ describe("durable worker operational contract", () => {
       runWorker({
         mode: "on-demand",
         signal: new AbortController().signal,
-        pollIntervalMs: 5_000,
+        pollIntervalMs: 30_000,
         maxPollIntervalMs: 300_000,
         runOne: vi.fn(async () => {
           throw failure;
@@ -644,8 +644,8 @@ describe("durable worker operational contract", () => {
     await runWorker({
       mode: "continuous",
       signal: shutdown.signal,
-      pollIntervalMs: 5_000,
-      maxPollIntervalMs: 300_000,
+      pollIntervalMs: 30_000,
+      maxPollIntervalMs: 900_000,
       runOne,
       onLoopStart: () => starts.push(runOne.mock.calls.length),
       delay: async (milliseconds) => {
@@ -654,7 +654,7 @@ describe("durable worker operational contract", () => {
       },
     });
 
-    expect(delays).toEqual([5_000, 10_000, 5_000]);
+    expect(delays).toEqual([30_000, 60_000, 30_000]);
     expect(starts).toEqual([0, 1, 2, 3]);
     expect(runOne).toHaveBeenCalledTimes(4);
   });
@@ -667,7 +667,7 @@ describe("durable worker operational contract", () => {
     await runWorker({
       mode: "disabled",
       signal: shutdown.signal,
-      pollIntervalMs: 5_000,
+      pollIntervalMs: 30_000,
       maxPollIntervalMs: 300_000,
       runOne,
     });
