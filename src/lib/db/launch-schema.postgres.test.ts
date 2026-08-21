@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -55,6 +55,8 @@ postgresDescribe("launch migration clean and upgrade paths", () => {
       await applyMigration(client, "0013_map_view_mode_preference.sql");
       await applyMigration(client, "0014_fix_flight_share_invalidation.sql");
       await applyMigration(client, "0015_airport_source_provenance.sql");
+      await applyMigration(client, "0016_serialize_owner_flight_sharing.sql");
+      await applyMigration(client, "0017_public_share_handles.sql");
       const tables = await client<{ table_name: string }[]>`
         select table_name
         from information_schema.tables
@@ -152,6 +154,35 @@ postgresDescribe("launch migration clean and upgrade paths", () => {
       await applyMigration(client, "0013_map_view_mode_preference.sql");
       await applyMigration(client, "0014_fix_flight_share_invalidation.sql");
       await applyMigration(client, "0015_airport_source_provenance.sql");
+      await applyMigration(client, "0016_serialize_owner_flight_sharing.sql");
+      const existingPublicId = randomUUID();
+      await client`
+        update users
+        set password_hash = 'existing-password-hash'
+        where id = ${userId}
+      `;
+      await client`
+        insert into map_shares (
+          user_id,
+          public_id,
+          token_hash,
+          token_version,
+          include_display_name,
+          scope_type,
+          projection,
+          enabled_at
+        ) values (
+          ${userId},
+          ${existingPublicId},
+          ${"a".repeat(64)},
+          1,
+          false,
+          'selected_flights',
+          '{"owner":{"displayName":null},"summary":{"flightCount":0,"routeCount":0},"routes":[]}'::jsonb,
+          now()
+        )
+      `;
+      await applyMigration(client, "0017_public_share_handles.sql");
       const [batch] = await client<{
         status: string;
         scan_status: string;
@@ -168,13 +199,165 @@ postgresDescribe("launch migration clean and upgrade paths", () => {
         idempotency_key: `legacy-batch:${batchId}`,
         imported_rows: 0,
       });
-      const [owner] = await client<{ username: string }[]>`
-        select username from users where id = ${userId}
+      const [owner] = await client<{
+        username: string;
+      }[]>`
+        select username
+        from users
+        where id = ${userId}
       `;
       expect(owner.username).toMatch(/^[a-z0-9][a-z0-9_-]{2,29}$/);
       expect(
         owner.username.endsWith(`_${userId.replaceAll("-", "").slice(0, 8)}`),
       ).toBe(true);
+      const [share] = await client<{
+        disabled_at: Date | null;
+      }[]>`
+        select disabled_at
+        from map_shares
+        where user_id = ${userId}
+      `;
+      expect(share.disabled_at).toBeInstanceOf(Date);
+    } finally {
+      await client.end();
+    }
+  });
+
+  it("remediates reserved and collision-prone usernames from 0016 before validating 0017", async () => {
+    const database = await createDatabase("reserved_handles");
+    const client = postgres(databaseUrl(database), {
+      max: 1,
+      prepare: false,
+      onnotice: () => {},
+    });
+    const adminId = "11111111-1111-4111-8111-111111111111";
+    const settingsId = "33333333-3333-4333-8333-333333333333";
+    const supportId = "44444444-4444-4444-8444-444444444444";
+    const collisionOwnerId = "22222222-2222-4222-8222-222222222222";
+    const occupiedAdminCandidate = `private_${adminId
+      .replaceAll("-", "")
+      .slice(0, 22)}`;
+    const remediatedAdminCandidate = `private_${createHash("sha256")
+      .update(`${adminId}:1`)
+      .digest("hex")
+      .slice(0, 22)}`;
+    try {
+      for (const migration of [
+        "0000_multi_user_import_foundation.sql",
+        "0001_privacy_retention_hardening.sql",
+        "0002_launch_schema.sql",
+        "0003_import_review.sql",
+        "0003_recent_authentication.sql",
+        "0004_durable_import.sql",
+        "0005_editable_usernames.sql",
+        "0006_synchronous_import_completion.sql",
+        "0007_flight_role_provenance.sql",
+        "0008_read_only_map_sharing.sql",
+        "0009_airport_identifier_aliases.sql",
+        "0010_airport_name_search.sql",
+        "0011_nautical_miles_profile_default.sql",
+        "0012_multi_stop_flight_routes.sql",
+        "0013_map_view_mode_preference.sql",
+        "0014_fix_flight_share_invalidation.sql",
+        "0015_airport_source_provenance.sql",
+        "0016_serialize_owner_flight_sharing.sql",
+      ]) {
+        await applyMigration(client, migration);
+      }
+      await client`
+        insert into users (id, email, username)
+        values
+          (${adminId}, 'legacy-admin@example.test', 'admin'),
+          (${settingsId}, 'legacy-settings@example.test', 'settings'),
+          (${supportId}, 'legacy-support@example.test', 'support'),
+          (
+            ${collisionOwnerId},
+            'candidate-owner@example.test',
+            ${occupiedAdminCandidate}
+          )
+      `;
+      await client`
+        insert into map_shares (
+          user_id,
+          public_id,
+          token_hash,
+          token_version,
+          include_display_name,
+          scope_type,
+          projection,
+          enabled_at
+        ) values (
+          ${adminId},
+          ${randomUUID()},
+          ${"a".repeat(64)},
+          7,
+          false,
+          'selected_flights',
+          '{"owner":{"displayName":null},"summary":{"flightCount":0,"routeCount":0},"routes":[]}'::jsonb,
+          now()
+        )
+      `;
+
+      await applyMigration(client, "0017_public_share_handles.sql");
+
+      const remediated = await client<{
+        id: string;
+        username: string;
+      }[]>`
+        select id, username
+        from users
+        where id in (
+          ${adminId},
+          ${settingsId},
+          ${supportId},
+          ${collisionOwnerId}
+        )
+        order by id
+      `;
+      expect(remediated).toEqual([
+        {
+          id: adminId,
+          username: remediatedAdminCandidate,
+        },
+        {
+          id: collisionOwnerId,
+          username: occupiedAdminCandidate,
+        },
+        {
+          id: settingsId,
+          username: `private_${settingsId.replaceAll("-", "").slice(0, 22)}`,
+        },
+        {
+          id: supportId,
+          username: `private_${supportId.replaceAll("-", "").slice(0, 22)}`,
+        },
+      ]);
+      expect(new Set(remediated.map(({ username }) => username)).size).toBe(
+        remediated.length,
+      );
+      const [reservedConstraint] = await client<{ convalidated: boolean }[]>`
+        select convalidated
+        from pg_constraint
+        where conname = 'users_public_handle_not_reserved'
+      `;
+      expect(reservedConstraint.convalidated).toBe(true);
+      const [share] = await client<{
+        disabled_at: Date | null;
+      }[]>`
+        select disabled_at
+        from map_shares
+        where user_id = ${adminId}
+      `;
+      expect(share.disabled_at).toBeInstanceOf(Date);
+      await expect(
+        client`
+          insert into users (email, username)
+          values ('new-reserved@example.test', 'support')
+        `,
+      ).rejects.toMatchObject({
+        code: "23514",
+        constraint_name: "users_public_handle_not_reserved",
+      });
     } finally {
       await client.end();
     }
@@ -275,6 +458,8 @@ postgresDescribe("launch migration clean and upgrade paths", () => {
         "0013_map_view_mode_preference.sql",
         "0014_fix_flight_share_invalidation.sql",
         "0015_airport_source_provenance.sql",
+        "0016_serialize_owner_flight_sharing.sql",
+        "0017_public_share_handles.sql",
       ]) {
         await applyMigration(client, migration);
       }

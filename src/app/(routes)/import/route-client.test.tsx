@@ -2,6 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,7 +11,12 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ImportRouteClientView } from "./route-client";
+import {
+  ImportRouteClientView,
+  nextImportPollDelayMs,
+  shouldPauseImportPolling,
+  shouldWarnImportPolling,
+} from "./route-client";
 
 const replace = vi.fn();
 const refresh = vi.fn();
@@ -49,6 +55,7 @@ afterEach(() => {
   cleanup();
   replace.mockReset();
   refresh.mockReset();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -167,7 +174,7 @@ describe("development import preview", () => {
     );
   });
 
-  it("keeps configured API mode on the authenticated upload flow", async () => {
+  it("auto-starts the configured authenticated upload flow", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -229,7 +236,6 @@ describe("development import preview", () => {
       input,
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -242,8 +248,22 @@ describe("development import preview", () => {
     );
   });
 
-  it("supports drag and drop and reflects the production upload limit", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ batches: [] })));
+  it("auto-starts the same import path for drag and drop", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/import/upload") {
+        return new Response(
+          JSON.stringify({
+            error: { code: "test-stop", message: "Drop upload captured." },
+          }),
+          {
+            status: 422,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(
       <ImportRouteClientView
         data={data}
@@ -267,16 +287,27 @@ describe("development import preview", () => {
         ],
       },
     });
-    expect(await screen.findByText(/flightdiary\.csv/)).toBeInTheDocument();
-    expect(await screen.findByText(/flightdiary\.csv/)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Drop upload captured.",
+    );
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
-    ).toBeEnabled();
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
   });
 
-  it("makes a valid ForeFlight upload visibly and accessibly ready", async () => {
+  it("makes an auto-started upload visibly and accessibly busy", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ batches: [] })));
+    let resolveUpload!: (response: Response) => void;
+    const uploadResponse = new Promise<Response>((resolve) => {
+      resolveUpload = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/import/upload") return uploadResponse;
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(
       <ImportRouteClientView
         data={data}
@@ -286,11 +317,9 @@ describe("development import preview", () => {
       />,
     );
 
-    const upload = screen.getByRole("button", { name: "Upload and process" });
-    expect(upload).toBeDisabled();
-    expect(upload).toHaveClass("import-upload-button", "disabled");
-    expect(upload).toHaveAttribute("aria-busy", "false");
-    expect(screen.getByText("Choose or drop a CSV to enable upload."))
+    expect(screen.queryByRole("button", { name: /upload|import/i }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText("Choose or drop a CSV to start an import."))
       .toBeInTheDocument();
 
     await user.upload(
@@ -298,12 +327,352 @@ describe("development import preview", () => {
       new File([foreFlightCsv], "foreflight.csv", { type: "text/csv" }),
     );
 
-    expect(upload).toBeEnabled();
-    expect(upload).toHaveClass("ready");
-    expect(upload).not.toHaveClass("disabled");
-    expect(screen.getByText(
-      "ForeFlight Logbook Import detected. Ready to upload and process.",
-    )).toBeInTheDocument();
+    const uploading = await screen.findByRole("button", { name: "Uploading…" });
+    expect(uploading).toBeDisabled();
+    expect(uploading).toHaveClass("import-upload-button", "loading");
+    expect(uploading).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByLabelText("CSV file drop area")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+
+    resolveUpload(
+      new Response(
+        JSON.stringify({
+          error: { code: "test-stop", message: "Upload captured." },
+        }),
+        {
+          status: 422,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Upload captured.",
+    );
+  });
+
+  it("does nothing when the file picker is cancelled", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL) => Promise<Response>
+    >(
+      async () => jsonResponse({ batches: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Choose one supported CSV"), {
+      target: { files: [] },
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(0);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("Choose or drop a CSV to start an import."))
+      .toBeInTheDocument();
+  });
+
+  it("rejects invalid CSV content locally without submitting it", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL) => Promise<Response>
+    >(
+      async () => jsonResponse({ batches: [] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("Choose one supported CSV"),
+      new File(
+        [`${fr24Csv.split("\n")[0]}\n2026-04-05,short`],
+        "broken.csv",
+        { type: "text/csv" },
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /unexpected number of columns/i,
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/upload",
+      ),
+    ).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Try import again" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stays busy through post-upload refresh and prevents a second submission", async () => {
+    const user = userEvent.setup();
+    let resolveDetail!: (response: Response) => void;
+    const detailResponse = new Promise<Response>((resolve) => {
+      resolveDetail = resolve;
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        return jsonResponse({
+          batchId: "batch-busy-refresh",
+          status: "review",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-busy-refresh")) {
+        return (await detailResponse).clone();
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    const file = new File([fr24Csv], "one-upload.csv", {
+      type: "text/csv",
+    });
+    await user.upload(input, file);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([request]) =>
+          String(request).includes("/api/import/batches/batch-busy-refresh"),
+        ),
+      ).toBe(true),
+    );
+    const uploading = await screen.findByRole("button", { name: "Uploading…" });
+    expect(input).toBeDisabled();
+    expect(screen.getByLabelText("CSV file drop area")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    fireEvent.click(uploading);
+    fireEvent.drop(screen.getByLabelText("CSV file drop area"), {
+      dataTransfer: { files: [file] },
+    });
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([request]) => String(request) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([request]) =>
+        String(request).includes("/api/import/batches/batch-busy-refresh"),
+      ),
+    ).toHaveLength(1);
+
+    resolveDetail(
+      jsonResponse({
+        batch: {
+          contractVersion: 1,
+          id: "batch-busy-refresh",
+          fileName: "one-upload.csv",
+          status: "review",
+          counts: {
+            totalRows: 1,
+            parsedRows: 1,
+            readyRows: 0,
+            acceptedRows: 0,
+            skippedRows: 0,
+            pendingRows: 1,
+            committedFlights: 0,
+            attachedSources: 0,
+          },
+          createdAt: "2026-08-20T00:00:00.000Z",
+          updatedAt: "2026-08-20T00:00:01.000Z",
+          rows: {
+            page: 1,
+            pageSize: 25,
+            totalRows: 0,
+            totalPages: 1,
+            rows: [],
+          },
+        },
+      }),
+    );
+    expect(await screen.findByText("Import summary")).toBeInTheDocument();
+    expect(input).toBeEnabled();
+    expect(
+      fetchMock.mock.calls.filter(([request]) =>
+        String(request).includes("/api/import/batches/batch-busy-refresh"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not offer upload retry after the server accepts a batch", async () => {
+    const user = userEvent.setup();
+    let batchAccepted = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        batchAccepted = true;
+        return jsonResponse({
+          batchId: "batch-refresh-failed",
+          status: "review",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-refresh-failed")) {
+        return new Response(null, { status: 503 });
+      }
+      if (url === "/api/import/batches" && batchAccepted) {
+        return new Response(null, { status: 503 });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("Choose one supported CSV"),
+      new File([fr24Csv], "accepted.csv", { type: "text/csv" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Uploading…" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /import (?:was accepted, but its )?status could not be refreshed/i,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Try import again" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([request]) => String(request) === "/api/import/upload",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("allows the same file after both a failed and completed attempt", async () => {
+    const user = userEvent.setup();
+    let uploadCount = 0;
+    const completion = {
+      totalRows: 1,
+      importedRows: 1,
+      duplicateRows: 0,
+      skippedRows: 0,
+      invalidRows: 0,
+      reviewRequiredRows: 0,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        uploadCount += 1;
+        if (uploadCount === 2) {
+          return jsonResponse({
+            batchId: "batch-complete-reselect",
+            status: "committed",
+            reused: false,
+            completion,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "test-stop",
+              message:
+                uploadCount === 1
+                  ? "First attempt failed."
+                  : "Same file selected after completion.",
+            },
+          }),
+          {
+            status: 422,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      if (url.startsWith("/api/import/batches/batch-complete-reselect")) {
+        return jsonResponse({
+          batch: {
+            contractVersion: 1,
+            id: "batch-complete-reselect",
+            fileName: "repeat.csv",
+            status: "committed",
+            counts: {
+              totalRows: 1,
+              parsedRows: 1,
+              readyRows: 1,
+              acceptedRows: 1,
+              skippedRows: 0,
+              pendingRows: 0,
+              committedFlights: 1,
+              attachedSources: 1,
+            },
+            createdAt: "2026-08-20T00:00:00.000Z",
+            updatedAt: "2026-08-20T00:00:01.000Z",
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    const file = new File([fr24Csv], "repeat.csv", { type: "text/csv" });
+    await user.upload(input, file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "First attempt failed.",
+    );
+
+    await user.upload(input, file);
+    expect(await screen.findByText("Import finished")).toBeInTheDocument();
+
+    await user.upload(input, file);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Same file selected after completion.",
+    );
+    expect(uploadCount).toBe(3);
   });
 
   it("automatically maps an unambiguous generic CSV", async () => {
@@ -345,18 +714,10 @@ describe("development import preview", () => {
       ),
     );
     expect(
-      await screen.findByText(
-        "Generic CSV detected. Ready to upload and process.",
-      ),
-    ).toBeInTheDocument();
-    expect(
       screen.queryByRole("heading", {
         name: "Match this CSV to flight fields",
       }),
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
-    );
     await screen.findByText("Mapping captured.");
 
     const uploadCall = fetchMock.mock.calls.find(
@@ -458,7 +819,7 @@ describe("development import preview", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("3 required")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeDisabled();
 
     await user.selectOptions(screen.getByLabelText(/Flight date/), "TripDay");
@@ -475,12 +836,12 @@ describe("development import preview", () => {
     expect(screen.getByText("0 need attention")).toBeInTheDocument();
     expect(screen.getByText("SEA → JFK")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeEnabled();
     expect(screen.queryByText(/do-not-display/)).not.toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     );
     await screen.findByText("Unknown mapping captured.");
     const uploadCall = fetchMock.mock.calls.find(
@@ -574,7 +935,7 @@ describe("development import preview", () => {
       name: "Match this CSV to flight fields",
     });
     expect(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     ).toBeDisabled();
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/import/upload/initiate",
@@ -591,7 +952,7 @@ describe("development import preview", () => {
     );
     await screen.findByText("1 valid");
     await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      screen.getByRole("button", { name: "Import mapped CSV" }),
     );
     await screen.findByRole("button", { name: "Cancel import" });
 
@@ -689,7 +1050,6 @@ describe("development import preview", () => {
       type: "text/csv",
     });
     await user.upload(screen.getByLabelText("Choose one supported CSV"), file);
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
@@ -789,12 +1149,13 @@ describe("development import preview", () => {
 
     await user.upload(
       screen.getByLabelText("Choose one supported CSV"),
-      new File([`${fr24Csv},${eicar}`], "durable-eicar.csv", {
-        type: "text/csv",
-      }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
+      new File(
+        [fr24Csv.replace("Leisure,,101", `Leisure,${eicar},101`)],
+        "durable-eicar.csv",
+        {
+          type: "text/csv",
+        },
+      ),
     );
 
     expect(await screen.findByText("Import quarantined")).toBeInTheDocument();
@@ -870,9 +1231,6 @@ describe("development import preview", () => {
     await user.upload(
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "already-imported.csv", { type: "text/csv" }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
     );
 
     expect(await screen.findByText("Already imported")).toBeInTheDocument();
@@ -962,9 +1320,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "scanner-retry.csv", { type: "text/csv" }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Upload and process" }),
-    );
     await user.click(await screen.findByRole("button", { name: "Retry import" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1014,7 +1369,6 @@ describe("development import preview", () => {
         { type: "text/csv" },
       ),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This CSV does not match a supported ForeFlight or myFlightradar24 export.",
@@ -1094,7 +1448,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByText("Import finished")).toBeInTheDocument();
     expect(screen.getByText("2 imported")).toBeInTheDocument();
@@ -1172,7 +1525,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "real-export.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
 
     expect(await screen.findByText("Import complete")).toBeInTheDocument();
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/map"));
@@ -1204,7 +1556,7 @@ describe("development import preview", () => {
         });
       }
       if (url.startsWith("/api/import/batches/batch-raced-review")) {
-        return detailResponse;
+        return (await detailResponse).clone();
       }
       return jsonResponse({ batches: [] });
     });
@@ -1221,7 +1573,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "raced.csv", { type: "text/csv" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Upload and process" }));
     await waitFor(() => {
       expect(
         fetchMock.mock.calls.some(([input]) =>
@@ -1412,7 +1763,6 @@ describe("development import preview", () => {
       screen.getByLabelText("Choose one supported CSV"),
       new File([fr24Csv], "review.csv", { type: "text/csv" }),
     );
-    await user.click(screen.getByRole("button", { name: "Upload and process" }));
     expect(await screen.findByText("Import summary")).toBeInTheDocument();
     expect(screen.getByText("1 need review")).toBeInTheDocument();
     expect(
@@ -1464,6 +1814,746 @@ describe("development import preview", () => {
       ],
     });
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/map"));
+  });
+});
+
+describe("import polling controls", () => {
+  it("uses bounded slower polling when hidden or unchanged", () => {
+    expect(
+      nextImportPollDelayMs({
+        visible: true,
+        unchangedPolls: 0,
+        failedPolls: 0,
+      }),
+    ).toBe(2000);
+    expect(
+      nextImportPollDelayMs({
+        visible: true,
+        unchangedPolls: 3,
+        failedPolls: 0,
+      }),
+    ).toBe(16_000);
+    expect(
+      nextImportPollDelayMs({
+        visible: false,
+        unchangedPolls: 0,
+        failedPolls: 0,
+      }),
+    ).toBe(15_000);
+    expect(
+      nextImportPollDelayMs({
+        visible: false,
+        unchangedPolls: 7,
+        failedPolls: 0,
+      }),
+    ).toBe(300_000);
+  });
+
+  it("warns and pauses polling only after stale thresholds", () => {
+    expect(shouldWarnImportPolling(119_999)).toBe(false);
+    expect(shouldWarnImportPolling(120_000)).toBe(true);
+    expect(shouldPauseImportPolling(1_199_999)).toBe(false);
+    expect(shouldPauseImportPolling(1_200_000)).toBe(true);
+  });
+
+  it("warns after two minutes of nonterminal processing despite changing timestamps", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T12:00:00.000Z"));
+    const batch = {
+      contractVersion: 1,
+      id: "batch-changing-timestamps",
+      fileName: "changing-timestamps.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    let detailRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (
+        String(input).startsWith(
+          "/api/import/batches/batch-changing-timestamps",
+        )
+      ) {
+        detailRequests += 1;
+        return jsonResponse({
+          batch: {
+            ...batch,
+            updatedAt: new Date(
+              Date.now() + detailRequests,
+            ).toISOString(),
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [batch] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /changing-timestamps\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+
+    expect(detailRequests).toBeGreaterThan(2);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This import is taking longer than expected. Status checks are still active with slower backoff.",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Resume status checks" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves a terminal result received after twenty minutes without pausing", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-08-19T12:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    const batch = {
+      contractVersion: 1,
+      id: "batch-terminal-after-twenty",
+      fileName: "terminal-after-twenty.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    let detailRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (
+        String(input).startsWith(
+          "/api/import/batches/batch-terminal-after-twenty",
+        )
+      ) {
+        detailRequests += 1;
+        const terminal =
+          Date.now() - startedAt.getTime() >= 1_200_000;
+        return jsonResponse({
+          batch: {
+            ...batch,
+            status: terminal ? "failed" : "processing",
+            updatedAt: new Date(
+              Date.now() + detailRequests,
+            ).toISOString(),
+            ...(terminal
+              ? {
+                  error: {
+                    code: "processing-failed",
+                    message: "The worker reported a terminal failure.",
+                  },
+                }
+              : {}),
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [batch] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /terminal-after-twenty\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_202_000);
+    });
+
+    expect(screen.getByText("Import failed")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("The worker reported a terminal failure."),
+    ).not.toHaveLength(0);
+    expect(screen.queryByText(/status checks paused/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Resume status checks" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("continues polling when cancellation initially remains processing", async () => {
+    vi.useFakeTimers();
+    const batch = {
+      contractVersion: 1,
+      id: "batch-cancelling",
+      fileName: "cancelling.csv",
+      status: "scanning",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T12:00:00.000Z",
+      updatedAt: "2026-08-19T12:00:01.000Z",
+    } as const;
+    let cancelRequested = false;
+    const postCancelStatuses: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url === "/api/import/batches/batch-cancelling/cancel" &&
+        init?.method === "POST"
+      ) {
+        cancelRequested = true;
+        return jsonResponse({});
+      }
+      if (url.startsWith("/api/import/batches/batch-cancelling?")) {
+        const status = cancelRequested
+          ? postCancelStatuses.length === 0
+            ? "processing"
+            : "cancelled"
+          : "scanning";
+        if (cancelRequested) postCancelStatuses.push(status);
+        return jsonResponse({
+          batch: {
+            ...batch,
+            status,
+            updatedAt:
+              status === "cancelled"
+                ? "2026-08-19T12:00:03.000Z"
+                : "2026-08-19T12:00:02.000Z",
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [batch] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+        durableImportEnabled
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /cancelling\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel import" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(postCancelStatuses).toEqual(["processing"]);
+    expect(screen.getByText("Processing uploaded CSV")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(postCancelStatuses).toEqual(["processing", "cancelled"]);
+    expect(screen.getByText("Import cancelled")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancel import" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("pauses after persistent status request failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T12:00:00.000Z"));
+    const batch = {
+      contractVersion: 1,
+      id: "batch-rejected-polls",
+      fileName: "rejected-polls.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    let detailRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/import/batches/batch-rejected-polls")) {
+        detailRequests += 1;
+        if (detailRequests > 1) {
+          throw new Error("Status service unavailable");
+        }
+        return jsonResponse({
+          batch: {
+            ...batch,
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [batch] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /rejected-polls\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This import is taking longer than expected. Status checks are still active with slower backoff.",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_080_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Import status checks paused after a long-running batch with no terminal update.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Resume status checks" }),
+    ).toBeInTheDocument();
+  });
+
+  it("ignores an abandoned status response after its timeout pauses polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T12:00:00.000Z"));
+    const batch = {
+      contractVersion: 1,
+      id: "batch-hung-polls",
+      fileName: "hung-polls.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    let detailRequests = 0;
+    const pollingSignals: AbortSignal[] = [];
+    const resolvePollingRequests: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (String(input).startsWith("/api/import/batches/batch-hung-polls")) {
+          detailRequests += 1;
+          if (detailRequests > 1) {
+            if (init?.signal) pollingSignals.push(init.signal);
+            return new Promise<Response>((resolve) => {
+              resolvePollingRequests.push(resolve);
+            });
+          }
+          return Promise.resolve(
+            jsonResponse({
+              batch: {
+                ...batch,
+                rows: {
+                  page: 1,
+                  pageSize: 25,
+                  totalRows: 0,
+                  totalPages: 1,
+                  rows: [],
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse({ batches: [batch] }));
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(screen.getByRole("button", { name: /hung-polls\.csv/i }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_300_000);
+    });
+
+    expect(pollingSignals.length).toBeGreaterThan(1);
+    expect(pollingSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Import status checks paused after a long-running batch with no terminal update.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Resume status checks" }),
+    ).toBeInTheDocument();
+
+    const requestsAtPause = detailRequests;
+    const resolveLatestRequest =
+      resolvePollingRequests[resolvePollingRequests.length - 1];
+    await act(async () => {
+      resolveLatestRequest(
+        jsonResponse({
+          batch: {
+            ...batch,
+            status: "failed",
+            updatedAt: "2026-08-19T12:22:00.000Z",
+            error: {
+              code: "processing-failed",
+              message: "Late abandoned result must be ignored.",
+            },
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Import status checks paused after a long-running batch with no terminal update.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Resume status checks" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Processing uploaded CSV")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Late abandoned result must be ignored."),
+    ).not.toBeInTheDocument();
+    expect(detailRequests).toBe(requestsAtPause);
+  });
+
+  it("invalidates an in-flight status response when polling effect cleanup runs", async () => {
+    vi.useFakeTimers();
+    let visibilityState: DocumentVisibilityState = "visible";
+    const visibilityStateSpy = vi.spyOn(
+      document,
+      "visibilityState",
+      "get",
+    ).mockImplementation(
+      () => visibilityState,
+    );
+    const batch = {
+      contractVersion: 1,
+      id: "batch-cleaned-up-poll",
+      fileName: "cleaned-up-poll.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    let detailRequests = 0;
+    let pollingSignal: AbortSignal | undefined;
+    let resolvePollingRequest: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        if (
+          String(input).startsWith(
+            "/api/import/batches/batch-cleaned-up-poll",
+          )
+        ) {
+          detailRequests += 1;
+          if (detailRequests > 1) {
+            pollingSignal = init?.signal ?? undefined;
+            return new Promise<Response>((resolve) => {
+              resolvePollingRequest = resolve;
+            });
+          }
+          return Promise.resolve(
+            jsonResponse({
+              batch: {
+                ...batch,
+                rows: {
+                  page: 1,
+                  pageSize: 25,
+                  totalRows: 0,
+                  totalPages: 1,
+                  rows: [],
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse({ batches: [batch] }));
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /cleaned-up-poll\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(pollingSignal?.aborted).toBe(false);
+    visibilityState = "hidden";
+    fireEvent(document, new Event("visibilitychange"));
+    expect(pollingSignal?.aborted).toBe(true);
+
+    await act(async () => {
+      resolvePollingRequest?.(
+        jsonResponse({
+          batch: {
+            ...batch,
+            status: "failed",
+            updatedAt: "2026-08-19T12:00:10.000Z",
+            error: {
+              code: "processing-failed",
+              message: "Cleaned-up result must be ignored.",
+            },
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Processing uploaded CSV")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Cleaned-up result must be ignored."),
+    ).not.toBeInTheDocument();
+    expect(detailRequests).toBe(2);
+    visibilityStateSpy.mockRestore();
+  });
+
+  it("pauses a long-running batch and resumes with a fresh polling window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-19T12:00:00.000Z"));
+    const batch = {
+      contractVersion: 1,
+      id: "batch-long-running",
+      fileName: "long-running.csv",
+      status: "processing",
+      counts: {
+        totalRows: 0,
+        parsedRows: 0,
+        readyRows: 0,
+        acceptedRows: 0,
+        skippedRows: 0,
+        pendingRows: 0,
+        committedFlights: 0,
+        attachedSources: 0,
+      },
+      createdAt: "2026-08-19T11:59:00.000Z",
+      updatedAt: "2026-08-19T11:59:01.000Z",
+    } as const;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/import/batches/batch-long-running")) {
+        return jsonResponse({
+          batch: {
+            ...batch,
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [batch] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /long-running\.csv/i }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(122_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This import is taking longer than expected. Status checks are still active with slower backoff.",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_080_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Import status checks paused after a long-running batch with no terminal update.",
+    );
+    const resume = screen.getByRole("button", {
+      name: "Resume status checks",
+    });
+    const requestsBeforeResume = fetchMock.mock.calls.filter(([input]) =>
+      String(input).startsWith("/api/import/batches/batch-long-running"),
+    ).length;
+
+    fireEvent.click(resume);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Resume status checks" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).startsWith("/api/import/batches/batch-long-running"),
+      ),
+    ).toHaveLength(requestsBeforeResume + 1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_199_999);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Resume status checks" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Processing uploaded CSV")).toBeInTheDocument();
   });
 });
 

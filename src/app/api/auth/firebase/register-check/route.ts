@@ -5,7 +5,10 @@ import {
 } from "@/lib/auth/password";
 import { consumeRateLimit } from "@/lib/auth/rate-limit";
 import { assertSameOrigin, requestIp } from "@/lib/auth/request";
-import { isValidUsername, normalizeUsername } from "@/lib/auth/username";
+import {
+  isValidPublicHandle,
+  normalizeUsername,
+} from "@/lib/auth/username";
 
 export const runtime = "nodejs";
 
@@ -39,7 +42,7 @@ export async function POST(request: Request) {
     );
     if (
       !EMAIL_PATTERN.test(email) ||
-      !isValidUsername(username) ||
+      !isValidPublicHandle(username) ||
       validatePassword(password) ||
       (await isPasswordBreached(password))
     ) {

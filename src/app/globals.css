@@ -993,37 +993,9 @@ h1 span {
 .sharing-warning { background: rgba(246,199,101,.08); border: 1px solid rgba(246,199,101,.3); border-radius: 10px; display: grid; gap: 3px; padding: 12px; }
 .sharing-warning span, .sharing-snapshot { color: #9bb2b7; font-size: 12px; }
 .sharing-snapshot { border-left: 3px solid var(--teal); margin: 0; padding: 8px 11px; }
-.sharing-flight-picker { border: 1px solid rgba(129,211,207,.18); border-radius: 12px; display: grid; gap: 12px; margin: 0; min-width: 0; padding: 14px; }
-.sharing-flight-picker legend { font-size: 13px; font-weight: 800; padding: 0 6px; }
-.sharing-filter-controls { display: grid; gap: 10px; grid-template-columns: minmax(0, 2fr) minmax(150px, 1fr); }
-.sharing-selection-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
-.sharing-selection-actions span { color: #9bb2b7; font-size: 12px; margin-right: auto; }
-.sharing-flight-list { display: grid; gap: 7px; max-height: 520px; overflow: auto; overscroll-behavior: contain; }
-.sharing-flight-row { align-items: center; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.07); border-radius: 10px; cursor: pointer; display: grid !important; flex-direction: unset !important; gap: 10px !important; grid-template-columns: 20px 34px minmax(0,1fr) auto; min-height: 62px; padding: 9px 11px; }
-.sharing-flight-row.selected { background: rgba(17,129,137,.12); border-color: rgba(129,211,207,.42); }
-.sharing-flight-row > input { height: 18px; width: 18px; }
-.sharing-flight-row .flight-kind { align-items: center; border-radius: 50%; display: flex; height: 30px; justify-content: center; width: 30px; }
-.sharing-flight-primary, .sharing-flight-meta { display: grid; gap: 3px; min-width: 0; }
-.sharing-flight-primary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sharing-flight-primary small, .sharing-flight-meta span { color: #8fa7ac; font-size: 11px; }
-.sharing-flight-meta { text-align: right; }
+.sharing-inclusion-summary { color: #bcd0d3; margin: 0; }
 .sharing-name-option { align-items: center; display: flex; flex-direction: row !important; gap: 9px !important; }
 .sharing-name-option input { height: 18px; width: 18px; }
-.sharing-zero-selection { color: #9bb2b7; font-size: 12px; margin: -6px 0 0; }
-.sharing-preview { background: rgba(6, 28, 39, .68); border: 1px solid rgba(129, 211, 207, .18); border-radius: 12px; display: grid; gap: 13px; padding: 15px; }
-.sharing-preview h3 { font-size: 14px; margin: 0; }
-.sharing-preview dl { display: grid; gap: 8px; margin: 0; }
-.sharing-preview dl div { display: flex; gap: 12px; justify-content: space-between; }
-.sharing-preview dt { color: #829ba1; }
-.sharing-preview dd { color: #e0ecee; font-weight: 800; margin: 0; }
-.sharing-route-preview { display: grid; gap: 8px; list-style: none; margin: 0; max-height: 220px; overflow: auto; padding: 0; }
-.sharing-route-preview li { border-top: 1px solid rgba(255,255,255,.08); display: grid; gap: 3px; padding-top: 8px; }
-.sharing-route-preview span { color: #8fa7ac; font-size: 11px; }
-.sharing-flight-preview { display: grid; gap: 8px; margin: 0; max-height: 260px; overflow: auto; padding-left: 22px; }
-.sharing-flight-preview li, .sharing-flight-preview li > span { display: grid; gap: 3px; }
-.sharing-flight-preview li > span { color: #9bb2b7; font-size: 11px; }
-.sharing-consent { align-items: flex-start; background: rgba(246,199,101,.08); border: 1px solid rgba(246,199,101,.3); border-radius: 10px; display: flex !important; flex-direction: row !important; gap: 9px !important; padding: 12px; }
-.sharing-consent input { flex: 0 0 auto; height: 18px; margin-top: 2px; width: 18px; }
 .sharing-live-controls, .sharing-live-controls label { display: grid; gap: 9px; }
 .sharing-live-controls input { font-family: var(--font-geist-mono); font-size: 11px; }
 .sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1033,11 +1005,6 @@ h1 span {
 .sharing-feedback { min-height: 1.4em; }
 .danger-button { border-color: rgba(255,143,132,.42) !important; color: #ffaaa2 !important; }
 
-@media (max-width: 640px) {
-  .sharing-filter-controls { grid-template-columns: 1fr; }
-  .sharing-flight-row { grid-template-columns: 20px 30px minmax(0,1fr); }
-  .sharing-flight-meta { grid-column: 3; text-align: left; }
-}
 
 .shared-map-page { background: #03101a; color: #dce9eb; min-height: 100svh; padding: 22px; }
 .shared-map-header { margin: 0 auto 16px; max-width: 1180px; }

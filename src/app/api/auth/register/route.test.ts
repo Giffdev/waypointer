@@ -117,6 +117,14 @@ describe("public registration", () => {
     expect(response.headers.get("location")).not.toContain(
       "preview-access-denied",
     );
+    expect(mocks.verificationValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        username: "new_pilot",
+      }),
+    );
+    expect(mocks.verificationValues.mock.calls[0]?.[0]).not.toHaveProperty(
+      "publicHandleConfiguredAt",
+    );
   });
 
   it("returns the same completion destination for an existing account", async () => {

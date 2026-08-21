@@ -113,6 +113,19 @@ export const users = pgTable(
       "users_username_format",
       sql`${table.username} ~ '^[a-z0-9][a-z0-9_-]{2,29}$'`,
     ),
+    check(
+      "users_public_handle_not_reserved",
+      sql`lower(${table.username}) not in (
+        'about', 'account', 'admin', 'admins', 'administrator',
+        'administrators', 'api', 'auth', 'favicon', 'flights', 'health',
+        'help', 'import', 'login', 'logout', 'manifest', 'map', 'official',
+        'privacy', 'profile', 'register', 'robots', 'root', 'security',
+        'settings', 'shared', 'sign-in', 'sign-out', 'signup', 'sitemap',
+        'staff', 'support', 'system', 'terms', 'u', 'user', 'users',
+        'verify', 'waypointer', 'way-pointer', 'webmaster', 'www',
+        'abuse', 'moderator', 'moderators', 'postmaster'
+      )`,
+    ),
   ],
 );
 
@@ -710,11 +723,6 @@ export const mapShares = pgTable(
     userId: uuid("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    publicId: uuid("public_id").notNull().defaultRandom(),
-    tokenHash: text("token_hash").notNull(),
-    tokenVersion: integer("token_version").notNull().default(1),
-    includeDisplayName: boolean("include_display_name").notNull().default(false),
-    scopeType: text("scope_type").notNull().default("selected_flights"),
     projection: jsonb("projection").notNull().default({
       owner: { displayName: null },
       summary: { flightCount: 0, routeCount: 0 },
@@ -723,25 +731,8 @@ export const mapShares = pgTable(
     }),
     enabledAt: timestamp("enabled_at", { withTimezone: true }),
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
-    rotatedAt: timestamp("rotated_at", { withTimezone: true }),
     ...timestamps,
   },
-  (table) => [
-    uniqueIndex("map_shares_public_id_unique").on(table.publicId),
-    uniqueIndex("map_shares_token_hash_unique").on(table.tokenHash),
-    check(
-      "map_shares_token_hash_length",
-      sql`char_length(${table.tokenHash}) = 64`,
-    ),
-    check(
-      "map_shares_token_version_positive",
-      sql`${table.tokenVersion} > 0`,
-    ),
-    check(
-      "map_shares_scope_type_valid",
-      sql`${table.scopeType} = 'selected_flights'`,
-    ),
-  ],
 );
 
 export const mapShareFlights = pgTable(

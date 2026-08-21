@@ -34,14 +34,6 @@ export interface RelationStateFingerprint {
 export const AIRPORT_RELEASE_MUTABLE_RELATIONS = [
   "airports",
   "airport_aliases",
-  "flights",
-  "flight_stops",
-  "import_batches",
-  "import_rows",
-  "flight_sources",
-  "flight_overrides",
-  "duplicate_candidates",
-  "map_shares",
 ] as const;
 
 export const AIRPORT_RELEASE_ROLLBACK_RELATIONS = [
@@ -49,11 +41,11 @@ export const AIRPORT_RELEASE_ROLLBACK_RELATIONS = [
   "drizzle_migrations",
 ] as const;
 
-type AirportReleaseRollbackRelation =
+export type AirportReleaseRollbackRelation =
   (typeof AIRPORT_RELEASE_ROLLBACK_RELATIONS)[number];
 
 export interface AirportReleaseStateFingerprint {
-  schemaVersion: 3;
+  schemaVersion: 4;
   migration: AirportMigrationState;
   relations: Record<
     AirportReleaseRollbackRelation,
@@ -75,59 +67,24 @@ interface DatabaseReleaseEvidence {
   };
 }
 
-const RELATION_QUERIES = {
+const RELATION_DEFINITIONS = {
   airports: {
     relation: "public.airports",
-    query: "select to_jsonb(value) as value from public.airports value order by id",
   },
   airport_aliases: {
     relation: "public.airport_aliases",
-    query: "select to_jsonb(value) as value from public.airport_aliases value order by airport_id, code, code_type",
-  },
-  flights: {
-    relation: "public.flights",
-    query: "select to_jsonb(value) as value from public.flights value order by id",
-  },
-  flight_stops: {
-    relation: "public.flight_stops",
-    query: "select to_jsonb(value) as value from public.flight_stops value order by flight_id, stop_order",
-  },
-  import_batches: {
-    relation: "public.import_batches",
-    query: "select to_jsonb(value) as value from public.import_batches value order by id",
-  },
-  import_rows: {
-    relation: "public.import_rows",
-    query: "select to_jsonb(value) as value from public.import_rows value order by id",
-  },
-  flight_sources: {
-    relation: "public.flight_sources",
-    query: "select to_jsonb(value) as value from public.flight_sources value order by id",
-  },
-  flight_overrides: {
-    relation: "public.flight_overrides",
-    query: "select to_jsonb(value) as value from public.flight_overrides value order by id",
-  },
-  duplicate_candidates: {
-    relation: "public.duplicate_candidates",
-    query: "select to_jsonb(value) as value from public.duplicate_candidates value order by id",
-  },
-  map_shares: {
-    relation: "public.map_shares",
-    query: "select to_jsonb(value) as value from public.map_shares value order by user_id",
   },
   drizzle_migrations: {
     relation: "drizzle.__drizzle_migrations",
-    query: "select to_jsonb(value) as value from drizzle.__drizzle_migrations value order by id",
   },
 } as const satisfies Record<
   AirportReleaseRollbackRelation,
-  { relation: string; query: string }
+  { relation: string }
 >;
 
 function assertRelationQueryInventory() {
   if (
-    canonicalJson(Object.keys(RELATION_QUERIES)) !==
+    canonicalJson(Object.keys(RELATION_DEFINITIONS)) !==
     canonicalJson(AIRPORT_RELEASE_ROLLBACK_RELATIONS)
   ) {
     throw new AirportCatalogSafetyError("rollback-verification-failed");
@@ -157,12 +114,12 @@ function assertCompleteStateFingerprint(
       );
     });
   const stateCore = {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     migration: state.migration,
     relations: state.relations,
   };
   if (
-    state.schemaVersion !== 3 ||
+    state.schemaVersion !== 4 ||
     !validRelations ||
     sha256Bytes(canonicalJson(stateCore)) !== state.stateSha256
   ) {
@@ -181,11 +138,41 @@ async function relationExists(
   return row?.present === true;
 }
 
-async function hashRelation(
+export function airportReleaseRelationFingerprintQuery(
+  relation: AirportReleaseRollbackRelation,
+): string {
+  const { relation: qualifiedRelation } = RELATION_DEFINITIONS[relation];
+  return `
+    select
+      count(*)::text as row_count,
+      encode(
+        sha256(
+          convert_to(
+            coalesce(
+              string_agg(
+                encode(sha256(convert_to(row_json, 'UTF8')), 'hex'),
+                ''
+                order by row_json
+              ),
+              ''
+            ),
+            'UTF8'
+          )
+        ),
+        'hex'
+      ) as row_fingerprint
+    from (
+      select to_jsonb(value)::text as row_json
+      from ${qualifiedRelation} value
+    ) relation_rows
+  `;
+}
+
+export async function fingerprintAirportReleaseRelation(
   sql: UnsafeSqlClient,
   relation: AirportReleaseRollbackRelation,
 ): Promise<RelationStateFingerprint> {
-  const definition = RELATION_QUERIES[relation];
+  const definition = RELATION_DEFINITIONS[relation];
   if (!(await relationExists(sql, definition.relation))) {
     return {
       present: false,
@@ -193,14 +180,27 @@ async function hashRelation(
       sha256: sha256Bytes(""),
     };
   }
-  const rows = await sql.unsafe(definition.query);
-  const digest = rows
-    .map((row) => JSON.stringify(row.value))
-    .join("\n");
+  const [aggregate] = await sql.unsafe(
+    airportReleaseRelationFingerprintQuery(relation),
+  );
+  const rawCount = aggregate?.row_count;
+  const fingerprint = aggregate?.row_fingerprint;
+  if (
+    typeof rawCount !== "string" ||
+    !/^(0|[1-9]\d*)$/.test(rawCount) ||
+    typeof fingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(fingerprint)
+  ) {
+    throw new AirportCatalogSafetyError("rollback-verification-failed");
+  }
+  const count = Number(rawCount);
+  if (!Number.isSafeInteger(count)) {
+    throw new AirportCatalogSafetyError("rollback-verification-failed");
+  }
   return {
     present: true,
-    count: rows.length,
-    sha256: sha256Bytes(digest),
+    count,
+    sha256: fingerprint,
   };
 }
 
@@ -213,7 +213,7 @@ export async function snapshotAirportReleaseState(
   const relationEntries = await Promise.all(
     AIRPORT_RELEASE_ROLLBACK_RELATIONS.map(async (relation) => [
       relation,
-      await hashRelation(sql, relation),
+      await fingerprintAirportReleaseRelation(sql, relation),
     ]),
   );
   const relations = Object.fromEntries(relationEntries) as Record<
@@ -221,7 +221,7 @@ export async function snapshotAirportReleaseState(
     RelationStateFingerprint
   >;
   const stateCore = {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     migration,
     relations,
   };

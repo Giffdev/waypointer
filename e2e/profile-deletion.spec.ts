@@ -35,10 +35,12 @@ test("private settings update and deletion confirmation stay owner-only", async 
   await expect(
     page.getByRole("heading", { name: "Private account settings" }),
   ).toBeVisible();
-  await expect(page.getByText(/no public username profile/i)).toBeVisible();
-  await page.getByLabel("Display name").fill("Updated Pilot");
+  await expect(page.getByText(/there is no public profile/i)).toBeVisible();
+  await page
+    .getByRole("textbox", { name: "Display name", exact: true })
+    .fill("Updated Pilot");
   await page.getByRole("button", { name: "Save profile" }).click();
-  await expect(page.getByText("Private profile saved.")).toBeVisible();
+  await expect(page.getByText("Account settings saved.")).toBeVisible();
 
   await page.getByLabel("Type DELETE to confirm").fill("DELETE");
   await page.getByRole("button", { name: "Delete my account" }).click();

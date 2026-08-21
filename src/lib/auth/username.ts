@@ -1,7 +1,56 @@
 export const USERNAME_PATTERN = /^[a-z0-9][a-z0-9_-]{2,29}$/;
 export const USERNAME_INPUT_PATTERN = "[A-Za-z0-9][A-Za-z0-9_\\x2d]{2,29}";
+export const RESERVED_PUBLIC_HANDLES = [
+  "about",
+  "account",
+  "admin",
+  "admins",
+  "administrator",
+  "administrators",
+  "api",
+  "abuse",
+  "auth",
+  "favicon",
+  "flights",
+  "health",
+  "help",
+  "import",
+  "login",
+  "logout",
+  "manifest",
+  "map",
+  "moderator",
+  "moderators",
+  "official",
+  "postmaster",
+  "privacy",
+  "profile",
+  "register",
+  "robots",
+  "root",
+  "security",
+  "settings",
+  "shared",
+  "sign-in",
+  "sign-out",
+  "signup",
+  "sitemap",
+  "staff",
+  "support",
+  "system",
+  "terms",
+  "u",
+  "user",
+  "users",
+  "verify",
+  "waypointer",
+  "way-pointer",
+  "webmaster",
+  "www",
+] as const;
+const RESERVED_PUBLIC_HANDLE_SET = new Set<string>(RESERVED_PUBLIC_HANDLES);
 export const USERNAME_REQUIREMENTS =
-  "Use 3–30 letters, numbers, underscores, or hyphens. Start with a letter or number. Usernames are case-insensitive and saved lowercase.";
+  "Use 3–30 letters, numbers, underscores, or hyphens. Start with a letter or number. Usernames are case-insensitive, saved lowercase, and cannot use a reserved Waypointer route.";
 
 export function normalizeUsername(value: string): string {
   return value.trim().toLowerCase();
@@ -9,6 +58,14 @@ export function normalizeUsername(value: string): string {
 
 export function isValidUsername(value: string): boolean {
   return USERNAME_PATTERN.test(value);
+}
+
+export function isReservedPublicHandle(value: string): boolean {
+  return RESERVED_PUBLIC_HANDLE_SET.has(normalizeUsername(value));
+}
+
+export function isValidPublicHandle(value: string): boolean {
+  return isValidUsername(value) && !isReservedPublicHandle(value);
 }
 
 export function isUsernameUniqueViolation(error: unknown): boolean {

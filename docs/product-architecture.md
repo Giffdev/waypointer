@@ -4,7 +4,7 @@
 
 Waypointer is a multi-user, private-by-default home for a person's combined general-aviation and commercial flight history. It should make a life in the air legible through an explorable globe, trustworthy records, and user-controlled corrections.
 
-The proposed account and sharing architecture is in [`multi-user-accounts-and-sharing.md`](multi-user-accounts-and-sharing.md), and its mandatory security/privacy gates are in [`multi-user-security-and-privacy.md`](multi-user-security-and-privacy.md). Together they plan isolated accounts with usernames, planned Google authentication, and one explicitly enabled, revocable travel-map share link. The authenticated owner view remains private and may show exact airports; the shared URL reads a separately approved server-side projection that starts with coarse locations, excludes new imports, and removes materially edited flights until reapproval. Account deletion disables normal login and sharing immediately; a proposed grace-period cancellation uses out-of-band recovery rather than a partially active account. Social graphs and friend-only audiences are explicit non-goals. Both documents are proposed/planning-only and authorize no implementation, infrastructure, remote, or hosting changes.
+The current sharing contract is in [`map-sharing-api.md`](map-sharing-api.md). Waypointer implements isolated accounts with usernames, Auth.js sign-in, and one explicitly enabled public travel map at `/{username}`. The URL is intentionally enumerable and has no token, GUID, fragment, or legacy compatibility route. Email is never exposed as a fallback. The authenticated owner view remains private and may show exact airports; the Share action publishes a coarse server-side snapshot containing every eligible flight at that moment. New imports wait for an owner-initiated complete-map update, and any published flight or route-stop mutation conservatively disables the whole share until the owner shares again. Account deletion disables normal login and sharing immediately. Social graphs and friend-only audiences remain explicit non-goals.
 
 Publicly observed on 2026-08-07 (no authentication or private data accessed):
 
@@ -19,16 +19,17 @@ Inferred requirements, kept separate from observations: users will value filters
 
 **Not in first release:** scraping or credential-based syncing from third parties; live aircraft tracking; social graph; mobile apps; collaborative logs; pilot credential storage; automatic Arelplane/myFR24 ingestion without an authorized export/API; public profiles by default. Arelplane-style and myFR24 exporters become adapters only after sample exports and terms/API review.
 
-The current mockup uses representative data unless an ignored, locally generated map-safe artifact is present. Browser uploads, remote persistence, and authentication remain explicitly disabled.
+Unauthenticated preview pages may use representative data. Authenticated owner
+routes, browser imports, and sharing use persisted owner-scoped PostgreSQL data.
 
 ## Chosen stack
 
 - **Next.js 16 App Router + TypeScript + React 19:** one maintainable full-stack web application, server components by default, mature deployment path.
 - **MapLibre GL JS 6 (BSD-3-Clause):** production-oriented WebGL cartography with globe projection at global scales and its automatic Mercator transition near zoom 12 for precise regional work. GPU-native vector/raster layers and accessible app controls require no paid-provider token. Great-circle routes and OurAirports-derived airport facilities are application-owned GeoJSON layers. Native layers remain preferred; deck.gl `ArcLayer` is only a fallback if measured route-rendering limitations justify its additional runtime.
 - **Tailwind CSS plus project CSS tokens:** quick responsive implementation while retaining a distinct visual system.
-- **PostgreSQL + PostGIS (planned):** relational integrity, geospatial airport/region lookup, row-level ownership queries, strong migration/tooling ecosystem.
-- **Drizzle ORM (planned):** explicit SQL-friendly schemas and migrations.
-- **Auth.js (planned):** Google OAuth plus Credentials provider. Passwords hashed with Argon2id; secure, HTTP-only sessions. No home-grown session protocol.
+- **PostgreSQL + PostGIS:** relational integrity, geospatial airport/region lookup, row-level ownership queries, and database-enforced sharing/mutation serialization.
+- **Drizzle ORM:** explicit SQL-friendly schemas and migrations.
+- **Auth.js:** Google OAuth plus Credentials provider. Passwords are hashed with Argon2id and sessions use secure, HTTP-only cookies. No home-grown session protocol.
 - **S3-compatible object storage + background worker (planned):** private, short-retention original uploads; queued parsing and reconciliation outside request timeouts.
 - **Vitest:** foundational pure-domain tests; Playwright will cover import/auth journeys once those routes exist.
 
@@ -36,7 +37,7 @@ The current mockup uses representative data unless an ignored, locally generated
 
 - `users`, `accounts`, `sessions`: identity and authentication. Username is unique but not an authorization boundary.
 - `user_profiles`: display preferences and independently controlled `profile_visibility`.
-- `sharing_policies`, `share_links`, `share_projection_entries`: one opt-in capability URL, server-side precision policy, and explicit approved flight membership/redacted snapshots; source flights never inherit share access.
+- `map_shares`, `map_share_flights`: one opt-in public username URL, redacted projection, and server-derived whole-map snapshot membership; source flights never inherit share access.
 - `airports`: canonical ICAO/IATA/local identifiers, coordinates, country, first-level region, aliases, dataset/version.
 - `flights`: user-owned canonical record; date/time precision, origin/destination airport IDs, kind, aircraft/registration, flight number, duration/distance, notes, visibility, timestamps.
 - `import_batches`: user, adapter/version, status, original object key, file hash, counts, timestamps, expiry.
@@ -70,8 +71,8 @@ The included `flightFingerprint` is only the first deterministic seam; productio
 ## Privacy and security
 
 - Private by default; sharing is opt-in and field-aware. Private flights must never appear in public aggregates or metadata.
-- Authenticated owner contracts and tokenized shared contracts are separate allowlists. Owner views may show exact airports; shared views default to coarse location, with exact airports requiring an explicit per-share warning, preview, and confirmation.
-- Enabled shares do not auto-include newly added/imported flights. A projected-field edit removes the affected flight and derived data until explicit reapproval.
+- Authenticated owner contracts and public shared contracts are separate allowlists. Owner views may show exact airports; the implemented shared DTO contains counts, flight kind, country, and one-decimal coarse route coordinates. Exact-airport sharing is not implemented.
+- Each Share or Update action covers the complete eligible owner map with no product flight-count ceiling. Owner-scoped stop/airport queries and database-side snapshot membership replacement avoid parameter-list growth; PostgreSQL, function memory/time, and response-size resources fail explicitly rather than producing a partial share. Enabled snapshots do not auto-include newly added/imported flights. Owner-flight and route-stop mutations share canonical UUID-keyed PostgreSQL transaction locks with publication, so an overlapping mutation commits before the complete projection is derived. Any mutation touching a selected flight membership disables the whole share until an explicit Share/Update action, including owner-only field edits; membership rows are retained until that complete-map publish replaces them.
 - Account deletion disables normal login, sessions, jobs, and sharing immediately. A proposed grace period uses a verified-email, single-use cancellation flow; cancellation does not revive old sessions or share URLs.
 - Never request or retain third-party credentials. Imports use user-provided exports or authorized OAuth/API integrations.
 - Hash passwords with Argon2id; OAuth tokens encrypted at rest; secrets server-only; CSRF protection, rate limiting, breached-password screening, secure cookie settings, and email verification/reset.

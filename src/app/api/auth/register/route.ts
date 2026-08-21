@@ -12,7 +12,7 @@ import {
 import { consumeRateLimit } from "@/lib/auth/rate-limit";
 import { applyBreachedPasswordWarning } from "@/lib/auth/registration-warning";
 import { assertSameOrigin, requestIp } from "@/lib/auth/request";
-import { isValidUsername, normalizeUsername } from "@/lib/auth/username";
+import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
 
 export const runtime = "nodejs";
 
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     );
 
     if (!EMAIL_PATTERN.test(email)) return errorRedirect(request, "invalid-email");
-    if (!isValidUsername(username)) {
+    if (!isValidPublicHandle(username)) {
       return errorRedirect(request, "invalid-username");
     }
     const passwordError = validatePassword(password);

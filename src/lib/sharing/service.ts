@@ -1,5 +1,5 @@
-import { createHash, createHmac, randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { asc, count, eq, sql } from "drizzle-orm";
 import { getDb, withUserDb, type DatabaseTransaction } from "@/lib/db";
 import {
   airports,
@@ -7,33 +7,17 @@ import {
   flights,
   mapShareFlights,
   mapShares,
-  userProfiles,
   users,
 } from "@/lib/db/schema";
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CAPABILITY_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const MAX_SHARED_FLIGHTS = 500;
-
-export type ShareSelection = {
-  flightIds: string[];
-  includeDisplayName: boolean;
-};
-
-export type EnableMapSharingInput = ShareSelection & {
-  previewId: string;
-};
+import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
 
 export type OwnerShareStatus = {
   enabled: boolean;
+  publicHandle: string | null;
   sharePath: string | null;
   enabledAt: string | null;
   disabledAt: string | null;
-  includeDisplayName: boolean;
-  scope: "selected_flights";
-  selectedFlightCount: number;
-  selectedFlightIds: string[];
+  publishedFlightCount: number;
 };
 
 export type PublicMapProjection = {
@@ -46,88 +30,14 @@ export type PublicMapProjection = {
     origin: { lat: number; lon: number; country: string };
     destination: { lat: number; lon: number; country: string };
   }>;
-  flights: Array<{
-    id: string;
-    kind: "commercial" | "private";
-    legs: Array<{
-      index: number;
-      origin: { lat: number; lon: number; country: string };
-      destination: { lat: number; lon: number; country: string };
-    }>;
-  }>;
-};
-
-export type MapSharePreview = {
-  previewId: string;
-  selection: ShareSelection & { selectedFlightCount: number };
-  projection: PublicMapProjection;
 };
 
 export class ShareNotFoundError extends Error {}
 export class ShareValidationError extends Error {}
-export class SharePreviewMismatchError extends Error {}
+export class ShareEmptyMapError extends Error {}
 
-function sharingSecret(): string {
-  const secret =
-    process.env.MAP_SHARE_SECRET?.trim() ?? process.env.AUTH_SECRET?.trim();
-  if (!secret) throw new Error("Map sharing secret is not configured.");
-  return secret;
-}
-
-function capabilityKey(publicId: string, version: number): string {
-  return createHmac("sha256", sharingSecret())
-    .update(`flight-map-share:${publicId}:${version}`)
-    .digest("base64url");
-}
-
-function capabilityHash(publicId: string, key: string): string {
-  return createHash("sha256").update(`${publicId}.${key}`).digest("hex");
-}
-
-function sharePath(publicId: string, version: number): string {
-  return formatSharePath(publicId, capabilityKey(publicId, version));
-}
-
-export function formatSharePath(publicId: string, key: string): string {
-  return `/shared/${publicId}#key=${key}`;
-}
-
-export function parseShareSelection(
-  input: unknown,
-  allowPreviewId = false,
-): ShareSelection {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new ShareValidationError();
-  }
-  const value = input as Record<string, unknown>;
-  if (
-    Object.keys(value).some(
-      (key) =>
-        ![
-          "flightIds",
-          "includeDisplayName",
-          ...(allowPreviewId ? ["previewId"] : []),
-        ].includes(key),
-    ) ||
-    !Array.isArray(value.flightIds) ||
-    typeof value.includeDisplayName !== "boolean" ||
-    value.flightIds.length > MAX_SHARED_FLIGHTS
-  ) {
-    throw new ShareValidationError();
-  }
-  const flightIds = [...new Set(value.flightIds)];
-  if (
-    flightIds.some(
-      (flightId): boolean =>
-        typeof flightId !== "string" || !UUID_PATTERN.test(flightId),
-    )
-  ) {
-    throw new ShareValidationError();
-  }
-  return {
-    flightIds: flightIds.toSorted(),
-    includeDisplayName: value.includeDisplayName,
-  };
+export function formatHandleSharePath(handle: string): string {
+  return `/${handle}`;
 }
 
 export async function getOwnerShareStatus(
@@ -139,91 +49,68 @@ export async function getOwnerShareStatus(
       .from(mapShares)
       .where(eq(mapShares.userId, userId))
       .limit(1);
-    const selected = await tx
-      .select({ flightId: mapShareFlights.flightId })
+    const [owner] = await tx
+      .select({
+        username: users.username,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!owner) throw new Error("Authentication is required.");
+    const publicHandle = owner.username;
+    const [selected] = await tx
+      .select({ flightCount: count() })
       .from(mapShareFlights)
       .where(eq(mapShareFlights.userId, userId));
     if (!share) {
       return {
         enabled: false,
+        publicHandle,
         sharePath: null,
         enabledAt: null,
         disabledAt: null,
-        includeDisplayName: false,
-        scope: "selected_flights",
-        selectedFlightCount: 0,
-        selectedFlightIds: [],
+        publishedFlightCount: 0,
       };
     }
     const enabled = Boolean(share.enabledAt && !share.disabledAt);
     return {
       enabled,
-      sharePath: enabled
-        ? sharePath(share.publicId, share.tokenVersion)
-        : null,
+      publicHandle,
+      sharePath: enabled ? formatHandleSharePath(publicHandle) : null,
       enabledAt: share.enabledAt?.toISOString() ?? null,
       disabledAt: share.disabledAt?.toISOString() ?? null,
-      includeDisplayName: share.includeDisplayName,
-      scope: "selected_flights",
-      selectedFlightCount: selected.length,
-      selectedFlightIds: selected.map(({ flightId }) => flightId).toSorted(),
+      publishedFlightCount: selected?.flightCount ?? 0,
     };
   });
 }
 
-export async function previewMapSharing(
-  userId: string,
-  input: unknown,
-): Promise<MapSharePreview> {
-  const selection = parseShareSelection(input);
-  return withUserDb(userId, (tx) => createPreview(tx, userId, selection));
-}
-
 export async function enableMapSharing(
   userId: string,
-  input: unknown,
 ): Promise<OwnerShareStatus> {
-  const selection = parseShareSelection(input, true);
-  const previewId =
-    input && typeof input === "object" && !Array.isArray(input)
-      ? (input as Record<string, unknown>).previewId
-      : undefined;
-  if (typeof previewId !== "string" || previewId.length !== 64) {
-    throw new ShareValidationError();
-  }
   await withUserDb(userId, async (tx) => {
     await lockOwnerShare(tx, userId);
-    const preview = await createPreview(tx, userId, selection);
-    if (preview.previewId !== previewId) throw new SharePreviewMismatchError();
-    const [existing] = await tx
-      .select()
-      .from(mapShares)
-      .where(eq(mapShares.userId, userId))
+    const [owner] = await tx
+      .select({
+        username: users.username,
+      })
+      .from(users)
+      .where(eq(users.id, userId))
       .limit(1);
-    const publicId = existing?.publicId ?? randomUUID();
-    const version = existing?.tokenVersion ?? 1;
-    const key = capabilityKey(publicId, version);
+    if (!owner) throw new Error("Authentication is required.");
+    const snapshot = await createSnapshot(tx, userId);
     const now = new Date();
     await tx
       .insert(mapShares)
       .values({
         userId,
-        publicId,
-        tokenVersion: version,
-        tokenHash: capabilityHash(publicId, key),
-        includeDisplayName: selection.includeDisplayName,
-        scopeType: "selected_flights",
-        projection: preview.projection,
+        projection: snapshot.projection,
         enabledAt: now,
         disabledAt: null,
       })
       .onConflictDoUpdate({
         target: mapShares.userId,
         set: {
-          tokenHash: capabilityHash(publicId, key),
-          includeDisplayName: selection.includeDisplayName,
-          scopeType: "selected_flights",
-          projection: preview.projection,
+          projection: snapshot.projection,
           enabledAt: now,
           disabledAt: null,
           updatedAt: now,
@@ -232,14 +119,25 @@ export async function enableMapSharing(
     await tx
       .delete(mapShareFlights)
       .where(eq(mapShareFlights.userId, userId));
-    if (selection.flightIds.length) {
-      await tx.insert(mapShareFlights).values(
-        selection.flightIds.map((flightId) => ({
-          userId,
-          flightId,
-          selectedAt: now,
-        })),
-      );
+    const inserted = await tx.execute<{ flightCount: number }>(sql`
+      with inserted as (
+        insert into "map_share_flights" (
+          "user_id",
+          "flight_id",
+          "selected_at"
+        )
+        select
+          ${flights.userId},
+          ${flights.id},
+          current_timestamp
+        from ${flights}
+        where ${flights.userId} = ${userId}::uuid
+        returning 1
+      )
+      select count(*)::integer as "flightCount" from inserted
+    `);
+    if (inserted[0]?.flightCount !== snapshot.flightIds.length) {
+      throw new ShareValidationError();
     }
   });
   return getOwnerShareStatus(userId);
@@ -253,34 +151,8 @@ export async function disableMapSharing(
     const now = new Date();
     await tx
       .update(mapShares)
-      .set({ disabledAt: now, updatedAt: now })
-      .where(eq(mapShares.userId, userId));
-  });
-  return getOwnerShareStatus(userId);
-}
-
-export async function regenerateMapShare(
-  userId: string,
-): Promise<OwnerShareStatus> {
-  await withUserDb(userId, async (tx) => {
-    await lockOwnerShare(tx, userId);
-    const [share] = await tx
-      .select()
-      .from(mapShares)
-      .where(eq(mapShares.userId, userId))
-      .limit(1);
-    if (!share?.enabledAt || share.disabledAt) throw new ShareNotFoundError();
-    const version = share.tokenVersion + 1;
-    const now = new Date();
-    await tx
-      .update(mapShares)
       .set({
-        tokenVersion: version,
-        tokenHash: capabilityHash(
-          share.publicId,
-          capabilityKey(share.publicId, version),
-        ),
-        rotatedAt: now,
+        disabledAt: now,
         updatedAt: now,
       })
       .where(eq(mapShares.userId, userId));
@@ -289,100 +161,109 @@ export async function regenerateMapShare(
 }
 
 export async function getPublicMapProjection(
-  publicId: string,
-  key: string,
+  identifier: string,
 ): Promise<PublicMapProjection> {
-  if (!UUID_PATTERN.test(publicId) || !CAPABILITY_KEY_PATTERN.test(key)) {
+  const handle = normalizeUsername(identifier);
+  if (!handle || !isValidPublicHandle(handle)) {
     throw new ShareNotFoundError();
   }
   const result = await getDb().execute<{
     projection: PublicMapProjection | null;
-  }>(
-    sql`select public_map_projection(
-      ${publicId}::uuid,
-      ${capabilityHash(publicId, key)}
-    ) as projection`,
-  );
+  }>(sql`select public_map_projection_by_handle(${handle}) as projection`);
   const projection = result[0]?.projection;
   if (!projection) throw new ShareNotFoundError();
-  return projection;
+  return {
+    owner: { displayName: projection.owner.displayName },
+    summary: {
+      flightCount: projection.summary.flightCount,
+      routeCount: projection.summary.routeCount,
+    },
+    routes: projection.routes.map((route) => ({
+      id: route.id,
+      kind: route.kind,
+      flightCount: route.flightCount,
+      origin: {
+        lat: route.origin.lat,
+        lon: route.origin.lon,
+        country: route.origin.country,
+      },
+      destination: {
+        lat: route.destination.lat,
+        lon: route.destination.lon,
+        country: route.destination.country,
+      },
+    })),
+  };
 }
 
-export function publicTokenRateLimitKey(
-  publicId: string,
-  key: string,
-): string {
-  return capabilityHash(publicId, key).slice(0, 16);
+export function publicHandleRateLimitKey(identifier: string): string {
+  return normalizeUsername(identifier);
 }
 
-async function createPreview(
+async function createSnapshot(
   tx: DatabaseTransaction,
   userId: string,
-  selection: ShareSelection,
-): Promise<MapSharePreview> {
-  const selectedFlights = selection.flightIds.length
-    ? await tx
-        .select()
-        .from(flights)
-        .where(
-          and(
-            eq(flights.userId, userId),
-            inArray(flights.id, selection.flightIds),
-          ),
-        )
-        .orderBy(asc(flights.id))
-    : [];
-  if (selectedFlights.length !== selection.flightIds.length) {
-    throw new ShareValidationError();
+): Promise<{ projection: PublicMapProjection; flightIds: string[] }> {
+  const selectedFlights = await tx
+    .select({
+      id: flights.id,
+      kind: flights.kind,
+      originAirportId: flights.originAirportId,
+      destinationAirportId: flights.destinationAirportId,
+    })
+    .from(flights)
+    .where(eq(flights.userId, userId))
+    .orderBy(asc(flights.id));
+  if (selectedFlights.length === 0) {
+    throw new ShareEmptyMapError();
   }
-  const selectedStops = selection.flightIds.length
-    ? await tx
-        .select()
-        .from(flightStops)
-        .where(
-          and(
-            eq(flightStops.userId, userId),
-            inArray(flightStops.flightId, selection.flightIds),
-          ),
-        )
-        .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder))
-    : [];
+  const flightIds = selectedFlights.map(({ id }) => id);
+  const selectedStops = await tx
+    .select({
+      flightId: flightStops.flightId,
+      airportId: flightStops.airportId,
+      stopOrder: flightStops.stopOrder,
+    })
+    .from(flightStops)
+    .where(eq(flightStops.userId, userId))
+    .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
   const stopsByFlight = new Map<string, typeof selectedStops>();
   for (const stop of selectedStops) {
     const stops = stopsByFlight.get(stop.flightId) ?? [];
     stops.push(stop);
     stopsByFlight.set(stop.flightId, stops);
   }
-  const airportIds = [
-    ...new Set(
-      selectedFlights.flatMap((flight) =>
-        stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
-          flight.originAirportId,
-          flight.destinationAirportId,
-        ],
-      ),
-    ),
-  ];
-  const airportRows = airportIds.length
-    ? await tx.select().from(airports).where(inArray(airports.id, airportIds))
-    : [];
+  const airportRows = await tx.execute<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    country: string;
+  }>(sql`
+    select
+      ${airports.id} as id,
+      ${airports.latitude} as latitude,
+      ${airports.longitude} as longitude,
+      ${airports.country} as country
+    from ${airports}
+    where ${airports.id} in (
+      select ${flights.originAirportId}
+      from ${flights}
+      where ${flights.userId} = ${userId}::uuid
+      union
+      select ${flights.destinationAirportId}
+      from ${flights}
+      where ${flights.userId} = ${userId}::uuid
+      union
+      select ${flightStops.airportId}
+      from ${flightStops}
+      where ${flightStops.userId} = ${userId}::uuid
+    )
+  `);
   const airportById = new Map(airportRows.map((airport) => [airport.id, airport]));
-  const [identity] = selection.includeDisplayName
-    ? await tx
-        .select({
-          profileName: userProfiles.displayName,
-          accountName: users.name,
-        })
-        .from(users)
-        .leftJoin(userProfiles, eq(userProfiles.userId, users.id))
-        .where(eq(users.id, userId))
-        .limit(1)
-    : [];
   const routeCounts = new Map<
     string,
     PublicMapProjection["routes"][number]
   >();
-  const publicFlights: PublicMapProjection["flights"] = [];
   for (const flight of selectedFlights) {
     const stopIds =
       stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
@@ -393,7 +274,7 @@ async function createPreview(
     if (sequence.length < 2 || sequence.some((airport) => !airport)) {
       throw new ShareValidationError();
     }
-    const legs = sequence.slice(0, -1).map((origin, index) => {
+    sequence.slice(0, -1).forEach((origin, index) => {
       const destination = sequence[index + 1]!;
       const coarseOrigin = {
         lat: coarse(origin!.latitude),
@@ -423,27 +304,10 @@ async function createPreview(
           destination: coarseDestination,
         });
       }
-      return {
-        index,
-        origin: coarseOrigin,
-        destination: coarseDestination,
-      };
-    });
-    publicFlights.push({
-      id: createHash("sha256")
-        .update(`shared-flight:${userId}:${flight.id}`)
-        .digest("hex")
-        .slice(0, 24),
-      kind: flight.kind as "commercial" | "private",
-      legs,
     });
   }
   const projection: PublicMapProjection = {
-    owner: {
-      displayName: selection.includeDisplayName
-        ? identity?.profileName ?? identity?.accountName ?? "Waypointer map"
-        : null,
-    },
+    owner: { displayName: null },
     summary: {
       flightCount: selectedFlights.length,
       routeCount: routeCounts.size,
@@ -451,21 +315,9 @@ async function createPreview(
     routes: [...routeCounts.values()].toSorted((left, right) =>
       left.id.localeCompare(right.id),
     ),
-    flights: publicFlights,
   };
-  const canonical = JSON.stringify({
-    flightIds: selection.flightIds,
-    includeDisplayName: selection.includeDisplayName,
-    projection,
-  });
   return {
-    previewId: createHmac("sha256", sharingSecret())
-      .update(`flight-map-share-preview:${userId}:${canonical}`)
-      .digest("hex"),
-    selection: {
-      ...selection,
-      selectedFlightCount: selection.flightIds.length,
-    },
+    flightIds,
     projection,
   };
 }
@@ -475,7 +327,7 @@ async function lockOwnerShare(
   userId: string,
 ): Promise<void> {
   await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`,
+    sql`select pg_advisory_xact_lock(hashtextextended(${userId}::uuid::text, 0))`,
   );
 }
 

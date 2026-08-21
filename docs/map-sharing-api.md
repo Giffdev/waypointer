@@ -1,34 +1,53 @@
-# Read-only map sharing API
+# Public map sharing API
 
-Owner routes require the normal authenticated session and same-origin writes:
+Waypointer publishes one intentionally public, enumerable URL per enabled
+account:
 
-- `GET /api/account/sharing` — returns enabled state, identity choice, selected
-  flight count/IDs, and the capability path when enabled
-- `POST /api/account/sharing/preview` with `{ flightIds, includeDisplayName }`
-  — returns the exact coarse projection and a selection-bound `previewId`
-- `POST /api/account/sharing` with
-  `{ flightIds, includeDisplayName, previewId }` — publishes only that reviewed
-  snapshot; stale previews are rejected
-- `DELETE /api/account/sharing` — revokes public access immediately
-- `POST /api/account/sharing/regenerate` — rotates the capability without
-  changing the snapshotted selection
+```text
+/{username}
+```
 
-Selections are capped at 500 parent flights. New flights are never added
-automatically. Editing or deleting a selected flight revokes the share.
-Identity remains hidden unless separately opted in.
+There is no GUID, token, secret, fragment, query parameter, or legacy public
+route. The account username is visible in the URL. Email is never used as a
+fallback or exposed by map sharing.
 
-The owner UI renders `sharePath` as `/shared/[publicId]#key=[secret]`. The
-shared page reads the fragment locally and loads:
+## Owner lifecycle
 
-- `POST /api/shared/[publicId]` with `{ key }` — unauthenticated, read-only
-  `{ map: { owner, summary, routes, flights } }`
+Owner routes require an authenticated session, and writes require same-origin
+requests:
 
-The public response contains only a display name, counts, flight kind, aggregate
-route counts, countries, and coordinates rounded to one decimal degree. It
-includes one opaque parent entry per selected flight with its ordered coarse
-legs, but no dates, duration, departure time, aircraft, registration, source,
-provenance, or raw import fields. `summary.flightCount` counts parents while
-`routes` aggregates all projected legs. It contains no raw user, flight,
-airport, import, authentication, or source identifiers.
-Responses are `no-store`; disabled, rotated, malformed, and unknown links return
-the same `404 not-found`. The public API has no write method.
+- `GET /api/account/sharing` returns the enabled state, public username,
+  canonical path, timestamps, and published flight count.
+- `POST /api/account/sharing` takes no body. It publishes the owner's entire
+  current map and enables sharing.
+- `DELETE /api/account/sharing` disables public access.
+
+The Share action is the complete opt-in control. There are no per-flight
+sharing controls and no product flight-count ceiling. Re-enabling republishes
+the entire current map at the same username URL. Changing the username
+disables sharing until the owner explicitly enables it again.
+
+## Public read boundary
+
+The public page reads the projection with a bodyless request:
+
+```text
+GET /api/shared/{username}
+```
+
+`public_map_projection_by_handle(text)` is a `SECURITY DEFINER` PostgreSQL
+function with a fixed `pg_catalog, public` search path and no `PUBLIC` execute
+grant. Production migration provisioning grants execution only to the runtime
+database role.
+
+The response contains aggregate flight and route counts plus coarse routes:
+route ID, flight kind, aggregate count, country, and coordinates rounded to
+one decimal degree. It does not contain per-flight records, dates, duration,
+exact airports, aircraft, registration, source, provenance, raw import fields,
+email, or internal account identifiers.
+
+Responses use
+`Cache-Control: no-store, max-age=0, s-maxage=0, must-revalidate`. Unknown,
+disabled, reserved, UUID-shaped, and malformed usernames return the same
+generic `404 not-found`. The viewer revalidates on focus, visibility
+restoration, and `pageshow` so disabling sharing clears an open public map.

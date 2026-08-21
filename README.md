@@ -69,17 +69,24 @@ npm run test:postgres
 and Playwright. Both commands provision the local database through Docker
 Compose rather than silently skipping database coverage.
 
-The public map projection function is `SECURITY DEFINER`, has a locked
-`pg_catalog, public` search path, and is revoked from `PUBLIC`. Deployments that
-use a runtime database role separate from the migration owner must explicitly
-run:
+The public username projection function is `SECURITY DEFINER`, has a locked
+`pg_catalog, public` search path, and is revoked from `PUBLIC`. Production
+deployments do not auto-migrate. Before deploying the application, run the
+reviewed migration path with both roles configured:
 
-```sql
-GRANT EXECUTE ON FUNCTION public_map_projection(uuid, text) TO <runtime_role>;
+```powershell
+$env:MIGRATION_DATABASE_URL = "<DDL-capable release role>"
+$env:DATABASE_URL = "<least-privilege runtime role>"
+npm run db:migrate
 ```
 
-Do not grant the runtime role ownership of that function or schema-creation
-rights.
+`MIGRATION_DATABASE_URL` applies migration `0017_public_share_handles.sql`.
+`DATABASE_URL` is used only to identify the runtime role: the migration runner
+revokes that role's access to the obsolete
+legacy projection functions and grants
+`EXECUTE` on `public_map_projection_by_handle(text)`. Do not grant the
+runtime role function ownership or schema-creation rights. Confirm the
+migration ledger boundary is `0017` before application deployment.
 
 Production still requires provisioned PostgreSQL, `AUTH_SECRET`, and a real
 `AUTH_URL`. Account deletion remains fail-closed and unavailable unless both
@@ -113,14 +120,45 @@ restricted pooled worker database role are provisioned. Railway must build
 `Dockerfile.worker` through `railway.json`; the image runs Node 22, `clamd`,
 and `freshclam`. The worker requires `WORKER_ID`, `WORKER_HEALTH_SECRET`, a
 worker-sized `DB_POOL_MAX` (normally 5), R2 configuration, and the documented
-ClamAV/job timing variables from `.env.example`. `/live` exposes no queue
-data; authenticated `/health` reports scanner health and aggregate queue
-metrics. Do not place signed URLs, object keys, filenames, or row data in logs.
-After provisioning, run `npm run check:durable-import-worker`, apply the
-migration, and execute `npm run smoke:durable-import` with a dedicated verified
-test account. The hosted smoke requires both a clean CSV review/deduplication
-result and a quarantined EICAR fixture before the feature flag may replace
-`sync-mvp`.
+ClamAV/job timing variables from `.env.example`. Set
+`WORKER_EXECUTION_MODE=continuous` for the hosted Railway service. Production
+defaults to `disabled`, which never opens database or storage clients and must
+not be treated as processing-ready. `on-demand` drains until the queue is idle
+and exits successfully, so use it only from an external scheduler rather than
+for the always-on Railway service. Continuous mode uses bounded exponential
+polling backoff from `JOB_POLL_INTERVAL_MS` (minimum 30000) up to
+`JOB_POLL_MAX_INTERVAL_MS` (default 900000) so an empty queue does not keep
+Neon awake. The production configuration check requires those exact values.
+
+Set the complete worker environment, including `WORKER_EXECUTION_MODE`, before
+deploying and run `npm run check:durable-import-worker` against those exact
+values. The checker and worker runtime both require
+`FLIGHT_MAP_RELEASE_WRITES_PAUSED=false` exactly. The check rejects disabled
+mode as safe-off rather than deployment-ready. `/live` reports process
+liveness, mode, and whether processing is enabled. Authenticated `/health`
+reports processing readiness and returns 503 while disabled, after a loop
+failure, when polling progress is stale, or when scanner or queue checks fail.
+Health probes share a five-second deadline and do not overlap.
+After the check passes, apply the migration and execute
+`npm run smoke:durable-import` with a dedicated verified test account. The
+hosted smoke requires both a clean CSV review/deduplication result and a
+quarantined EICAR fixture before the feature flag may replace `sync-mvp`.
+
+### Production recovery
+
+The Gmail failure is caused by the deployed runtime inheriting
+`FLIGHT_MAP_RELEASE_WRITES_PAUSED=true`, which blocks database-backed session
+creation after successful Google OAuth. Keep exactly one persistent Production
+value of `FLIGHT_MAP_RELEASE_WRITES_PAUSED=false`, then create a fresh normal
+Production deployment:
+
+```powershell
+vercel deploy --prod --yes --archive=tgz
+```
+
+Do not use the airport control-plane `npm run deploy:production` script for
+this recovery because it injects the paused value. Verify one clean-browser
+Google sign-in reaches `/map` after the new deployment is Ready.
 
 Run launch-schema checks with `npm run test:schema`. To also exercise clean and
 upgrade migration paths, use a PostgreSQL role allowed to create temporary
@@ -146,11 +184,13 @@ OurAirports publishes public-domain nightly CSVs without an accuracy warranty.
 `npm run db:airport-release` is the production-safe catalog operation. It
 uses only the reviewed file and SHA-256 pinned in
 `config/airport-catalog-release.json`; it never downloads mutable release data.
-Existing UUIDs are retained through verified source identity or an exact
+Existing airport UUIDs are retained through verified source identity or an exact
 logical match for explicitly marked 0009 code-derived identities. Crossed or
 reassigned identifiers fail before writes. An exact manifest covers every
-migration through 0015, including product migrations 0011–0014, and refuses
-extra, missing, reordered, or modified migration files. Pending migrations, the catalog,
+migration through 0017, including product migrations 0011–0017, and refuses
+extra, missing, reordered, or modified migration files. The airport release
+operation applies only its owned migration through 0015 and recognizes later
+reviewed boundaries without replaying them. Pending owned migrations, the catalog,
 aliases, unresolved-import reconciliation, and database health checks run in
 one serializable transaction. Production requires a separately recorded,
 content-addressed target/snapshot approval and candidate manifest. When Git
@@ -215,7 +255,7 @@ See [`docs/product-architecture.md`](docs/product-architecture.md) for MVP bound
 See [`docs/logbook-csv-imports.md`](docs/logbook-csv-imports.md) for exact
 automatic formats, evidence-backed mapping presets, generic CSV behavior, and
 known limitations.
-See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the deliberately gated giffdev/Vercel release path.
+See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the normal giffdev/Vercel deployment path.
 
 The explicit development preview still uses representative/local data. The
 persisted path uses authenticated, per-user PostgreSQL records and private

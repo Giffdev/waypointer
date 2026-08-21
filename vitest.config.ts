@@ -6,7 +6,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    exclude: [...configDefaults.exclude, "e2e/**", ".vercel/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      "e2e/**",
+      ".vercel/**",
+      ".airport-alias-*-worktree/**",
+    ],
     setupFiles: ["./vitest.setup.ts"],
   },
 });

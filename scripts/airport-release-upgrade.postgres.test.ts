@@ -404,7 +404,7 @@ beforeAll(async () => {
     databaseName: database.database_name,
     databaseOid: database.database_oid,
     candidateManifestSha256: candidate.sha256,
-    approvedAt: new Date(now - 5_000).toISOString(),
+    approvedAt: new Date(now - 500).toISOString(),
     expiresAt: new Date(now + 3_600_000).toISOString(),
     changeControl: {
       mechanism: "application-read-only-plus-database-barrier",
@@ -583,7 +583,7 @@ async function createSecondPassEnvironment() {
       databaseOid: database.database_oid,
       candidateManifestSha256:
         releaseEnvironment.AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256,
-      approvedAt: new Date(now - 5_000).toISOString(),
+      approvedAt: new Date(now - 500).toISOString(),
       expiresAt: new Date(now + 3_600_000).toISOString(),
       changeControl: {
         mechanism: "application-read-only-plus-database-barrier",
@@ -872,8 +872,8 @@ postgresDescribe("production-like airport catalog upgrade", () => {
   }, 180_000);
 
   it.each([
-    "duplicate_candidates",
-    "flight_overrides",
+    "airports",
+    "airport_aliases",
   ] as const)(
     "rejects a mutated %s fingerprint, restores it, and proves exact equality",
     async (relation) => {
@@ -911,28 +911,30 @@ postgresDescribe("production-like airport catalog upgrade", () => {
         ...safePostgresClientOptions,
       });
       try {
-        if (relation === "duplicate_candidates") {
-          const [before] = await client<Array<{ count: number }>>`
-            select count(*)::integer as count
-            from duplicate_candidates
-            where id = ${duplicateCandidateId}
+        if (relation === "airports") {
+          const [before] = await client<Array<{ name: string }>>`
+            select name
+            from airports
+            where id = ${legacyIds.omak}
           `;
-          expect(before.count).toBe(1);
+          expect(before.name).not.toBe("rollback mutation");
           await client`
-            delete from duplicate_candidates
-            where id = ${duplicateCandidateId}
+            update airports
+            set name = 'rollback mutation'
+            where id = ${legacyIds.omak}
           `;
         } else {
-          const [before] = await client<Array<{ reason: string }>>`
-            select reason
-            from flight_overrides
-            where id = ${flightOverrideId}
+          const [before] = await client<Array<{ id: string }>>`
+            select id
+            from airport_aliases
+            where airport_id = ${legacyIds.omak}
+            order by id
+            limit 1
           `;
-          expect(before.reason).toBe("legacy correction");
+          expect(before.id).toMatch(/^[a-f0-9-]{36}$/);
           await client`
-            update flight_overrides
-            set reason = 'rollback mutation'
-            where id = ${flightOverrideId}
+            delete from airport_aliases
+            where id = ${before.id}
           `;
         }
         await expect(

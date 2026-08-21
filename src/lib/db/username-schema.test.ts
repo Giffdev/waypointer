@@ -13,6 +13,15 @@ const migration = readFileSync(
   ),
   "utf8",
 );
+const publicHandleMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../drizzle/migrations/0017_public_share_handles.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 
 describe("editable username schema", () => {
   it("keeps case-insensitive uniqueness and the shared format authoritative", () => {
@@ -24,6 +33,9 @@ describe("editable username schema", () => {
     expect(config.checks.map((constraint) => constraint.name)).toContain(
       "users_username_format",
     );
+    expect(config.checks.map((constraint) => constraint.name)).toContain(
+      "users_public_handle_not_reserved",
+    );
     expect(migration).toContain(
       'CREATE UNIQUE INDEX IF NOT EXISTS "users_username_unique"',
     );
@@ -32,5 +44,14 @@ describe("editable username schema", () => {
     expect(migration).toContain(
       'ADD CONSTRAINT "users_username_format"',
     );
+    expect(publicHandleMigration).not.toContain(
+      "public_handle_configured_at",
+    );
+    expect(publicHandleMigration).toContain(
+      'ADD CONSTRAINT "users_public_handle_not_reserved"',
+    );
+    for (const route of ["api", "auth", "map", "settings", "shared"]) {
+      expect(publicHandleMigration).toContain(`'${route}'`);
+    }
   });
 });

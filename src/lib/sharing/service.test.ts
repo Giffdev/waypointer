@@ -1,59 +1,85 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  getDb: vi.fn(),
+  withUserDb: vi.fn(),
+}));
+
+vi.mock("@/lib/db", () => ({
+  getDb: mocks.getDb,
+  withUserDb: mocks.withUserDb,
+}));
+
 import {
-  formatSharePath,
-  parseShareSelection,
-  publicTokenRateLimitKey,
-  ShareValidationError,
+  formatHandleSharePath,
+  getPublicMapProjection,
+  publicHandleRateLimitKey,
 } from "./service";
 
-const flightA = "00000000-0000-4000-8000-000000000001";
-const flightB = "00000000-0000-4000-8000-000000000002";
+describe("public map sharing contracts", () => {
+  it("formats the canonical public username path without a token", () => {
+    expect(formatHandleSharePath("devsin")).toBe("/devsin");
+    expect(publicHandleRateLimitKey(" DeVSiN ")).toBe("devsin");
+  });
 
-describe("map sharing contracts", () => {
-  it("requires separate explicit identity consent and an explicit selection", () => {
-    expect(() => parseShareSelection({ flightIds: [] })).toThrowError(
-      ShareValidationError,
-    );
-    expect(parseShareSelection({
-      flightIds: [],
-      includeDisplayName: false,
-    })).toEqual({
-      flightIds: [],
-      includeDisplayName: false,
+  it("returns only aggregate route data from stored projections", async () => {
+    const execute = vi.fn().mockResolvedValue([
+      {
+        projection: {
+          owner: { displayName: null, accountId: "private-owner-id" },
+          summary: { flightCount: 1, routeCount: 1, importedRows: 2 },
+          routes: [
+            {
+              id: "route-1",
+              kind: "private",
+              flightCount: 1,
+              origin: {
+                lat: 47.4,
+                lon: -122.3,
+                country: "US",
+                airportCode: "SEA",
+              },
+              destination: {
+                lat: 40.6,
+                lon: -73.8,
+                country: "US",
+                airportCode: "JFK",
+              },
+              flightIds: ["private-flight-id"],
+            },
+          ],
+          flights: [{ id: "private-flight-id" }],
+        },
+      },
+    ]);
+    mocks.getDb.mockReturnValue({ execute });
+
+    await expect(getPublicMapProjection("DeVSiN")).resolves.toEqual({
+      owner: { displayName: null },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [
+        {
+          id: "route-1",
+          kind: "private",
+          flightCount: 1,
+          origin: { lat: 47.4, lon: -122.3, country: "US" },
+          destination: { lat: 40.6, lon: -73.8, country: "US" },
+        },
+      ],
     });
+    expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("normalizes, deduplicates, and bounds selected owner flight IDs", () => {
-    expect(parseShareSelection({
-      flightIds: [flightB, flightA, flightB],
-      includeDisplayName: true,
-    })).toEqual({
-      flightIds: [flightA, flightB],
-      includeDisplayName: true,
-    });
-    expect(() =>
-      parseShareSelection({
-        flightIds: ["not-a-flight"],
-        includeDisplayName: false,
-      }),
-    ).toThrowError(ShareValidationError);
-  });
+  it("rejects reserved roots and UUID identifiers before querying", async () => {
+    const execute = vi.fn();
+    mocks.getDb.mockReturnValue({ execute });
 
-  it("uses a redacted operational rate-limit key", () => {
-    const secret = "s".repeat(43);
-    const key = publicTokenRateLimitKey(
-      "00000000-0000-4000-8000-000000000010",
-      secret,
+    await expect(getPublicMapProjection("settings")).rejects.toBeInstanceOf(
+      Error,
     );
-    expect(key).toMatch(/^[0-9a-f]{16}$/);
-    expect(key).not.toContain(secret);
-  });
-
-  it("places the capability secret only in the non-transmitted URL fragment", () => {
-    const publicId = "00000000-0000-4000-8000-000000000010";
-    const secret = "s".repeat(43);
-    const url = new URL(formatSharePath(publicId, secret), "https://example.test");
-    expect(`${url.origin}${url.pathname}${url.search}`).not.toContain(secret);
-    expect(url.hash).toBe(`#key=${secret}`);
+    await expect(
+      getPublicMapProjection("00000000-0000-4000-8000-000000000010"),
+    ).rejects.toBeInstanceOf(Error);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

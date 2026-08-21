@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AIRPORT_RELEASE_MUTABLE_RELATIONS,
   AIRPORT_RELEASE_ROLLBACK_RELATIONS,
+  airportReleaseRelationFingerprintQuery,
   assertAirportRollbackEligible,
+  fingerprintAirportReleaseRelation,
   type AirportReleaseStateFingerprint,
 } from "./airport-release-rollback";
 import {
@@ -35,7 +37,7 @@ function stateWithRelations(
   relations: AirportReleaseStateFingerprint["relations"],
 ): AirportReleaseStateFingerprint {
   const stateCore = {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     migration,
     relations,
   };
@@ -101,15 +103,41 @@ describe("airport rollback eligibility", () => {
     expect(AIRPORT_RELEASE_MUTABLE_RELATIONS).toEqual([
       "airports",
       "airport_aliases",
-      "flights",
-      "flight_stops",
-      "import_batches",
-      "import_rows",
-      "flight_sources",
-      "flight_overrides",
-      "duplicate_candidates",
-      "map_shares",
     ]);
+    expect(AIRPORT_RELEASE_ROLLBACK_RELATIONS).toEqual([
+      "airports",
+      "airport_aliases",
+      "drizzle_migrations",
+    ]);
+  });
+
+  it("fingerprints each relation with one bounded server-side aggregate", async () => {
+    const sql = {
+      unsafe: vi
+        .fn()
+        .mockResolvedValueOnce([{ present: true }])
+        .mockResolvedValueOnce([
+          {
+            row_count: "85836",
+            row_fingerprint: "a".repeat(64),
+          },
+        ]),
+    };
+
+    await expect(
+      fingerprintAirportReleaseRelation(sql, "airports"),
+    ).resolves.toEqual({
+      present: true,
+      count: 85_836,
+      sha256: "a".repeat(64),
+    });
+    const query = airportReleaseRelationFingerprintQuery("airports");
+    expect(query).toContain("count(*)::text as row_count");
+    expect(query).toContain("string_agg(");
+    expect(query).toContain("sha256(");
+    expect(query).toContain("from public.airports value");
+    expect(query).not.toContain("select to_jsonb(value) as value");
+    expect(sql.unsafe).toHaveBeenNthCalledWith(2, query);
   });
 
   it("requires an approved stop condition and exact operator confirmation", () => {
@@ -140,12 +168,12 @@ describe("airport rollback eligibility", () => {
     const invalidRelations = [
       Object.fromEntries(
         Object.entries(preChangeState.relations).filter(
-          ([relation]) => relation !== "duplicate_candidates",
+          ([relation]) => relation !== "airport_aliases",
         ),
       ),
       Object.fromEntries(
         Object.entries(preChangeState.relations).filter(
-          ([relation]) => relation !== "flight_overrides",
+          ([relation]) => relation !== "drizzle_migrations",
         ),
       ),
       {

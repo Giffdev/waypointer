@@ -134,7 +134,7 @@ describe("private settings UI", () => {
     const saved = await screen.findByRole("button", { name: "Saved" });
     expect(saved).toBeEnabled();
     expect(saved).toHaveClass("success");
-    expect(screen.getByText("Private profile saved."))
+    expect(screen.getByText("Account settings saved."))
       .toHaveAttribute("role", "status");
   });
 

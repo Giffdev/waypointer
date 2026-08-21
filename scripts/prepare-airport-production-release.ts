@@ -237,6 +237,7 @@ export async function prepareAirportProductionRelease(
       client as unknown as UnsafeSqlClient,
       "production",
     );
+    const migrationBoundary = migration.boundary;
     const preChangeState = await snapshotAirportReleaseState(
       client as unknown as UnsafeSqlClient,
       "production",
@@ -247,7 +248,10 @@ export async function prepareAirportProductionRelease(
       targetFingerprint !== snapshot.targetFingerprint ||
       preChangeState.stateSha256 !== snapshot.preChangeStateSha256 ||
       deployment.migrationManifestSha256 !== migrationManifest.sha256 ||
-      !["0014", "0015"].includes(migration.boundary)
+      (migrationBoundary !== "0014" &&
+        migrationBoundary !== "0015" &&
+        migrationBoundary !== "0016" &&
+        migrationBoundary !== "0017")
     ) {
       throw new AirportCatalogSafetyError("database-target-mismatch");
     }
@@ -309,7 +313,7 @@ export async function prepareAirportProductionRelease(
       },
       migration: {
         manifestSha256: migrationManifest.sha256,
-        boundary: migration.boundary as "0014" | "0015",
+        boundary: migrationBoundary,
       },
       snapshot: {
         id: snapshot.id,

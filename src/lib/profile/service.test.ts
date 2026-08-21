@@ -51,6 +51,19 @@ describe("private profile allowlist", () => {
     ).toThrow(/3–30 letters/i);
   });
 
+  it("rejects root application routes as public handles", () => {
+    for (const username of ["api", "auth", "map", "settings", "shared"]) {
+      expect(() =>
+        normalizeOwnerProfile({
+          username,
+          displayName: "Pilot",
+          timeZone: "UTC",
+          distanceUnit: "miles",
+        }),
+      ).toThrow(/reserved Waypointer route/i);
+    }
+  });
+
   it("does not lazily create profiles while release writes are paused", () => {
     expect(
       shouldCreateOwnerProfile({

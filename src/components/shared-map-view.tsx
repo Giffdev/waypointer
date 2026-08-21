@@ -6,64 +6,75 @@ import type { Airport, MapRoute } from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
 import type { MapViewMode } from "@/lib/map-view-mode";
+import { parsePublicMapProjection } from "@/lib/sharing/client-projection";
+import type { PublicMapProjection } from "@/lib/sharing/service";
 
-type PublicProjection = {
-  owner: { displayName: string | null };
-  summary: { flightCount: number; routeCount: number };
-  routes: Array<{
-    id: string;
-    kind: "commercial" | "private";
-    flightCount: number;
-    origin: { lat: number; lon: number; country: string };
-    destination: { lat: number; lon: number; country: string };
-  }>;
-};
-
-export function SharedMapView({ publicId }: { publicId: string }) {
-  const [projection, setProjection] = useState<PublicProjection | null>(null);
+export function SharedMapView({ handle }: { handle: string }) {
+  const [projection, setProjection] = useState<PublicMapProjection | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "not-found" | "error">("loading");
-  const [viewMode, setViewMode] = useState<MapViewMode>("globe");
 
   useEffect(() => {
-    const key = new URLSearchParams(window.location.hash.slice(1)).get("key");
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
-    if (!key) {
-      queueMicrotask(() => setState("not-found"));
-      return;
-    }
-    const controller = new AbortController();
-    void fetch(`/api/shared/${encodeURIComponent(publicId)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key }),
-      signal: controller.signal,
-      cache: "no-store",
-    })
-      .then(async (response) => {
-        const body = await response.json();
-        if (response.status === 404) {
-          setState("not-found");
-          return;
-        }
-        if (!response.ok) throw new Error();
-        setProjection(body.map);
-        setState("ready");
-      })
-      .catch((error) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setState("error");
-      });
-    return () => controller.abort();
-  }, [publicId]);
+    let disposed = false;
+    let activeController: AbortController | null = null;
 
-  const mapData = useMemo(
-    () => projection ? toSharedMapData(projection.routes) : null,
-    [projection],
-  );
+    function loadProjection() {
+      if (disposed || activeController) return;
+      const controller = new AbortController();
+      activeController = controller;
+      setState("loading");
+
+      void fetch(`/api/shared/${encodeURIComponent(handle)}`, {
+        signal: controller.signal,
+        cache: "no-store",
+      })
+        .then(async (response) => {
+          const body: unknown = await response.json();
+          if (disposed || controller.signal.aborted) return;
+          if (response.status === 404) {
+            setProjection(null);
+            setState("not-found");
+            return;
+          }
+          if (!response.ok) throw new Error();
+          setProjection(
+            parsePublicMapProjection(
+              isRecord(body) ? body.map : undefined,
+            ),
+          );
+          setState("ready");
+        })
+        .catch((error) => {
+          if (
+            disposed ||
+            (error instanceof DOMException && error.name === "AbortError")
+          ) {
+            return;
+          }
+          setProjection(null);
+          setState("error");
+        })
+        .finally(() => {
+          if (activeController === controller) activeController = null;
+        });
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") loadProjection();
+    }
+
+    window.addEventListener("focus", loadProjection);
+    window.addEventListener("pageshow", loadProjection);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    loadProjection();
+
+    return () => {
+      disposed = true;
+      activeController?.abort();
+      window.removeEventListener("focus", loadProjection);
+      window.removeEventListener("pageshow", loadProjection);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [handle]);
 
   if (state === "loading") {
     return <main className="shared-map-state"><p role="status">Loading shared map…</p></main>;
@@ -76,7 +87,7 @@ export function SharedMapView({ publicId }: { publicId: string }) {
       </main>
     );
   }
-  if (state === "error" || !projection || !mapData) {
+  if (state === "error" || !projection) {
     return (
       <main className="shared-map-state">
         <h1>Shared map unavailable</h1>
@@ -85,11 +96,28 @@ export function SharedMapView({ publicId }: { publicId: string }) {
     );
   }
 
+  return <SharedMapProjectionView projection={projection} />;
+}
+
+export function SharedMapProjectionView({
+  projection,
+}: {
+  projection: PublicMapProjection;
+}) {
+  const [viewMode, setViewMode] = useState<MapViewMode>("globe");
+  const mapData = useMemo(
+    () => toSharedMapData(projection.routes),
+    [projection.routes],
+  );
   return (
     <main className="shared-map-page" id="main-content">
       <header className="shared-map-header">
-        <p className="eyebrow">View-only shared map</p>
-        <h1>{projection.owner.displayName ? `${projection.owner.displayName}’s Waypointer map` : "Shared Waypointer map"}</h1>
+        <p className="eyebrow">Public shared map</p>
+        <h1>
+          {projection.owner.displayName
+            ? `${projection.owner.displayName}’s Waypointer map`
+            : "Shared Waypointer map"}
+        </h1>
         <p>
           Approximate aggregated routes · {projection.summary.flightCount.toLocaleString()} flights · {mapData.routes.length.toLocaleString()} routes
         </p>
@@ -114,17 +142,17 @@ export function SharedMapView({ publicId }: { publicId: string }) {
         />
       </section>
       <p className="shared-map-privacy">
-        Locations are intentionally approximate. This shared view cannot edit
+        Locations are intentionally approximate. This public view cannot edit
         flights or access the owner’s account.
       </p>
     </main>
   );
 }
 
-function toSharedMapData(publicRoutes: PublicProjection["routes"]) {
+function toSharedMapData(publicRoutes: PublicMapProjection["routes"]) {
   const airportByKey = new Map<string, Airport>();
   const routes = new Map<string, MapRoute>();
-  const airportFor = (point: PublicProjection["routes"][number]["origin"]) => {
+  const airportFor = (point: PublicMapProjection["routes"][number]["origin"]) => {
     const key = `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`;
     const existing = airportByKey.get(key);
     if (existing) return existing;
@@ -180,4 +208,12 @@ function toSharedMapData(publicRoutes: PublicProjection["routes"]) {
     routes: aggregatedRoutes,
     homeFrame: deriveInitialMapFrame(aggregatedRoutes),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }

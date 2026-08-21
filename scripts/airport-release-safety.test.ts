@@ -318,7 +318,7 @@ describe("airport release database target safety", () => {
         },
         migration: {
           manifestSha256: "2".repeat(64),
-          boundary: "0014",
+          boundary: "0017",
         },
         snapshot: {
           id: approval.snapshot.id,

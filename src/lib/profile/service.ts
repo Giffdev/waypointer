@@ -1,13 +1,13 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   isUsernameUniqueViolation,
-  isValidUsername,
+  isValidPublicHandle,
   normalizeUsername,
   USERNAME_REQUIREMENTS,
 } from "@/lib/auth/username";
 import { withUserDb } from "@/lib/db";
 import { areReleaseWritesPaused } from "@/lib/runtime-mode";
-import { userProfiles, users } from "@/lib/db/schema";
+import { mapShares, userProfiles, users } from "@/lib/db/schema";
 import {
   DEFAULT_DISTANCE_UNIT,
   DISTANCE_UNITS,
@@ -72,7 +72,7 @@ export function normalizeOwnerProfile(
   const username = normalizeUsername(input.username);
   const displayName = input.displayName.trim();
   const timeZone = input.timeZone.trim();
-  if (!isValidUsername(username)) {
+  if (!isValidPublicHandle(username)) {
     throw new UsernameValidationError();
   }
   if (displayName.length < 1 || displayName.length > 100) {
@@ -162,6 +162,21 @@ export async function updateOwnerProfile(
   const normalized = normalizeOwnerProfile(input);
   try {
     await withUserDb(userId, async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtextextended(${userId}::uuid::text, 0))`,
+      );
+      const [current] = await tx
+        .select({
+          username: users.username,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1)
+        .for("update");
+      if (!current) throw new Error("Authentication is required.");
+      const handleChanged = current.username !== normalized.username;
+      const now = new Date();
+
       await tx
         .insert(userProfiles)
         .values({
@@ -176,7 +191,7 @@ export async function updateOwnerProfile(
             displayName: normalized.displayName,
             timeZone: normalized.timeZone,
             distanceUnit: normalized.distanceUnit,
-            updatedAt: new Date(),
+            updatedAt: now,
           },
         });
       await tx
@@ -184,9 +199,18 @@ export async function updateOwnerProfile(
         .set({
           username: normalized.username,
           name: normalized.displayName,
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(eq(users.id, userId));
+      if (handleChanged) {
+        await tx
+          .update(mapShares)
+          .set({
+            disabledAt: now,
+            updatedAt: now,
+          })
+          .where(eq(mapShares.userId, userId));
+      }
     });
   } catch (error) {
     if (isUsernameUniqueViolation(error)) {

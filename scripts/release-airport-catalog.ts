@@ -19,7 +19,9 @@ import {
   verifyRegionalAirportResolution,
 } from "./airport-release-health.ts";
 import {
+  airportMigrationStateMatchesBoundary,
   applyPendingAirportMigrations,
+  expectedAirportReleaseMigrationBoundary,
   loadAirportReleaseMigrationManifest,
   type UnsafeSqlClient,
   verifyAirportMigrationState,
@@ -217,12 +219,16 @@ export async function runAirportCatalogRelease(
         raw,
         target.approval.environment,
       );
+      const expectedMigrationBoundary =
+        expectedAirportReleaseMigrationBoundary(
+          migrationManifest,
+          beforeMigrations,
+        );
       if (
-        afterMigrations.boundary !== "0015" ||
-        afterMigrations.appliedCount !==
-          migrationManifest.expectedAfter.appliedCount ||
-        afterMigrations.ledgerSha256 !==
-          migrationManifest.expectedAfter.ledgerSha256 ||
+        !airportMigrationStateMatchesBoundary(
+          afterMigrations,
+          expectedMigrationBoundary,
+        ) ||
         afterMigrations.migrationManifestSha256 !== migrationManifest.sha256
       ) {
         throw new AirportCatalogSafetyError("migration-ledger-mismatch");

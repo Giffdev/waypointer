@@ -46,15 +46,8 @@ export function eligibleFirebaseClaims(
 }
 
 function derivedUsername(claims: FirebaseClaims & { sub: string; email: string }) {
-  const requested = claims.name?.trim().toLowerCase() ?? "";
-  const emailPrefix = claims.email.split("@")[0] ?? "";
-  const base = (requested || emailPrefix)
-    .replace(/[^a-z0-9_-]+/g, "_")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, 20);
-  const prefix = /^[a-z0-9]/.test(base) && base.length >= 3 ? base : "pilot";
   const suffix = createHash("sha256").update(claims.sub).digest("hex").slice(0, 8);
-  return `${prefix}_${suffix}`.slice(0, 30);
+  return `pilot_${suffix}`;
 }
 
 export async function verifyFirebaseIdToken(token: string) {
@@ -144,4 +137,3 @@ export async function resolveFirebaseAccount(claims: Awaited<ReturnType<typeof v
     return userId;
   });
 }
-
