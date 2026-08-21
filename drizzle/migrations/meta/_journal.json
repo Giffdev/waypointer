@@ -127,6 +127,13 @@
       "when": 1787271075000,
       "tag": "0016_serialize_owner_flight_sharing",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787329397148,
+      "tag": "0017_public_share_handles",
+      "breakpoints": true
     }
   ]
 }

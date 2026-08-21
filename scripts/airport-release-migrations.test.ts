@@ -32,6 +32,7 @@ describe("airport release migration ledger targeting", () => {
       "0014_fix_flight_share_invalidation",
       "0015_airport_source_provenance",
       "0016_serialize_owner_flight_sharing",
+      "0017_public_share_handles",
     ]);
     expect(manifest.releaseScope).toEqual(AIRPORT_RELEASE_SCOPE);
     expect(() =>
@@ -66,9 +67,16 @@ describe("airport release migration ledger targeting", () => {
         "production",
       ),
     ).toBe("0016");
+    expect(
+      validateAirportMigrationLedger(
+        rowsThrough("0017_public_share_handles"),
+        manifest,
+        "production",
+      ),
+    ).toBe("0017");
   });
 
-  it("recognizes 0016 without applying it through the airport release", async () => {
+  it("recognizes reviewed later boundaries without applying them through the airport release", async () => {
     const manifest = await loadAirportReleaseMigrationManifest();
     const calls: Array<{ query: string; parameters?: unknown[] }> = [];
     const sql = {

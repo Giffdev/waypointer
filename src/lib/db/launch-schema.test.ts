@@ -64,6 +64,15 @@ const sharingSerializationMigration = readFileSync(
   ),
   "utf8",
 );
+const publicShareHandleMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../drizzle/migrations/0017_public_share_handles.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const multiStopMigration = readFileSync(
   fileURLToPath(
     new URL(
@@ -276,19 +285,13 @@ describe("launch schema", () => {
     ]);
   });
 
-  it("models one hashed, owner-private, revocable map share", () => {
+  it("models one owner-controlled public map toggle", () => {
     const config = getTableConfig(mapShares);
     expect(config.columns.map((column) => column.name)).toEqual([
       "user_id",
-      "public_id",
-      "token_hash",
-      "token_version",
-      "include_display_name",
-      "scope_type",
       "projection",
       "enabled_at",
       "disabled_at",
-      "rotated_at",
       "created_at",
       "updated_at",
     ]);
@@ -327,6 +330,37 @@ describe("launch schema", () => {
     expect(sharingSerializationMigration).toContain(
       'BEFORE INSERT OR UPDATE OR DELETE ON "flights"',
     );
+    expect(publicShareHandleMigration).toContain(
+      "SECURITY DEFINER",
+    );
+    expect(publicShareHandleMigration).toContain(
+      "REVOKE ALL ON FUNCTION public_map_projection_by_handle(text) FROM PUBLIC",
+    );
+    expect(publicShareHandleMigration).toContain(
+      "SET search_path = pg_catalog, public",
+    );
+    expect(publicShareHandleMigration).not.toContain("GRANT EXECUTE");
+    expect(publicShareHandleMigration).not.toContain(
+      "public_handle_configured_at",
+    );
+    expect(publicShareHandleMigration).toContain(
+      'UPDATE "map_shares"',
+    );
+    expect(publicShareHandleMigration).toContain(
+      'DROP COLUMN IF EXISTS "token_hash"',
+    );
+    for (const reservedHandle of [
+      "waypointer",
+      "official",
+      "staff",
+      "support",
+      "admin",
+      "administrator",
+      "system",
+      "root",
+    ]) {
+      expect(publicShareHandleMigration).toContain(`'${reservedHandle}'`);
+    }
     expect(sharingSerializationMigration).toContain(
       "CREATE OR REPLACE FUNCTION invalidate_selected_map_share_for_stop()",
     );

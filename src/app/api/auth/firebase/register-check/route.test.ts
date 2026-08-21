@@ -22,7 +22,10 @@ vi.mock("@/lib/auth/password", () => ({
 
 import { POST } from "./route";
 
-function request(password = "correct horse battery staple") {
+function request(
+  password = "correct horse battery staple",
+  username = "pilot_name",
+) {
   return new Request(
     "http://localhost:3000/api/auth/firebase/register-check",
     {
@@ -33,7 +36,7 @@ function request(password = "correct horse battery staple") {
       },
       body: JSON.stringify({
         email: "pilot@example.test",
-        username: "pilot_name",
+        username,
         password,
       }),
     },
@@ -64,6 +67,15 @@ describe("Firebase registration screening", () => {
   it("rejects weak or breached passwords without detailed errors", async () => {
     mocks.isPasswordBreached.mockResolvedValue(true);
     const response = await POST(request());
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+  });
+
+  it("rejects reserved public handles without detailed errors", async () => {
+    const response = await POST(
+      request("correct horse battery staple", "settings"),
+    );
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ ok: false });

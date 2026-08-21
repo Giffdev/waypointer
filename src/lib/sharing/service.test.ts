@@ -11,56 +11,18 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import {
-  formatSharePath,
+  formatHandleSharePath,
   getPublicMapProjection,
-  parseShareSettings,
-  publicTokenRateLimitKey,
-  ShareValidationError,
+  publicHandleRateLimitKey,
 } from "./service";
 
-describe("map sharing contracts", () => {
-  it("accepts only the identity choice and rejects caller flight selection", () => {
-    expect(() => parseShareSettings({})).toThrowError(
-      ShareValidationError,
-    );
-    expect(parseShareSettings({
-      includeDisplayName: false,
-    })).toEqual({
-      includeDisplayName: false,
-    });
-    expect(() =>
-      parseShareSettings({
-        flightIds: [],
-        includeDisplayName: false,
-      }),
-    ).toThrowError(ShareValidationError);
-    expect(() =>
-      parseShareSettings({
-        flightIds: ["00000000-0000-4000-8000-000000000001"],
-        includeDisplayName: false,
-      }),
-    ).toThrowError(ShareValidationError);
+describe("public map sharing contracts", () => {
+  it("formats the canonical public username path without a token", () => {
+    expect(formatHandleSharePath("devsin")).toBe("/devsin");
+    expect(publicHandleRateLimitKey(" DeVSiN ")).toBe("devsin");
   });
 
-  it("uses a redacted operational rate-limit key", () => {
-    const secret = "s".repeat(43);
-    const key = publicTokenRateLimitKey(
-      "00000000-0000-4000-8000-000000000010",
-      secret,
-    );
-    expect(key).toMatch(/^[0-9a-f]{16}$/);
-    expect(key).not.toContain(secret);
-  });
-
-  it("places the capability secret only in the non-transmitted URL fragment", () => {
-    const publicId = "00000000-0000-4000-8000-000000000010";
-    const secret = "s".repeat(43);
-    const url = new URL(formatSharePath(publicId, secret), "https://example.test");
-    expect(`${url.origin}${url.pathname}${url.search}`).not.toContain(secret);
-    expect(url.hash).toBe(`#key=${secret}`);
-  });
-
-  it("returns only aggregate route data from legacy stored projections", async () => {
+  it("returns only aggregate route data from stored projections", async () => {
     const execute = vi.fn().mockResolvedValue([
       {
         projection: {
@@ -86,24 +48,13 @@ describe("map sharing contracts", () => {
               flightIds: ["private-flight-id"],
             },
           ],
-          flights: [
-            {
-              id: "public-flight-id",
-              kind: "private",
-              legs: [],
-            },
-          ],
+          flights: [{ id: "private-flight-id" }],
         },
       },
     ]);
     mocks.getDb.mockReturnValue({ execute });
 
-    const projection = await getPublicMapProjection(
-      "00000000-0000-4000-8000-000000000010",
-      "s".repeat(43),
-    );
-
-    expect(projection).toEqual({
+    await expect(getPublicMapProjection("DeVSiN")).resolves.toEqual({
       owner: { displayName: null },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [
@@ -116,6 +67,19 @@ describe("map sharing contracts", () => {
         },
       ],
     });
-    expect(projection).not.toHaveProperty("flights");
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects reserved roots and UUID identifiers before querying", async () => {
+    const execute = vi.fn();
+    mocks.getDb.mockReturnValue({ execute });
+
+    await expect(getPublicMapProjection("settings")).rejects.toBeInstanceOf(
+      Error,
+    );
+    await expect(
+      getPublicMapProjection("00000000-0000-4000-8000-000000000010"),
+    ).rejects.toBeInstanceOf(Error);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

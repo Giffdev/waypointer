@@ -102,7 +102,7 @@ export const AIRPORT_RELEASE_SCOPE: AirportReleaseScope = {
 };
 
 export interface AirportMigrationState {
-  boundary: "empty" | "0014" | "0015" | "0016";
+  boundary: "empty" | "0014" | "0015" | "0016" | "0017";
   appliedCount: number;
   ledgerSha256: string;
   schemaSha256: string;
@@ -123,6 +123,7 @@ export function airportMigrationBoundaryForState(
     "0014": "0014_fix_flight_share_invalidation",
     "0015": "0015_airport_source_provenance",
     "0016": "0016_serialize_owner_flight_sharing",
+    "0017": "0017_public_share_handles",
   }[state.boundary];
   return manifest.permittedBefore.find((boundary) => boundary.tag === tag);
 }
@@ -267,8 +268,8 @@ export function validateAirportMigrationInventory(
     ]),
   );
   if (
-    allowedBoundaries.size !== 3 ||
-    manifest.permittedBefore.length !== 3
+    allowedBoundaries.size !== 4 ||
+    manifest.permittedBefore.length !== 4
   ) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch");
   }
@@ -276,6 +277,7 @@ export function validateAirportMigrationInventory(
     "0014_fix_flight_share_invalidation",
     "0015_airport_source_provenance",
     "0016_serialize_owner_flight_sharing",
+    "0017_public_share_handles",
   ]) {
     const boundary = allowedBoundaries.get(requiredTag);
     const index = manifest.entries.findIndex(
@@ -534,7 +536,11 @@ async function verifyAirportSchema(
   );
   await verifyProductMigrationState(sql);
   let provenanceConstraint = "";
-  if (boundary === "0015" || boundary === "0016") {
+  if (
+    boundary === "0015" ||
+    boundary === "0016" ||
+    boundary === "0017"
+  ) {
     const [constraint] = await sql.unsafe(
       `select pg_get_constraintdef(oid, true) as definition
        from pg_constraint
@@ -638,6 +644,8 @@ export function validateAirportMigrationLedger(
         ? "0015"
         : matched?.tag === "0016_serialize_owner_flight_sharing"
           ? "0016"
+          : matched?.tag === "0017_public_share_handles"
+            ? "0017"
           : undefined;
   if (!boundary) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch", {

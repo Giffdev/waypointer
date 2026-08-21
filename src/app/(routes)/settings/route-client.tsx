@@ -63,7 +63,7 @@ export default function SettingsClient({
       }
       setProfile(body.profile);
       setProfileSaveState("success");
-      setProfileStatus("Private profile saved.");
+      setProfileStatus("Account settings saved.");
     } catch {
       setProfileSaveState("error");
       setProfileStatus("Profile could not be saved. Check your connection and try again.");
@@ -109,8 +109,10 @@ export default function SettingsClient({
         <p className="eyebrow">Owner-only settings</p>
         <h1>Private account settings</h1>
         <p>
-          These fields are visible only in your authenticated workspace. There
-          is no public username profile or account search.
+          Your email, display name, and preferences stay in your authenticated
+          workspace. When you share your map, your username appears in the
+          public URL. Anyone who knows or finds that username can open the map,
+          but Waypointer never exposes your email in the link.
         </p>
         {!configured && (
           <p role="alert">
@@ -147,6 +149,12 @@ export default function SettingsClient({
             }}
           />
           <small id="username-hint">{USERNAME_REQUIREMENTS}</small>
+          <small>
+            Sharing uses /{normalizeUsername(profile.username) || "username"}.
+            Usernames are visible in shared URLs and are not identity-verified
+            by Waypointer. Saving a different username disables any current
+            shared link.
+          </small>
           {usernameError && (
             <small
               className="auth-message auth-message-error"
@@ -205,7 +213,9 @@ export default function SettingsClient({
           </p>
         </form>
 
-        {configured && sharingAvailable && <MapSharingPanel />}
+        {configured && sharingAvailable && (
+          <MapSharingPanel key={profile.username} />
+        )}
 
         {deletionEnabled ? (
         <form className="settings-panel danger-panel" onSubmit={requestDeletion}>

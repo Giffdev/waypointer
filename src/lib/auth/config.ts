@@ -1,5 +1,6 @@
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import type { Adapter, AdapterUser } from "@auth/core/adapters";
+import { randomUUID } from "node:crypto";
 import type { NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
@@ -48,28 +49,13 @@ function normalizeEmail(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-function usernameStem(email: string): string {
-  const stem = email
-    .split("@")[0]
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24);
-  return stem.length >= 3 ? stem : "aviator";
-}
-
 async function createOAuthUser(data: AdapterUser): Promise<AdapterUser> {
   const email = normalizeEmail(data.email);
   if (!email || !data.emailVerified) {
     throw new Error("Authentication is unavailable.");
   }
-  const stem = usernameStem(email);
-
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const username =
-      attempt === 0
-        ? stem
-        : `${stem.slice(0, 24 - String(attempt).length - 1)}-${attempt}`;
+    const username = `pilot-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     try {
       const [created] = await getDb()
         .insert(users)

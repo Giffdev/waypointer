@@ -14,7 +14,7 @@ const primarySurfaceFiles = [
   "src/components/auth/auth-shell.tsx",
   "src/components/landing/landing-page.tsx",
   "src/lib/auth/email.ts",
-  "src/app/api/shared/[token]/route.ts",
+  "src/app/api/shared/[handle]/route.ts",
   "README.md",
 ] as const;
 
@@ -37,7 +37,7 @@ describe("Waypointer public brand", () => {
       "utf8",
     );
     const sharedRoute = fs.readFileSync(
-      path.join(root, "src/app/api/shared/[token]/route.ts"),
+      path.join(root, "src/app/api/shared/[handle]/route.ts"),
       "utf8",
     );
 

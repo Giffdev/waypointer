@@ -1,822 +1,98 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MapSharingPanel } from "./map-sharing-panel";
-import { MAP_SHARE_PREVIEW_STORAGE_KEY } from "@/lib/sharing/client-preview";
-
-const sharePath =
-  "/shared/00000000-0000-4000-8000-000000000010#key=" + "s".repeat(43);
+import { MapSharingPanel, resolveShareUrl } from "./map-sharing-panel";
 
 describe("MapSharingPanel", () => {
   let enabled = false;
-  let currentPath = sharePath;
-  let currentFlightCount = 0;
-  let currentIdentity = false;
-  let previewFlightCount = 3;
-  let previewError: { code: string; message: string } | null = null;
-  let previewResponseOverride: unknown | null = null;
-  let deferredPreview: Promise<Response> | null = null;
-  let staleEnable = false;
-  let statusFailure: "rejected" | "non-ok" | null = null;
-  const writeText = vi.fn();
-  const openTab = vi.fn();
-  const previewStorageClear = vi.fn();
-  const previewStorageSet = vi.fn();
-  const previewLocationReplace = vi.fn();
-  const previewClose = vi.fn();
-  let previewDocument: Document;
-  let previewTab: Window;
 
   beforeEach(() => {
     enabled = false;
-    currentPath = sharePath;
-    currentFlightCount = 0;
-    currentIdentity = false;
-    previewFlightCount = 3;
-    previewError = null;
-    previewResponseOverride = null;
-    deferredPreview = null;
-    staleEnable = false;
-    statusFailure = null;
-    writeText.mockReset().mockResolvedValue(undefined);
-    previewStorageClear.mockReset();
-    previewStorageSet.mockReset();
-    previewLocationReplace.mockReset();
-    previewClose.mockReset();
-    window.sessionStorage.clear();
-    previewDocument = document.implementation.createHTMLDocument();
-    previewTab = {
-      opener: window,
-      document: previewDocument,
-      sessionStorage: {
-        clear: previewStorageClear,
-        setItem: previewStorageSet,
-      },
-      location: { replace: previewLocationReplace },
-      close: previewClose,
-    } as unknown as Window;
-    openTab.mockReset().mockReturnValue(previewTab);
-    vi.stubGlobal("open", openTab);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        if (url === "/api/account/sharing" && !init?.method) {
-          if (statusFailure === "rejected") {
-            throw new Error("network unavailable");
-          }
-          if (statusFailure === "non-ok") {
-            return json(
-              {
-                error: {
-                  code: "sharing-unavailable",
-                  message: "Sharing status is unavailable.",
-                },
-              },
-              503,
-            );
-          }
-          return json({ sharing: status() });
-        }
-        if (url.endsWith("/preview")) {
-          if (deferredPreview) return deferredPreview;
-          if (previewError) return json({ error: previewError }, 409);
-          const settings = JSON.parse(String(init?.body)) as {
-            includeDisplayName: boolean;
-          };
-          return json({
-            preview:
-              previewResponseOverride ??
-              makePreview(
-                settings.includeDisplayName,
-                previewFlightCount,
-              ),
-          });
-        }
-        if (url === "/api/account/sharing" && init?.method === "POST") {
-          if (staleEnable) {
-            return json(
-              {
-                error: {
-                  code: "sharing-preview-stale",
-                  message:
-                    "The sharing preview changed. Review it again before enabling.",
-                },
-              },
-              409,
-            );
-          }
-          const settings = JSON.parse(String(init.body)) as {
-            includeDisplayName: boolean;
-          };
-          enabled = true;
-          currentFlightCount = previewFlightCount;
-          currentIdentity = settings.includeDisplayName;
-          return json({ sharing: status() });
-        }
-        if (url.endsWith("/regenerate")) {
-          currentPath = currentPath.replace("s".repeat(43), "r".repeat(43));
-          return json({ sharing: status() });
-        }
-        if (url === "/api/account/sharing" && init?.method === "DELETE") {
-          enabled = false;
-          return json({ sharing: status() });
-        }
-        throw new Error(`Unexpected request: ${url}`);
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") enabled = true;
+        if (init?.method === "DELETE") enabled = false;
+        return json({
+          sharing: {
+            enabled,
+            publicHandle: "test-pilot",
+            sharePath: enabled ? "/test-pilot" : null,
+            publishedFlightCount: enabled ? 3 : 0,
+          },
+        });
       }),
     );
   });
 
   afterEach(() => {
     cleanup();
-    window.sessionStorage.clear();
     vi.unstubAllGlobals();
   });
 
-  it("does not claim sharing is off while status is loading", () => {
-    render(<MapSharingPanel />);
-
-    expect(screen.getByText("Checking sharing status…")).toBeVisible();
-    const statusCall = vi.mocked(fetch).mock.calls.find(
-      ([url]) => String(url) === "/api/account/sharing",
-    );
-    expect(statusCall?.[1]).toMatchObject({ cache: "no-store" });
-    expect(
-      screen.queryByText("Private · sharing is off"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows an unknown state and recovery when the status request rejects", async () => {
-    const user = userEvent.setup();
-    statusFailure = "rejected";
-    render(<MapSharingPanel />);
-
-    expect(await screen.findByText("Sharing status unavailable")).toBeVisible();
-    expect(
-      screen.queryByText("Private · sharing is off"),
-    ).not.toBeInTheDocument();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Sharing status could not be loaded",
-    );
-
-    statusFailure = null;
-    await user.click(
-      screen.getByRole("button", { name: "Retry sharing status" }),
-    );
-    expect(await screen.findByText("Private · sharing is off")).toBeVisible();
-    const statusCalls = vi.mocked(fetch).mock.calls.filter(
-      ([url]) => String(url) === "/api/account/sharing",
-    );
-    expect(statusCalls).toHaveLength(2);
-    expect(statusCalls.every(([, init]) => init?.cache === "no-store")).toBe(
-      true,
-    );
-  });
-
-  it("does not treat a non-OK status response as private", async () => {
-    statusFailure = "non-ok";
-    render(<MapSharingPanel />);
-
-    expect(await screen.findByText("Sharing status unavailable")).toBeVisible();
-    expect(
-      screen.queryByText("Private · sharing is off"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Retry sharing status" }),
-    ).toBeEnabled();
-  });
-
-  it("previews the authoritative map even when a flight arrives after render", async () => {
+  it("enables the entire public map and returns an absolute username URL", async () => {
     const user = userEvent.setup();
     render(<MapSharingPanel />);
+    await screen.findByText("Private - sharing is off");
 
-    expect(await screen.findByText("Private · sharing is off")).toBeVisible();
-    expect(
-      screen.getByText(/every flight currently on your private map/i),
-    ).toBeVisible();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/entire map/i)).toBeVisible();
+    expect(screen.getByText(/does not cap or truncate/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Share my map" }));
 
-    previewFlightCount = 4;
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
+    expect(await screen.findByText("Public sharing is on")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Public map link" })).toHaveValue(
+      resolveShareUrl("/test-pilot", window.location.origin),
     );
-
-    expect(
-      await screen.findByRole("heading", { name: "Preview your shared map" }),
-    ).toBeVisible();
-    expect(screen.getByText("4")).toBeVisible();
-    const previewCall = vi.mocked(fetch).mock.calls.find(([url]) =>
-      String(url).endsWith("/preview"),
+    const write = vi.mocked(fetch).mock.calls.find(
+      ([, init]) => init?.method === "POST",
     );
-    expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
-      includeDisplayName: false,
-    });
-    expect(String(previewCall?.[1]?.body)).not.toContain("flightIds");
+    expect(write?.[1]).toEqual({ method: "POST" });
   });
 
-  it("opens a blank same-origin tab synchronously before the preview request resolves", async () => {
-    let resolvePreview!: (response: Response) => void;
-    deferredPreview = new Promise((resolve) => {
-      resolvePreview = resolve;
-    });
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(openTab).toHaveBeenCalledWith("about:blank", "_blank");
-    expect(previewTab.opener).toBeNull();
-    expect(previewStorageClear).toHaveBeenCalledOnce();
-    expect(previewLocationReplace).not.toHaveBeenCalled();
-    const previewCallIndex = vi.mocked(fetch).mock.calls.findIndex(([url]) =>
-      String(url).endsWith("/preview"),
-    );
-    expect(previewCallIndex).toBeGreaterThanOrEqual(0);
-    expect(
-      previewStorageClear.mock.invocationCallOrder[0],
-    ).toBeLessThan(
-      vi.mocked(fetch).mock.invocationCallOrder[previewCallIndex],
-    );
-
-    resolvePreview(json({ preview: makePreview(false, 3) }));
-    expect(
-      await screen.findByText(/Interactive map preview opened/),
-    ).toBeVisible();
-  });
-
-  it("stores only the reviewed projection and navigates the preview tab", async () => {
-    const user = userEvent.setup();
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(previewStorageSet.mock.calls[0]?.[0]).toBe(
-      MAP_SHARE_PREVIEW_STORAGE_KEY,
-    );
-    const storedEnvelope = JSON.parse(
-      String(previewStorageSet.mock.calls[0]?.[1]),
-    );
-    expect(storedEnvelope).toEqual({
-      nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
-      projection: makePreview(false, 3).projection,
-    });
-    expect(storedEnvelope).not.toHaveProperty("previewId");
-    expect(JSON.stringify(storedEnvelope)).not.toMatch(
-      /account|email|import|flightIds/i,
-    );
-    const previewUrl = new URL(
-      String(previewLocationReplace.mock.calls[0]?.[0]),
-    );
-    expect(previewUrl.pathname).toBe("/shared/preview");
-    expect(previewUrl.search).toBe("");
-    expect(previewUrl.hash).toBe(`#preview=${storedEnvelope.nonce}`);
-    expect(previewUrl.href).not.toContain("a".repeat(64));
-    const referrerPolicy = previewDocument.querySelector(
-      'meta[name="referrer"]',
-    );
-    expect(referrerPolicy?.getAttribute("content")).toBe("no-referrer");
-    expect(previewClose).not.toHaveBeenCalled();
-  });
-
-  it("reports a blocked preview tab without starting the preview request", async () => {
-    const user = userEvent.setup();
-    openTab.mockReturnValueOnce(null);
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "browser blocked the preview tab",
-    );
-    expect(
-      vi.mocked(fetch).mock.calls.some(([url]) =>
-        String(url).endsWith("/preview"),
-      ),
-    ).toBe(false);
-    expect(previewStorageClear).not.toHaveBeenCalled();
-    expect(previewStorageSet).not.toHaveBeenCalled();
-  });
-
-  it("clears cloned child storage while retaining the parent tab storage", async () => {
-    const user = userEvent.setup();
-    const sentinelKey = "parent-only-sentinel";
-    const sentinelValue = "keep-in-parent";
-    window.sessionStorage.setItem(sentinelKey, sentinelValue);
-    const inheritedPopup = popupDouble({
-      [sentinelKey]: sentinelValue,
-    });
-    openTab.mockReturnValueOnce(inheritedPopup.tab);
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(inheritedPopup.clear).toHaveBeenCalledOnce();
-    expect(inheritedPopup.getItem(sentinelKey)).toBeNull();
-    expect(window.sessionStorage.getItem(sentinelKey)).toBe(sentinelValue);
-    expect(
-      await screen.findByText(/Interactive map preview opened/),
-    ).toBeVisible();
-  });
-
-  it("treats inherited storage clearing failure as a protection failure", async () => {
-    const user = userEvent.setup();
-    previewStorageClear.mockImplementationOnce(() => {
-      throw new DOMException("storage unavailable", "SecurityError");
-    });
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "could not clear inherited browser storage",
-    );
-    expect(previewClose).toHaveBeenCalledOnce();
-    expect(
-      vi.mocked(fetch).mock.calls.some(([url]) =>
-        String(url).endsWith("/preview"),
-      ),
-    ).toBe(false);
-    expect(previewStorageSet).not.toHaveBeenCalled();
-    expect(previewLocationReplace).not.toHaveBeenCalled();
-  });
-
-  it("reports session storage failure and closes the blank tab", async () => {
-    const user = userEvent.setup();
-    previewStorageSet.mockImplementationOnce(() => {
-      throw new DOMException("quota exceeded", "QuotaExceededError");
-    });
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "could not store the reviewed map",
-    );
-    expect(previewClose).toHaveBeenCalledOnce();
-    expect(previewLocationReplace).not.toHaveBeenCalled();
-    expect(
-      screen.queryByRole("heading", { name: "Preview your shared map" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("reports navigation failure and closes the blank tab", async () => {
-    const user = userEvent.setup();
-    previewLocationReplace.mockImplementationOnce(() => {
-      throw new DOMException("navigation denied", "SecurityError");
-    });
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "could not navigate to the reviewed map",
-    );
-    expect(previewStorageSet).toHaveBeenCalledOnce();
-    expect(previewClose).toHaveBeenCalledOnce();
-    expect(
-      screen.queryByRole("heading", { name: "Preview your shared map" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("rejects undeclared API projection fields before storage or consumption", async () => {
-    const user = userEvent.setup();
-    const validPreview = makePreview(false, 3);
-    previewResponseOverride = {
-      ...validPreview,
-      projection: {
-        ...validPreview.projection,
-        account: { email: "owner@example.test" },
-      },
-    };
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "preview response was invalid",
-    );
-    expect(previewStorageSet).not.toHaveBeenCalled();
-    expect(previewLocationReplace).not.toHaveBeenCalled();
-    expect(previewClose).toHaveBeenCalledOnce();
-  });
-
-  it("isolates multiple open previews with different tab nonces", async () => {
-    const user = userEvent.setup();
-    const first = popupDouble();
-    const second = popupDouble();
-    openTab
-      .mockReset()
-      .mockReturnValueOnce(first.tab)
-      .mockReturnValueOnce(second.tab);
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-    await screen.findByText(/Interactive map preview opened/);
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    const firstEnvelope = JSON.parse(
-      String(first.setItem.mock.calls[0]?.[1]),
-    );
-    const secondEnvelope = JSON.parse(
-      String(second.setItem.mock.calls[0]?.[1]),
-    );
-    expect(firstEnvelope.nonce).toMatch(/^[0-9a-f]{32}$/);
-    expect(secondEnvelope.nonce).toMatch(/^[0-9a-f]{32}$/);
-    expect(firstEnvelope.nonce).not.toBe(secondEnvelope.nonce);
-    expect(first.replace).toHaveBeenCalledWith(
-      expect.stringContaining(`#preview=${firstEnvelope.nonce}`),
-    );
-    expect(second.replace).toHaveBeenCalledWith(
-      expect.stringContaining(`#preview=${secondEnvelope.nonce}`),
-    );
-  });
-
-  it("closes the blank tab and reports an asynchronous preview failure", async () => {
-    const user = userEvent.setup();
-    previewError = {
-      code: "sharing-preview-failed",
-      message: "The reviewed snapshot could not be created.",
-    };
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "reviewed snapshot could not be created",
-    );
-    expect(previewClose).toHaveBeenCalledOnce();
-    expect(previewStorageSet).not.toHaveBeenCalled();
-    expect(previewLocationReplace).not.toHaveBeenCalled();
-  });
-
-  it("asks the user to close the blank tab when automatic close fails", async () => {
-    const user = userEvent.setup();
-    previewError = {
-      code: "sharing-preview-failed",
-      message: "The reviewed snapshot could not be created.",
-    };
-    previewClose.mockImplementationOnce(() => {
-      throw new DOMException("close denied", "SecurityError");
-    });
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Close the blank preview tab manually",
-    );
-    expect(previewClose).toHaveBeenCalledOnce();
-  });
-
-  it("opens the enabled live capability without creating a new snapshot", async () => {
+  it("links to the full public URL in a safe new tab and disables sharing", async () => {
     const user = userEvent.setup();
     enabled = true;
-    currentFlightCount = 3;
     render(<MapSharingPanel />);
-    await screen.findByText("View-only sharing is on");
+    await screen.findByText("Public sharing is on");
 
-    await user.click(
-      screen.getByRole("button", {
-        name: "Preview live shared map",
-      }),
+    const absolute = resolveShareUrl("/test-pilot", window.location.origin);
+    expect(screen.getByRole("link", { name: "Open public map" })).toHaveAttribute(
+      "href",
+      absolute,
     );
-
-    expect(openTab).toHaveBeenCalledWith("about:blank", "_blank");
-    expect(previewLocationReplace).toHaveBeenCalledWith(
-      new URL(sharePath, window.location.origin).href,
+    expect(screen.getByRole("link", { name: "Open public map" })).toHaveAttribute(
+      "target",
+      "_blank",
     );
-    expect(previewStorageSet).not.toHaveBeenCalled();
-    expect(
-      vi.mocked(fetch).mock.calls.some(([url]) =>
-        String(url).endsWith("/preview"),
-      ),
-    ).toBe(false);
-    expect(await screen.findByText(/Live shared map opened/)).toBeVisible();
-  });
-
-  it("shows only the coarse aggregate projection", async () => {
-    const user = userEvent.setup();
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    const previewHeading = await screen.findByRole("heading", {
-      name: "Preview your shared map",
-    });
-    const previewSection = previewHeading.closest("section");
-    expect(previewSection).not.toBeNull();
-    expect(within(previewSection!).getByText("Omitted")).toBeVisible();
-    expect(
-      within(previewSection!).getByText("1 approximate route groups"),
-    ).toBeVisible();
-    expect(previewSection).not.toHaveTextContent(
-      /SEA|JFK|2026-08|registration|import|flight-id/i,
-    );
-    expect(
-      screen.getByRole("button", { name: "Publish shared map" }),
-    ).toBeDisabled();
-  });
-
-  it("warns about recognizable route patterns before consent can be given", async () => {
-    const user = userEvent.setup();
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    expect(
-      screen.getByText(/Direct account identifiers are omitted/),
-    ).toBeVisible();
-    expect(
-      screen.getByText(/Repeated endpoints and route patterns can still reveal/),
-    ).toBeVisible();
-    expect(screen.queryByText(/identity stays hidden/i)).not.toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    const previewHeading = await screen.findByRole("heading", {
-      name: "Preview your shared map",
-    });
-    const previewSection = previewHeading.closest("section");
-    expect(previewSection).not.toBeNull();
-    expect(
-      within(previewSection!).getByText(
-        "Recognizable travel patterns are included in this snapshot.",
-      ),
-    ).toBeVisible();
-    const consent = within(previewSection!).getByRole("checkbox", {
-      name: /repeated endpoints and routes may reveal my home region, routines, employer, or identity/i,
-    });
-    expect(consent).not.toBeChecked();
-    expect(
-      within(previewSection!).getByRole("button", {
-        name: "Publish shared map",
-      }),
-    ).toBeDisabled();
-  });
-
-  it("surfaces a preview failure without replacing an existing snapshot", async () => {
-    const user = userEvent.setup();
-    enabled = true;
-    currentFlightCount = 500;
-    previewError = {
-      code: "account-service-unavailable",
-      message: "Account settings are temporarily unavailable.",
-    };
-    render(<MapSharingPanel />);
-    await screen.findByText("View-only sharing is on");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview map update" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "temporarily unavailable",
-    );
-    expect(
-      screen.queryByRole("button", { name: "Publish shared map" }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy link" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Disable sharing" })).toBeEnabled();
-  });
-
-  it("requires explicit consent and enables without submitting flight IDs", async () => {
-    const user = userEvent.setup();
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("checkbox", { name: "Include my display name" }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-    expect(await screen.findByText("Aviator")).toBeVisible();
-
-    const consent = screen.getByRole("checkbox", {
-      name: /I reviewed this shared-map snapshot/,
-    });
-    expect(consent).not.toBeChecked();
-    await user.click(consent);
-    await user.click(
-      screen.getByRole("button", { name: "Publish shared map" }),
-    );
-
-    expect(await screen.findByText("View-only sharing is on")).toBeVisible();
-    expect(screen.getByText(/Current shared map:/)).toHaveTextContent(
-      "3 flights represented",
-    );
-    const enableCall = vi.mocked(fetch).mock.calls.find(
-      ([url, init]) =>
-        String(url) === "/api/account/sharing" && init?.method === "POST",
-    );
-    expect(JSON.parse(String(enableCall?.[1]?.body))).toEqual({
-      includeDisplayName: true,
-      previewId: "a".repeat(64),
-    });
-    expect(String(enableCall?.[1]?.body)).not.toContain("flightIds");
-  });
-
-  it("discards consent when the server rejects a stale preview", async () => {
-    const user = userEvent.setup();
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-    await user.click(
-      await screen.findByRole("checkbox", { name: /I reviewed/ }),
-    );
-    staleEnable = true;
-
-    await user.click(
-      screen.getByRole("button", { name: "Publish shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Review it again before enabling",
-    );
-    expect(
-      screen.queryByRole("heading", { name: "Preview your shared map" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Publish shared map" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("copies, rotates, and revokes the view-only capability", async () => {
-    const user = userEvent.setup();
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    enabled = true;
-    currentFlightCount = 3;
-    render(<MapSharingPanel />);
-    await screen.findByText("View-only sharing is on");
-
-    await user.click(screen.getByRole("button", { name: "Copy link" }));
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("/shared/"));
-
-    await user.click(screen.getByRole("button", { name: "Replace link" }));
-    const rotateDialog = screen.getByRole("alertdialog");
-    expect(rotateDialog).toHaveTextContent("blocked from future loads");
-    expect(rotateDialog).toHaveTextContent(
-      "cannot recall content already opened, copied, forwarded, or screenshotted",
-    );
-    expect(rotateDialog).toHaveTextContent(
-      "shared map snapshot will not change",
-    );
-    await user.click(
-      within(rotateDialog).getByRole("button", { name: "Replace link" }),
-    );
-    expect(await screen.findByText(/Link replaced/)).toHaveTextContent(
-      "previous link cannot load the map again",
+    expect(screen.getByRole("link", { name: "Open public map" })).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
     );
 
     await user.click(screen.getByRole("button", { name: "Disable sharing" }));
-    const revokeDialog = screen.getByRole("alertdialog");
-    expect(revokeDialog).toHaveTextContent("blocked from future loads");
-    expect(revokeDialog).toHaveTextContent(
-      "cannot recall content already opened, copied, forwarded, or screenshotted",
-    );
-    await user.click(
-      within(revokeDialog).getByRole("button", {
-        name: "Disable sharing",
-      }),
-    );
-    expect(await screen.findByText(/Sharing disabled/)).toHaveTextContent(
-      "Content already opened, copied, forwarded, or screenshotted cannot be recalled",
-    );
-    expect(screen.getByText("Private · sharing is off")).toBeVisible();
-  });
-
-  it("shows the server-authoritative empty-map response", async () => {
-    const user = userEvent.setup();
-    previewError = {
-      code: "sharing-map-empty",
-      message: "Your map does not have any flights to share yet.",
-    };
-    render(<MapSharingPanel />);
-    await screen.findByText("Private · sharing is off");
-
-    await user.click(
-      screen.getByRole("button", { name: "Preview shared map" }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "does not have any flights to share yet",
-    );
+    expect(await screen.findByText("Private - sharing is off")).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "Publish shared map" }),
-    ).not.toBeInTheDocument();
+      vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(true);
   });
 
-  function status() {
-    return {
-      enabled,
-      sharePath: enabled ? currentPath : null,
-      includeDisplayName: currentIdentity,
-      publishedFlightCount: currentFlightCount,
-    };
-  }
+  it("loads status with no-store semantics", async () => {
+    render(<MapSharingPanel />);
+    await screen.findByText("Private - sharing is off");
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]).toMatchObject({
+      cache: "no-store",
+    });
+  });
 });
 
-function makePreview(includeDisplayName: boolean, flightCount: number) {
-  return {
-    previewId: "a".repeat(64),
-    includeDisplayName,
-    projection: {
-      owner: { displayName: includeDisplayName ? "Aviator" : null },
-      summary: { flightCount, routeCount: 1 },
-      routes: [
-        {
-          id: "coarse-route",
-          kind: "private",
-          flightCount,
-          origin: { lat: 47.4, lon: -122.3, country: "US" },
-          destination: { lat: 40.6, lon: -73.8, country: "US" },
-        },
-      ],
-    },
-  };
-}
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function popupDouble(initialEntries: Record<string, string> = {}) {
-  const popupDocument = document.implementation.createHTMLDocument();
-  const values = new Map(Object.entries(initialEntries));
-  const clear = vi.fn(() => values.clear());
-  const getItem = vi.fn((key: string) => values.get(key) ?? null);
-  const setItem = vi.fn((key: string, value: string) => {
-    values.set(key, value);
-  });
-  const replace = vi.fn();
-  const close = vi.fn();
-  const tab = {
-    opener: window,
-    document: popupDocument,
-    sessionStorage: { clear, getItem, setItem },
-    location: { replace },
-    close,
-  } as unknown as Window;
-  return { tab, clear, getItem, setItem, replace, close };
+function json(body: unknown) {
+  return Promise.resolve(
+    new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+    }),
+  );
 }

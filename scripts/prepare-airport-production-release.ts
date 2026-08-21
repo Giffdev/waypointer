@@ -250,7 +250,8 @@ export async function prepareAirportProductionRelease(
       deployment.migrationManifestSha256 !== migrationManifest.sha256 ||
       (migrationBoundary !== "0014" &&
         migrationBoundary !== "0015" &&
-        migrationBoundary !== "0016")
+        migrationBoundary !== "0016" &&
+        migrationBoundary !== "0017")
     ) {
       throw new AirportCatalogSafetyError("database-target-mismatch");
     }

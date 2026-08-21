@@ -1,7 +1,7 @@
 import { consumeRateLimit, RateLimitExceededError } from "@/lib/auth/rate-limit";
 import {
   getPublicMapProjection,
-  publicTokenRateLimitKey,
+  publicHandleRateLimitKey,
   ShareNotFoundError,
 } from "@/lib/sharing/service";
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
@@ -10,52 +10,14 @@ export const runtime = "nodejs";
 const PUBLIC_HEADERS = {
   ...SHARING_NO_STORE_HEADERS,
   "X-Content-Type-Options": "nosniff",
-  "X-Robots-Tag": "noindex, nofollow, noarchive",
-  "Referrer-Policy": "no-referrer",
 };
 
-export async function GET() {
-  return Response.json(
-    {
-      error: {
-        code: "method-not-allowed",
-        message: "Use the shared map page to open this capability.",
-      },
-    },
-    {
-      status: 405,
-      headers: { ...PUBLIC_HEADERS, Allow: "POST" },
-    },
-  );
-}
-
-export async function POST(
+export async function GET(
   request: Request,
-  context: { params: Promise<{ token: string }> },
+  context: { params: Promise<{ handle: string }> },
 ) {
   try {
-    const { token: publicId } = await context.params;
-    if (!request.headers.get("content-type")?.startsWith("application/json")) {
-      return Response.json(
-        { error: { code: "not-found", message: "Waypointer shared map not found." } },
-        { status: 404, headers: PUBLIC_HEADERS },
-      );
-    }
-    if (Number(request.headers.get("content-length") ?? 0) > 1024) {
-      throw new ShareNotFoundError();
-    }
-    let body: Record<string, unknown>;
-    try {
-      body = (await request.json()) as Record<string, unknown>;
-    } catch {
-      throw new ShareNotFoundError();
-    }
-    if (
-      Object.keys(body).some((key) => key !== "key") ||
-      typeof body.key !== "string"
-    ) {
-      throw new ShareNotFoundError();
-    }
+    const { handle } = await context.params;
     const ip =
       request.headers.get("x-real-ip") ??
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
@@ -63,14 +25,14 @@ export async function POST(
     await Promise.all([
       consumeRateLimit("public-map-ip", ip, 120, 60_000),
       consumeRateLimit(
-        "public-map-token",
-        publicTokenRateLimitKey(publicId, body.key),
+        "public-map-handle",
+        publicHandleRateLimitKey(handle),
         60,
         60_000,
       ),
     ]);
     return Response.json(
-      { map: await getPublicMapProjection(publicId, body.key) },
+      { map: await getPublicMapProjection(handle) },
       { headers: PUBLIC_HEADERS },
     );
   } catch (error) {
@@ -102,4 +64,19 @@ export async function POST(
       { status: 503, headers: PUBLIC_HEADERS },
     );
   }
+}
+
+export async function POST() {
+  return Response.json(
+    {
+      error: {
+        code: "method-not-allowed",
+        message: "Use GET to load this public map.",
+      },
+    },
+    {
+      status: 405,
+      headers: { ...PUBLIC_HEADERS, Allow: "GET" },
+    },
+  );
 }

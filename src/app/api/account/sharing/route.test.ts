@@ -15,8 +15,7 @@ vi.mock("@/lib/sharing/service", () => ({
   getOwnerShareStatus: mocks.getOwnerShareStatus,
   enableMapSharing: mocks.enableMapSharing,
   disableMapSharing: mocks.disableMapSharing,
-  SharePreviewMismatchError: class SharePreviewMismatchError extends Error {},
-  ShareValidationError: class ShareValidationError extends Error {},
+  ShareEmptyMapError: class ShareEmptyMapError extends Error {},
 }));
 
 import { DELETE, GET, POST } from "./route";
@@ -26,10 +25,10 @@ const NO_STORE =
 
 const status = {
   enabled: true,
-  sharePath: "/shared/token",
+  publicHandle: "pilot",
+  sharePath: "/pilot",
   enabledAt: "2026-08-14T19:00:00.000Z",
   disabledAt: null,
-  includeDisplayName: false,
   publishedFlightCount: 3,
 };
 
@@ -55,21 +54,13 @@ describe("owner sharing API", () => {
         method: "POST",
         headers: {
           origin: "https://example.test",
-          "content-type": "application/json",
         },
-        body: JSON.stringify({
-          includeDisplayName: false,
-          previewId: "a".repeat(64),
-        }),
       }),
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe(NO_STORE);
     expect(mocks.getOwnerShareStatus).toHaveBeenCalledWith("owner-a");
-    expect(mocks.enableMapSharing).toHaveBeenCalledWith("owner-a", {
-      includeDisplayName: false,
-      previewId: "a".repeat(64),
-    });
+    expect(mocks.enableMapSharing).toHaveBeenCalledWith("owner-a");
   });
 
   it("rejects cross-origin disablement before persistence", async () => {

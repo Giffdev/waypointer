@@ -59,10 +59,16 @@ postgresDescribe("PostgreSQL owner username updates", () => {
     ).rejects.toBeInstanceOf(UsernameConflictError);
 
     const [owner] = await getDb()
-      .select({ id: users.id, username: users.username })
+      .select({
+        id: users.id,
+        username: users.username,
+      })
       .from(users)
       .where(inArray(users.id, [ownerId]));
-    expect(owner).toEqual({ id: ownerId, username: "renamed_pilot" });
+    expect(owner).toEqual({
+      id: ownerId,
+      username: "renamed_pilot",
+    });
   });
 
   it("allows only one concurrent claimant for the same normalized username", async () => {

@@ -181,6 +181,23 @@ Use separate PostgreSQL roles where supported:
   Vercel/serverless processes.
 - `MIGRATION_DATABASE_URL`: CI/release-only DDL role used by Drizzle.
 
+Production deployment does not auto-migrate. Before deploying application
+code that requires `0017_public_share_handles.sql`, configure both variables
+in the release shell and run:
+
+```powershell
+npm run db:migrate
+```
+
+The safe migration runner uses `MIGRATION_DATABASE_URL` for DDL and derives
+the runtime role name from `DATABASE_URL`. After applying `0017`, it revokes
+runtime execution of the obsolete
+legacy projection functions and grants only
+`public_map_projection_by_handle(text)`. The handle function remains
+revoked from `PUBLIC`; the runtime role must not own the function or receive
+schema-creation rights. Verify the exact migration ledger boundary is `0017`
+and retain the migration receipt before starting the Vercel deployment.
+
 A future dedicated import worker can use an explicitly bounded pool near
 `DB_POOL_MAX=5`. The internal `background_jobs` table deliberately has no user
 RLS because claims span owners; worker code must use its explicit `user_id` and
@@ -216,6 +233,17 @@ Configure the normal Production runtime in Vercel, including:
 Do not place `MIGRATION_DATABASE_URL` in Vercel runtime variables. Firebase
 must authorize the Production hostname and
 `https://<production-host>/__/auth/handler`.
+
+The release order is:
+
+1. Pause or otherwise fence application writes according to the release
+   procedure.
+2. Run `npm run db:migrate` from the approved release environment with the DDL
+   and runtime URLs above.
+3. Verify migration boundary `0017` and the runtime handle-function grant.
+4. Deploy the reviewed application artifact.
+5. Complete the public-auth and handle-sharing acceptance checks before
+   removing the release fence.
 
 The current production recovery is intentionally simple: persist exactly
 `FLIGHT_MAP_RELEASE_WRITES_PAUSED=false` for the Vercel Production environment,

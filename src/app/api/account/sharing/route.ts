@@ -4,8 +4,7 @@ import {
   disableMapSharing,
   enableMapSharing,
   getOwnerShareStatus,
-  SharePreviewMismatchError,
-  ShareValidationError,
+  ShareEmptyMapError,
 } from "@/lib/sharing/service";
 import {
   SHARING_NO_STORE_HEADERS,
@@ -31,35 +30,22 @@ export async function POST(request: Request) {
   try {
     const user = await requireAuthenticatedUser();
     assertSameOrigin(request);
-    if (!request.headers.get("content-type")?.startsWith("application/json")) {
-      throw new AccountRequestError(
-        415,
-        "unsupported-content-type",
-        "JSON is required.",
-      );
-    }
     return Response.json(
       {
-        sharing: await enableMapSharing(user.id, await request.json()),
+        sharing: await enableMapSharing(user.id),
       },
       { headers: SHARING_NO_STORE_HEADERS },
     );
   } catch (error) {
     return withSharingNoStore(
       accountApiError(
-        error instanceof SharePreviewMismatchError
+        error instanceof ShareEmptyMapError
           ? new AccountRequestError(
               409,
-              "sharing-preview-stale",
-              "The sharing preview changed. Review it again before enabling.",
+              "sharing-map-empty",
+              "Upload flight data before sharing your map.",
             )
-          : error instanceof ShareValidationError
-            ? new AccountRequestError(
-                400,
-                "invalid-sharing-request",
-                "Submit the display-name choice and its exact preview.",
-              )
-            : error,
+          : error,
       ),
     );
   }

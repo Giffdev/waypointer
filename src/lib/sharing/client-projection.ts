@@ -1,81 +1,14 @@
-import type {
-  MapSharePreview,
-  PublicMapProjection,
-} from "@/lib/sharing/service";
+import type { PublicMapProjection } from "@/lib/sharing/service";
 
-export const MAP_SHARE_PREVIEW_STORAGE_KEY =
-  "waypointer:map-share-preview";
-export const MAP_SHARE_PREVIEW_FRAGMENT_PARAM = "preview";
-
-const NONCE_PATTERN = /^[0-9a-f]{32}$/;
-const PREVIEW_ID_PATTERN = /^[0-9a-f]{64}$/;
 const ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
 
-export class MapSharePreviewValidationError extends Error {
+export class PublicMapProjectionValidationError extends Error {
   constructor() {
-    super("Invalid map share preview.");
-    this.name = "MapSharePreviewValidationError";
+    super("Invalid public map projection.");
+    this.name = "PublicMapProjectionValidationError";
   }
-}
-
-export function createMapSharePreviewNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (value) =>
-    value.toString(16).padStart(2, "0"),
-  ).join("");
-}
-
-export function mapSharePreviewFragment(nonce: string): string {
-  assertNonce(nonce);
-  return `#${MAP_SHARE_PREVIEW_FRAGMENT_PARAM}=${nonce}`;
-}
-
-export function parseMapSharePreviewFragment(
-  hash: string,
-): string | null {
-  if (!hash) return null;
-  const parameters = new URLSearchParams(hash.slice(1));
-  const nonce = parameters.get(MAP_SHARE_PREVIEW_FRAGMENT_PARAM);
-  if (
-    parameters.size !== 1 ||
-    nonce === null ||
-    !NONCE_PATTERN.test(nonce)
-  ) {
-    throw new MapSharePreviewValidationError();
-  }
-  return nonce;
-}
-
-export function parseMapSharePreview(value: unknown): MapSharePreview {
-  const preview = exactRecord(value, [
-    "previewId",
-    "includeDisplayName",
-    "projection",
-  ]);
-  if (
-    typeof preview.previewId !== "string" ||
-    !PREVIEW_ID_PATTERN.test(preview.previewId) ||
-    typeof preview.includeDisplayName !== "boolean"
-  ) {
-    throw new MapSharePreviewValidationError();
-  }
-
-  const projection = parsePublicMapProjection(preview.projection);
-  if (
-    preview.includeDisplayName !==
-    (projection.owner.displayName !== null)
-  ) {
-    throw new MapSharePreviewValidationError();
-  }
-
-  return {
-    previewId: preview.previewId,
-    includeDisplayName: preview.includeDisplayName,
-    projection,
-  };
 }
 
 export function parsePublicMapProjection(
@@ -93,7 +26,7 @@ export function parsePublicMapProjection(
     !isNonNegativeInteger(summary.routeCount) ||
     !Array.isArray(projection.routes)
   ) {
-    throw new MapSharePreviewValidationError();
+    throw new PublicMapProjectionValidationError();
   }
 
   const routes = projection.routes.map(parsePublicRoute);
@@ -109,7 +42,7 @@ export function parsePublicMapProjection(
     !Number.isSafeInteger(representedLegs) ||
     summary.flightCount > representedLegs
   ) {
-    throw new MapSharePreviewValidationError();
+    throw new PublicMapProjectionValidationError();
   }
 
   return {
@@ -120,45 +53,6 @@ export function parsePublicMapProjection(
     },
     routes,
   };
-}
-
-export function storeMapSharePreview(
-  storage: Storage,
-  nonce: string,
-  projection: unknown,
-): PublicMapProjection {
-  assertNonce(nonce);
-  const sanitizedProjection = parsePublicMapProjection(projection);
-  storage.setItem(
-    MAP_SHARE_PREVIEW_STORAGE_KEY,
-    JSON.stringify({
-      nonce,
-      projection: sanitizedProjection,
-    }),
-  );
-  return sanitizedProjection;
-}
-
-export function readMapSharePreview(
-  storage: Storage,
-  requestedNonce: string | null,
-): PublicMapProjection | null {
-  if (requestedNonce !== null) assertNonce(requestedNonce);
-  const serialized = storage.getItem(MAP_SHARE_PREVIEW_STORAGE_KEY);
-  if (!serialized) return null;
-
-  const envelope = exactRecord(JSON.parse(serialized), [
-    "nonce",
-    "projection",
-  ]);
-  if (
-    typeof envelope.nonce !== "string" ||
-    !NONCE_PATTERN.test(envelope.nonce) ||
-    (requestedNonce !== null && envelope.nonce !== requestedNonce)
-  ) {
-    throw new MapSharePreviewValidationError();
-  }
-  return parsePublicMapProjection(envelope.projection);
 }
 
 function parsePublicRoute(
@@ -177,7 +71,7 @@ function parsePublicRoute(
     (route.kind !== "commercial" && route.kind !== "private") ||
     !isPositiveInteger(route.flightCount)
   ) {
-    throw new MapSharePreviewValidationError();
+    throw new PublicMapProjectionValidationError();
   }
   return {
     id: route.id,
@@ -199,7 +93,7 @@ function parseCoarsePlace(
     place.country !== place.country.trim() ||
     !COUNTRY_PATTERN.test(place.country)
   ) {
-    throw new MapSharePreviewValidationError();
+    throw new PublicMapProjectionValidationError();
   }
   return {
     lat: normalizeZero(place.lat),
@@ -212,13 +106,13 @@ function exactRecord(
   value: unknown,
   expectedKeys: readonly string[],
 ): Record<string, unknown> {
-  if (!isRecord(value)) throw new MapSharePreviewValidationError();
+  if (!isRecord(value)) throw new PublicMapProjectionValidationError();
   const keys = Reflect.ownKeys(value);
   if (
     keys.length !== expectedKeys.length ||
     expectedKeys.some((key) => !Object.hasOwn(value, key))
   ) {
-    throw new MapSharePreviewValidationError();
+    throw new PublicMapProjectionValidationError();
   }
   return value;
 }
@@ -269,10 +163,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function normalizeZero(value: number): number {
   return Object.is(value, -0) ? 0 : value;
-}
-
-function assertNonce(nonce: string): void {
-  if (!NONCE_PATTERN.test(nonce)) {
-    throw new MapSharePreviewValidationError();
-  }
 }

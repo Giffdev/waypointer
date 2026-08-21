@@ -69,17 +69,24 @@ npm run test:postgres
 and Playwright. Both commands provision the local database through Docker
 Compose rather than silently skipping database coverage.
 
-The public map projection function is `SECURITY DEFINER`, has a locked
-`pg_catalog, public` search path, and is revoked from `PUBLIC`. Deployments that
-use a runtime database role separate from the migration owner must explicitly
-run:
+The public username projection function is `SECURITY DEFINER`, has a locked
+`pg_catalog, public` search path, and is revoked from `PUBLIC`. Production
+deployments do not auto-migrate. Before deploying the application, run the
+reviewed migration path with both roles configured:
 
-```sql
-GRANT EXECUTE ON FUNCTION public_map_projection(uuid, text) TO <runtime_role>;
+```powershell
+$env:MIGRATION_DATABASE_URL = "<DDL-capable release role>"
+$env:DATABASE_URL = "<least-privilege runtime role>"
+npm run db:migrate
 ```
 
-Do not grant the runtime role ownership of that function or schema-creation
-rights.
+`MIGRATION_DATABASE_URL` applies migration `0017_public_share_handles.sql`.
+`DATABASE_URL` is used only to identify the runtime role: the migration runner
+revokes that role's access to the obsolete
+legacy projection functions and grants
+`EXECUTE` on `public_map_projection_by_handle(text)`. Do not grant the
+runtime role function ownership or schema-creation rights. Confirm the
+migration ledger boundary is `0017` before application deployment.
 
 Production still requires provisioned PostgreSQL, `AUTH_SECRET`, and a real
 `AUTH_URL`. Account deletion remains fail-closed and unavailable unless both
@@ -176,11 +183,13 @@ OurAirports publishes public-domain nightly CSVs without an accuracy warranty.
 `npm run db:airport-release` is the production-safe catalog operation. It
 uses only the reviewed file and SHA-256 pinned in
 `config/airport-catalog-release.json`; it never downloads mutable release data.
-Existing UUIDs are retained through verified source identity or an exact
+Existing airport UUIDs are retained through verified source identity or an exact
 logical match for explicitly marked 0009 code-derived identities. Crossed or
 reassigned identifiers fail before writes. An exact manifest covers every
-migration through 0015, including product migrations 0011–0014, and refuses
-extra, missing, reordered, or modified migration files. Pending migrations, the catalog,
+migration through 0017, including product migrations 0011–0017, and refuses
+extra, missing, reordered, or modified migration files. The airport release
+operation applies only its owned migration through 0015 and recognizes later
+reviewed boundaries without replaying them. Pending owned migrations, the catalog,
 aliases, unresolved-import reconciliation, and database health checks run in
 one serializable transaction. Production requires a separately recorded,
 content-addressed target/snapshot approval and candidate manifest. When Git

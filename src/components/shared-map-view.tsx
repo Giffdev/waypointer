@@ -6,30 +6,16 @@ import type { Airport, MapRoute } from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
 import type { MapViewMode } from "@/lib/map-view-mode";
-import { parsePublicMapProjection } from "@/lib/sharing/client-preview";
+import { parsePublicMapProjection } from "@/lib/sharing/client-projection";
 import type { PublicMapProjection } from "@/lib/sharing/service";
 
-export function SharedMapView({ publicId }: { publicId: string }) {
+export function SharedMapView({ handle }: { handle: string }) {
   const [projection, setProjection] = useState<PublicMapProjection | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "not-found" | "error">("loading");
 
   useEffect(() => {
     let disposed = false;
     let activeController: AbortController | null = null;
-    const key = new URLSearchParams(window.location.hash.slice(1)).get("key");
-    window.history.replaceState(
-      window.history.state,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
-    if (!key) {
-      queueMicrotask(() => {
-        if (!disposed) setState("not-found");
-      });
-      return () => {
-        disposed = true;
-      };
-    }
 
     function loadProjection() {
       if (disposed || activeController) return;
@@ -37,13 +23,9 @@ export function SharedMapView({ publicId }: { publicId: string }) {
       activeController = controller;
       setState("loading");
 
-      void fetch(`/api/shared/${encodeURIComponent(publicId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
+      void fetch(`/api/shared/${encodeURIComponent(handle)}`, {
         signal: controller.signal,
         cache: "no-store",
-        referrerPolicy: "no-referrer",
       })
         .then(async (response) => {
           const body: unknown = await response.json();
@@ -92,7 +74,7 @@ export function SharedMapView({ publicId }: { publicId: string }) {
       window.removeEventListener("pageshow", loadProjection);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [publicId]);
+  }, [handle]);
 
   if (state === "loading") {
     return <main className="shared-map-state"><p role="status">Loading shared map…</p></main>;
@@ -114,46 +96,28 @@ export function SharedMapView({ publicId }: { publicId: string }) {
     );
   }
 
-  return <SharedMapProjectionView projection={projection} mode="live" />;
+  return <SharedMapProjectionView projection={projection} />;
 }
 
 export function SharedMapProjectionView({
   projection,
-  mode,
 }: {
   projection: PublicMapProjection;
-  mode: "live" | "preview";
 }) {
   const [viewMode, setViewMode] = useState<MapViewMode>("globe");
   const mapData = useMemo(
     () => toSharedMapData(projection.routes),
     [projection.routes],
   );
-  const isPreview = mode === "preview";
-
   return (
     <main className="shared-map-page" id="main-content">
       <header className="shared-map-header">
-        <p className="eyebrow">
-          {isPreview
-            ? "Private sharing preview · not published"
-            : "View-only shared map"}
-        </p>
+        <p className="eyebrow">Public shared map</p>
         <h1>
           {projection.owner.displayName
-            ? isPreview
-              ? `Preview of ${projection.owner.displayName}’s Waypointer map`
-              : `${projection.owner.displayName}’s Waypointer map`
-            : isPreview
-              ? "Shared Waypointer map preview"
-              : "Shared Waypointer map"}
+            ? `${projection.owner.displayName}’s Waypointer map`
+            : "Shared Waypointer map"}
         </h1>
-        {isPreview && (
-          <p role="status">
-            This is the reviewed snapshot only. It remains private until you
-            return to Settings and explicitly publish it.
-          </p>
-        )}
         <p>
           Approximate aggregated routes · {projection.summary.flightCount.toLocaleString()} flights · {mapData.routes.length.toLocaleString()} routes
         </p>
@@ -178,9 +142,8 @@ export function SharedMapProjectionView({
         />
       </section>
       <p className="shared-map-privacy">
-        {isPreview
-          ? "Locations are intentionally approximate. Closing this tab does not publish or change sharing."
-          : "Locations are intentionally approximate. This shared view cannot edit flights or access the owner’s account."}
+        Locations are intentionally approximate. This public view cannot edit
+        flights or access the owner’s account.
       </p>
     </main>
   );
