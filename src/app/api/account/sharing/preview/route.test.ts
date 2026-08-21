@@ -12,7 +12,6 @@ vi.mock("@/lib/auth/guards", () => ({
 vi.mock("@/lib/sharing/service", () => ({
   previewMapSharing: mocks.previewMapSharing,
   ShareEmptyMapError: class ShareEmptyMapError extends Error {},
-  ShareFlightLimitError: class ShareFlightLimitError extends Error {},
   ShareValidationError: class ShareValidationError extends Error {},
 }));
 
@@ -75,5 +74,30 @@ describe("sharing preview API", () => {
     expect(response.status).toBe(403);
     expect(response.headers.get("Cache-Control")).toBe(NO_STORE);
     expect(mocks.previewMapSharing).not.toHaveBeenCalled();
+  });
+
+  it("surfaces operational projection failures without reporting a flight cap", async () => {
+    mocks.previewMapSharing.mockRejectedValueOnce(
+      new Error("database resources unavailable"),
+    );
+    const response = await POST(
+      new Request("https://example.test/api/account/sharing/preview", {
+        method: "POST",
+        headers: {
+          origin: "https://example.test",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ includeDisplayName: false }),
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe(NO_STORE);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "account-service-unavailable",
+        message: "Account settings are temporarily unavailable.",
+      },
+    });
   });
 });

@@ -28,7 +28,6 @@ import {
   previewMapSharing,
   publicTokenRateLimitKey,
   regenerateMapShare,
-  ShareFlightLimitError,
   ShareNotFoundError,
   SharePreviewMismatchError,
   ShareValidationError,
@@ -596,7 +595,7 @@ postgresDescribe("read-only map sharing PostgreSQL boundary", () => {
     ).rejects.toBeInstanceOf(ShareNotFoundError);
   });
 
-  it("keeps tenant scope and rejects a 500-to-501 consent transition", async () => {
+  it("keeps tenant scope and requires a fresh preview for a 500-to-501 transition", async () => {
     const ownerId = await createOwner("Owner");
     const otherId = await createOwner("Other");
     const [originId, destinationId] = await createAirports();
@@ -644,14 +643,53 @@ postgresDescribe("read-only map sharing PostgreSQL boundary", () => {
     expect(await enableOutcome).toMatchObject({
       error: expect.any(SharePreviewMismatchError),
     });
-    await expect(
-      previewMapSharing(ownerId, { includeDisplayName: false }),
-    ).rejects.toBeInstanceOf(ShareFlightLimitError);
+    const refreshedPreview = await previewMapSharing(ownerId, {
+      includeDisplayName: false,
+    });
+    expect(refreshedPreview.projection).toMatchObject({
+      summary: { flightCount: 501, routeCount: 1 },
+      routes: [{ flightCount: 501 }],
+    });
+    const enabledShare = await enableMapSharing(ownerId, {
+      includeDisplayName: false,
+      previewId: refreshedPreview.previewId,
+    });
+    expect(enabledShare).toMatchObject({
+      enabled: true,
+      publishedFlightCount: 501,
+    });
 
     const otherPreview = await previewMapSharing(otherId, {
       includeDisplayName: false,
     });
     expect(otherPreview.projection.summary.flightCount).toBe(1);
+  });
+
+  it("publishes a materially larger complete map without truncating aggregation", async () => {
+    const ownerId = await createOwner("Large Map Owner");
+    const [originId, destinationId] = await createAirports();
+    await createFlights(ownerId, originId, destinationId, 2_500);
+
+    const preview = await previewMapSharing(ownerId, {
+      includeDisplayName: false,
+    });
+    expect(preview.projection).toMatchObject({
+      summary: { flightCount: 2_500, routeCount: 1 },
+      routes: [{ flightCount: 2_500 }],
+    });
+
+    const enabledShare = await enableMapSharing(ownerId, {
+      includeDisplayName: false,
+      previewId: preview.previewId,
+    });
+    expect(enabledShare).toMatchObject({
+      enabled: true,
+      publishedFlightCount: 2_500,
+    });
+    const shareCapability = capability(enabledShare.sharePath!);
+    await expect(
+      getPublicMapProjection(shareCapability.publicId, shareCapability.key),
+    ).resolves.toEqual(preview.projection);
   });
 
   it("creates a new capability when a disabled share is re-enabled", async () => {

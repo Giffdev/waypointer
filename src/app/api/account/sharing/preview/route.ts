@@ -3,7 +3,6 @@ import { assertSameOrigin } from "@/lib/auth/request";
 import {
   previewMapSharing,
   ShareEmptyMapError,
-  ShareFlightLimitError,
   ShareValidationError,
 } from "@/lib/sharing/service";
 import {
@@ -40,19 +39,13 @@ export async function POST(request: Request) {
               "sharing-map-empty",
               "Your map does not have any flights to share yet.",
             )
-          : error instanceof ShareFlightLimitError
+          : error instanceof ShareValidationError
             ? new AccountRequestError(
-                409,
-                "sharing-flight-limit",
-                "Waypointer supports complete shared maps with up to 500 flights.",
+                400,
+                "invalid-sharing-request",
+                "Choose whether to include your display name.",
               )
-            : error instanceof ShareValidationError
-              ? new AccountRequestError(
-                  400,
-                  "invalid-sharing-request",
-                  "Choose whether to include your display name.",
-                )
-              : error,
+            : error,
       ),
     );
   }

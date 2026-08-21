@@ -26,7 +26,7 @@ export default async function SettingsPage() {
       initialProfile={profile}
       configured={Boolean(user) || e2eConfigured}
       deletionEnabled={isAccountDeletionEnabled()}
-      sharingAvailable={Boolean(user)}
+      sharingAvailable={Boolean(user) || e2eConfigured}
     />
   );
 }

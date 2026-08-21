@@ -1,52 +1,40 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-type ShareStatus = {
-  enabled: boolean;
-  sharePath: string | null;
-  includeDisplayName: boolean;
-  publishedFlightCount: number;
-};
+import {
+  createMapSharePreviewNonce,
+  mapSharePreviewFragment,
+  parseMapSharePreview,
+  storeMapSharePreview,
+} from "@/lib/sharing/client-preview";
+import type {
+  MapSharePreview,
+  OwnerShareStatus,
+  PublicMapProjection,
+} from "@/lib/sharing/service";
 
 type ShareStatusState =
   | { phase: "loading" }
-  | { phase: "loaded"; value: ShareStatus }
+  | { phase: "loaded"; value: OwnerShareStatus }
   | { phase: "failed" };
 
-async function fetchShareStatus(signal?: AbortSignal): Promise<ShareStatus> {
+async function fetchShareStatus(
+  signal?: AbortSignal,
+): Promise<OwnerShareStatus> {
   const response = await fetch("/api/account/sharing", {
     cache: "no-store",
     signal,
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.error?.message);
-  return body.sharing as ShareStatus;
+  return body.sharing as OwnerShareStatus;
 }
-
-type CoarsePlace = { lat: number; lon: number; country: string };
-
-type SharePreview = {
-  previewId: string;
-  includeDisplayName: boolean;
-  projection: {
-    owner: { displayName: string | null };
-    summary: { flightCount: number; routeCount: number };
-    routes: Array<{
-      id: string;
-      kind: "commercial" | "private";
-      flightCount: number;
-      origin: CoarsePlace;
-      destination: CoarsePlace;
-    }>;
-  };
-};
 
 export function MapSharingPanel() {
   const [statusState, setStatusState] = useState<ShareStatusState>({
     phase: "loading",
   });
-  const [preview, setPreview] = useState<SharePreview | null>(null);
+  const [preview, setPreview] = useState<MapSharePreview | null>(null);
   const [includeDisplayName, setIncludeDisplayName] = useState(false);
   const [consented, setConsented] = useState(false);
   const [busy, setBusy] = useState("");
@@ -105,31 +93,146 @@ export function MapSharingPanel() {
   }
 
   async function requestPreview() {
+    const openedTab = openProtectedBlankTab();
+    if (!openedTab.ok) {
+      setError(openedTab.error);
+      setMessage("");
+      return;
+    }
+    const previewTab = openedTab.tab;
+
     setBusy("preview");
     setError("");
     setMessage("");
     setConfirmation("");
     try {
-      const response = await fetch("/api/account/sharing/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          includeDisplayName,
-        }),
+      let body: unknown;
+      try {
+        const response = await fetch("/api/account/sharing/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            includeDisplayName,
+          }),
+        });
+        body = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            apiErrorMessage(body) ??
+              "The sharing preview could not be created.",
+          );
+        }
+      } catch (requestError) {
+        setError(
+          closePreviewTabMessage(
+            previewTab,
+            requestError instanceof Error && requestError.message
+              ? requestError.message
+              : "The sharing preview could not be created.",
+          ),
+        );
+        return;
+      }
+
+      let nextPreview: MapSharePreview;
+      try {
+        nextPreview = parseMapSharePreview(
+          isRecord(body) ? body.preview : undefined,
+        );
+      } catch {
+        setError(
+          closePreviewTabMessage(
+            previewTab,
+            "The sharing preview response was invalid.",
+          ),
+        );
+        return;
+      }
+
+      let nonce: string;
+      try {
+        nonce = createMapSharePreviewNonce();
+      } catch {
+        setError(
+          closePreviewTabMessage(
+            previewTab,
+            "The preview tab could not be initialized.",
+          ),
+        );
+        return;
+      }
+
+      let projection: PublicMapProjection;
+      try {
+        projection = storeMapSharePreview(
+          previewTab.sessionStorage,
+          nonce,
+          nextPreview.projection,
+        );
+      } catch {
+        setError(
+          closePreviewTabMessage(
+            previewTab,
+            "The preview tab could not store the reviewed map. Check browser storage settings and try again.",
+          ),
+        );
+        return;
+      }
+
+      const previewUrl = new URL(
+        "/shared/preview",
+        window.location.origin,
+      );
+      previewUrl.hash = mapSharePreviewFragment(nonce);
+      try {
+        previewTab.location.replace(previewUrl.href);
+      } catch {
+        setError(
+          closePreviewTabMessage(
+            previewTab,
+            "The preview tab could not navigate to the reviewed map.",
+          ),
+        );
+        return;
+      }
+
+      setPreview({
+        ...nextPreview,
+        projection,
       });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.error?.message);
-      setPreview(body.preview);
       setConsented(false);
-      setMessage("Map preview ready. Review it before publishing.");
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "The sharing preview could not be created.",
+      setMessage(
+        "Interactive map preview opened in a new tab. Review it before publishing.",
       );
     } finally {
       setBusy("");
+    }
+  }
+
+  function previewLiveMap() {
+    if (!status?.sharePath) return;
+    const openedTab = openProtectedBlankTab();
+    if (!openedTab.ok) {
+      setError(openedTab.error);
+      setMessage("");
+      return;
+    }
+    const previewTab = openedTab.tab;
+
+    try {
+      previewTab.location.replace(
+        new URL(status.sharePath, window.location.origin).href,
+      );
+      setError("");
+      setMessage("Live shared map opened in a new tab.");
+    } catch {
+      setError(
+        closePreviewTabMessage(
+          previewTab,
+          "The live shared map could not be opened. Try again.",
+        ),
+      );
+      setMessage("");
     }
   }
 
@@ -290,8 +393,8 @@ export function MapSharingPanel() {
 
       <p className="sharing-inclusion-summary">
         Each preview is built from every flight currently on your private map.
-        Individual flights cannot be selected or excluded. Complete maps are
-        limited to 500 flights.
+        Individual flights cannot be selected or excluded, and Waypointer never
+        publishes a partial or truncated snapshot.
       </p>
 
       <label className="sharing-name-option">
@@ -394,6 +497,13 @@ export function MapSharingPanel() {
             />
           </label>
           <div className="sharing-actions">
+            <button
+              type="button"
+              disabled={busy !== ""}
+              onClick={previewLiveMap}
+            >
+              Preview live shared map
+            </button>
             <button type="button" onClick={copyLink}>Copy link</button>
             <button type="button" onClick={() => setConfirmation("regenerate")}>Replace link</button>
             <button type="button" className="danger-button" onClick={() => setConfirmation("revoke")}>Disable sharing</button>
@@ -438,5 +548,102 @@ export function MapSharingPanel() {
         {error || message}
       </p>
     </section>
+  );
+}
+
+type ProtectedBlankTabResult =
+  | { ok: true; tab: Window }
+  | { ok: false; error: string };
+
+function openProtectedBlankTab(): ProtectedBlankTabResult {
+  let previewTab: Window | null;
+  try {
+    previewTab = window.open("about:blank", "_blank");
+  } catch {
+    return {
+      ok: false,
+      error:
+        "Your browser blocked the preview tab. Allow pop-ups for Waypointer and try again.",
+    };
+  }
+  if (!previewTab) {
+    return {
+      ok: false,
+      error:
+        "Your browser blocked the preview tab. Allow pop-ups for Waypointer and try again.",
+    };
+  }
+
+  try {
+    previewTab.opener = null;
+  } catch {
+    return {
+      ok: false,
+      error: closePreviewTabMessage(
+        previewTab,
+        "The preview tab could not be isolated from the settings tab, so the preview was stopped. Try again.",
+      ),
+    };
+  }
+
+  try {
+    previewTab.sessionStorage.clear();
+  } catch {
+    return {
+      ok: false,
+      error: closePreviewTabMessage(
+        previewTab,
+        "The preview tab could not clear inherited browser storage, so the preview was stopped. Try again.",
+      ),
+    };
+  }
+
+  try {
+    const referrerPolicy = previewTab.document.createElement("meta");
+    referrerPolicy.name = "referrer";
+    referrerPolicy.content = "no-referrer";
+    previewTab.document.head.append(referrerPolicy);
+    return { ok: true, tab: previewTab };
+  } catch {
+    return {
+      ok: false,
+      error: closePreviewTabMessage(
+        previewTab,
+        "The preview tab could not apply its no-referrer protection, so the preview was stopped. Try again.",
+      ),
+    };
+  }
+}
+
+function closePreviewTab(previewTab: Window): boolean {
+  try {
+    previewTab.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function closePreviewTabMessage(
+  previewTab: Window,
+  message: string,
+): string {
+  return closePreviewTab(previewTab)
+    ? message
+    : `${message} Close the blank preview tab manually.`;
+}
+
+function apiErrorMessage(body: unknown): string | null {
+  if (!isRecord(body) || !isRecord(body.error)) return null;
+  return typeof body.error.message === "string" && body.error.message
+    ? body.error.message
+    : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
   );
 }

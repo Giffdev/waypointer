@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MapSharingPanel } from "./map-sharing-panel";
+import { MAP_SHARE_PREVIEW_STORAGE_KEY } from "@/lib/sharing/client-preview";
 
 const sharePath =
   "/shared/00000000-0000-4000-8000-000000000010#key=" + "s".repeat(43);
@@ -16,9 +23,18 @@ describe("MapSharingPanel", () => {
   let currentIdentity = false;
   let previewFlightCount = 3;
   let previewError: { code: string; message: string } | null = null;
+  let previewResponseOverride: unknown | null = null;
+  let deferredPreview: Promise<Response> | null = null;
   let staleEnable = false;
   let statusFailure: "rejected" | "non-ok" | null = null;
   const writeText = vi.fn();
+  const openTab = vi.fn();
+  const previewStorageClear = vi.fn();
+  const previewStorageSet = vi.fn();
+  const previewLocationReplace = vi.fn();
+  const previewClose = vi.fn();
+  let previewDocument: Document;
+  let previewTab: Window;
 
   beforeEach(() => {
     enabled = false;
@@ -27,9 +43,29 @@ describe("MapSharingPanel", () => {
     currentIdentity = false;
     previewFlightCount = 3;
     previewError = null;
+    previewResponseOverride = null;
+    deferredPreview = null;
     staleEnable = false;
     statusFailure = null;
     writeText.mockReset().mockResolvedValue(undefined);
+    previewStorageClear.mockReset();
+    previewStorageSet.mockReset();
+    previewLocationReplace.mockReset();
+    previewClose.mockReset();
+    window.sessionStorage.clear();
+    previewDocument = document.implementation.createHTMLDocument();
+    previewTab = {
+      opener: window,
+      document: previewDocument,
+      sessionStorage: {
+        clear: previewStorageClear,
+        setItem: previewStorageSet,
+      },
+      location: { replace: previewLocationReplace },
+      close: previewClose,
+    } as unknown as Window;
+    openTab.mockReset().mockReturnValue(previewTab);
+    vi.stubGlobal("open", openTab);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -56,15 +92,18 @@ describe("MapSharingPanel", () => {
           return json({ sharing: status() });
         }
         if (url.endsWith("/preview")) {
+          if (deferredPreview) return deferredPreview;
           if (previewError) return json({ error: previewError }, 409);
           const settings = JSON.parse(String(init?.body)) as {
             includeDisplayName: boolean;
           };
           return json({
-            preview: makePreview(
-              settings.includeDisplayName,
-              previewFlightCount,
-            ),
+            preview:
+              previewResponseOverride ??
+              makePreview(
+                settings.includeDisplayName,
+                previewFlightCount,
+              ),
           });
         }
         if (url === "/api/account/sharing" && init?.method === "POST") {
@@ -103,6 +142,7 @@ describe("MapSharingPanel", () => {
 
   afterEach(() => {
     cleanup();
+    window.sessionStorage.clear();
     vi.unstubAllGlobals();
   });
 
@@ -189,6 +229,320 @@ describe("MapSharingPanel", () => {
     expect(String(previewCall?.[1]?.body)).not.toContain("flightIds");
   });
 
+  it("opens a blank same-origin tab synchronously before the preview request resolves", async () => {
+    let resolvePreview!: (response: Response) => void;
+    deferredPreview = new Promise((resolve) => {
+      resolvePreview = resolve;
+    });
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(openTab).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(previewTab.opener).toBeNull();
+    expect(previewStorageClear).toHaveBeenCalledOnce();
+    expect(previewLocationReplace).not.toHaveBeenCalled();
+    const previewCallIndex = vi.mocked(fetch).mock.calls.findIndex(([url]) =>
+      String(url).endsWith("/preview"),
+    );
+    expect(previewCallIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      previewStorageClear.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(fetch).mock.invocationCallOrder[previewCallIndex],
+    );
+
+    resolvePreview(json({ preview: makePreview(false, 3) }));
+    expect(
+      await screen.findByText(/Interactive map preview opened/),
+    ).toBeVisible();
+  });
+
+  it("stores only the reviewed projection and navigates the preview tab", async () => {
+    const user = userEvent.setup();
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(previewStorageSet.mock.calls[0]?.[0]).toBe(
+      MAP_SHARE_PREVIEW_STORAGE_KEY,
+    );
+    const storedEnvelope = JSON.parse(
+      String(previewStorageSet.mock.calls[0]?.[1]),
+    );
+    expect(storedEnvelope).toEqual({
+      nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
+      projection: makePreview(false, 3).projection,
+    });
+    expect(storedEnvelope).not.toHaveProperty("previewId");
+    expect(JSON.stringify(storedEnvelope)).not.toMatch(
+      /account|email|import|flightIds/i,
+    );
+    const previewUrl = new URL(
+      String(previewLocationReplace.mock.calls[0]?.[0]),
+    );
+    expect(previewUrl.pathname).toBe("/shared/preview");
+    expect(previewUrl.search).toBe("");
+    expect(previewUrl.hash).toBe(`#preview=${storedEnvelope.nonce}`);
+    expect(previewUrl.href).not.toContain("a".repeat(64));
+    const referrerPolicy = previewDocument.querySelector(
+      'meta[name="referrer"]',
+    );
+    expect(referrerPolicy?.getAttribute("content")).toBe("no-referrer");
+    expect(previewClose).not.toHaveBeenCalled();
+  });
+
+  it("reports a blocked preview tab without starting the preview request", async () => {
+    const user = userEvent.setup();
+    openTab.mockReturnValueOnce(null);
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "browser blocked the preview tab",
+    );
+    expect(
+      vi.mocked(fetch).mock.calls.some(([url]) =>
+        String(url).endsWith("/preview"),
+      ),
+    ).toBe(false);
+    expect(previewStorageClear).not.toHaveBeenCalled();
+    expect(previewStorageSet).not.toHaveBeenCalled();
+  });
+
+  it("clears cloned child storage while retaining the parent tab storage", async () => {
+    const user = userEvent.setup();
+    const sentinelKey = "parent-only-sentinel";
+    const sentinelValue = "keep-in-parent";
+    window.sessionStorage.setItem(sentinelKey, sentinelValue);
+    const inheritedPopup = popupDouble({
+      [sentinelKey]: sentinelValue,
+    });
+    openTab.mockReturnValueOnce(inheritedPopup.tab);
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(inheritedPopup.clear).toHaveBeenCalledOnce();
+    expect(inheritedPopup.getItem(sentinelKey)).toBeNull();
+    expect(window.sessionStorage.getItem(sentinelKey)).toBe(sentinelValue);
+    expect(
+      await screen.findByText(/Interactive map preview opened/),
+    ).toBeVisible();
+  });
+
+  it("treats inherited storage clearing failure as a protection failure", async () => {
+    const user = userEvent.setup();
+    previewStorageClear.mockImplementationOnce(() => {
+      throw new DOMException("storage unavailable", "SecurityError");
+    });
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not clear inherited browser storage",
+    );
+    expect(previewClose).toHaveBeenCalledOnce();
+    expect(
+      vi.mocked(fetch).mock.calls.some(([url]) =>
+        String(url).endsWith("/preview"),
+      ),
+    ).toBe(false);
+    expect(previewStorageSet).not.toHaveBeenCalled();
+    expect(previewLocationReplace).not.toHaveBeenCalled();
+  });
+
+  it("reports session storage failure and closes the blank tab", async () => {
+    const user = userEvent.setup();
+    previewStorageSet.mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not store the reviewed map",
+    );
+    expect(previewClose).toHaveBeenCalledOnce();
+    expect(previewLocationReplace).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: "Preview your shared map" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports navigation failure and closes the blank tab", async () => {
+    const user = userEvent.setup();
+    previewLocationReplace.mockImplementationOnce(() => {
+      throw new DOMException("navigation denied", "SecurityError");
+    });
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not navigate to the reviewed map",
+    );
+    expect(previewStorageSet).toHaveBeenCalledOnce();
+    expect(previewClose).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("heading", { name: "Preview your shared map" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("rejects undeclared API projection fields before storage or consumption", async () => {
+    const user = userEvent.setup();
+    const validPreview = makePreview(false, 3);
+    previewResponseOverride = {
+      ...validPreview,
+      projection: {
+        ...validPreview.projection,
+        account: { email: "owner@example.test" },
+      },
+    };
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "preview response was invalid",
+    );
+    expect(previewStorageSet).not.toHaveBeenCalled();
+    expect(previewLocationReplace).not.toHaveBeenCalled();
+    expect(previewClose).toHaveBeenCalledOnce();
+  });
+
+  it("isolates multiple open previews with different tab nonces", async () => {
+    const user = userEvent.setup();
+    const first = popupDouble();
+    const second = popupDouble();
+    openTab
+      .mockReset()
+      .mockReturnValueOnce(first.tab)
+      .mockReturnValueOnce(second.tab);
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+    await screen.findByText(/Interactive map preview opened/);
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    const firstEnvelope = JSON.parse(
+      String(first.setItem.mock.calls[0]?.[1]),
+    );
+    const secondEnvelope = JSON.parse(
+      String(second.setItem.mock.calls[0]?.[1]),
+    );
+    expect(firstEnvelope.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(secondEnvelope.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(firstEnvelope.nonce).not.toBe(secondEnvelope.nonce);
+    expect(first.replace).toHaveBeenCalledWith(
+      expect.stringContaining(`#preview=${firstEnvelope.nonce}`),
+    );
+    expect(second.replace).toHaveBeenCalledWith(
+      expect.stringContaining(`#preview=${secondEnvelope.nonce}`),
+    );
+  });
+
+  it("closes the blank tab and reports an asynchronous preview failure", async () => {
+    const user = userEvent.setup();
+    previewError = {
+      code: "sharing-preview-failed",
+      message: "The reviewed snapshot could not be created.",
+    };
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "reviewed snapshot could not be created",
+    );
+    expect(previewClose).toHaveBeenCalledOnce();
+    expect(previewStorageSet).not.toHaveBeenCalled();
+    expect(previewLocationReplace).not.toHaveBeenCalled();
+  });
+
+  it("asks the user to close the blank tab when automatic close fails", async () => {
+    const user = userEvent.setup();
+    previewError = {
+      code: "sharing-preview-failed",
+      message: "The reviewed snapshot could not be created.",
+    };
+    previewClose.mockImplementationOnce(() => {
+      throw new DOMException("close denied", "SecurityError");
+    });
+    render(<MapSharingPanel />);
+    await screen.findByText("Private · sharing is off");
+
+    await user.click(
+      screen.getByRole("button", { name: "Preview shared map" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Close the blank preview tab manually",
+    );
+    expect(previewClose).toHaveBeenCalledOnce();
+  });
+
+  it("opens the enabled live capability without creating a new snapshot", async () => {
+    const user = userEvent.setup();
+    enabled = true;
+    currentFlightCount = 3;
+    render(<MapSharingPanel />);
+    await screen.findByText("View-only sharing is on");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Preview live shared map",
+      }),
+    );
+
+    expect(openTab).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(previewLocationReplace).toHaveBeenCalledWith(
+      new URL(sharePath, window.location.origin).href,
+    );
+    expect(previewStorageSet).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(fetch).mock.calls.some(([url]) =>
+        String(url).endsWith("/preview"),
+      ),
+    ).toBe(false);
+    expect(await screen.findByText(/Live shared map opened/)).toBeVisible();
+  });
+
   it("shows only the coarse aggregate projection", async () => {
     const user = userEvent.setup();
     render(<MapSharingPanel />);
@@ -253,14 +607,13 @@ describe("MapSharingPanel", () => {
     ).toBeDisabled();
   });
 
-  it("surfaces the authoritative 500-flight limit without replacing an existing snapshot", async () => {
+  it("surfaces a preview failure without replacing an existing snapshot", async () => {
     const user = userEvent.setup();
     enabled = true;
     currentFlightCount = 500;
     previewError = {
-      code: "sharing-flight-limit",
-      message:
-        "Waypointer supports complete shared maps with up to 500 flights.",
+      code: "account-service-unavailable",
+      message: "Account settings are temporarily unavailable.",
     };
     render(<MapSharingPanel />);
     await screen.findByText("View-only sharing is on");
@@ -270,7 +623,7 @@ describe("MapSharingPanel", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "up to 500 flights",
+      "temporarily unavailable",
     );
     expect(
       screen.queryByRole("button", { name: "Publish shared map" }),
@@ -446,4 +799,24 @@ function json(body: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function popupDouble(initialEntries: Record<string, string> = {}) {
+  const popupDocument = document.implementation.createHTMLDocument();
+  const values = new Map(Object.entries(initialEntries));
+  const clear = vi.fn(() => values.clear());
+  const getItem = vi.fn((key: string) => values.get(key) ?? null);
+  const setItem = vi.fn((key: string, value: string) => {
+    values.set(key, value);
+  });
+  const replace = vi.fn();
+  const close = vi.fn();
+  const tab = {
+    opener: window,
+    document: popupDocument,
+    sessionStorage: { clear, getItem, setItem },
+    location: { replace },
+    close,
+  } as unknown as Window;
+  return { tab, clear, getItem, setItem, replace, close };
 }

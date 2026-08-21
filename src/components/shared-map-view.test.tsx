@@ -65,6 +65,29 @@ describe("SharedMapView", () => {
     expect(screen.queryByTestId("shared-globe")).toBeNull();
   });
 
+  it("rejects API projections with undeclared private fields", async () => {
+    const shared = sharedMap();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({
+      map: {
+        ...shared.map,
+        owner: {
+          ...shared.map.owner,
+          accountId: "private-owner",
+        },
+      },
+    })));
+
+    render(<SharedMapView publicId="public-id" />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Shared map unavailable",
+      }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    expect(screen.queryByText("private-owner")).not.toBeInTheDocument();
+  });
+
   it("does not request a projection when the fragment capability is missing", async () => {
     window.location.hash = "";
     const fetchMock = vi.fn();
