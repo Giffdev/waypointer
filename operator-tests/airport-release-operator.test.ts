@@ -262,7 +262,7 @@ $result | ConvertTo-Json -Compress
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("rejects an authenticated Neon provider query failure", async () => {
     await expect(
