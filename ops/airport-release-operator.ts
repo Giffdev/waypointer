@@ -94,7 +94,9 @@ function validInspection(value: OperatorTargetInspection): boolean {
       Number.isSafeInteger(value.databaseOid) &&
       value.databaseOid > 0 &&
       /^[a-f0-9]{64}$/.test(value.preChangeStateSha256) &&
-      ["0014", "0015"].includes(value.migrationBoundary) &&
+      ["0014", "0015", "0016", "0017"].includes(
+        value.migrationBoundary,
+      ) &&
       Number.isFinite(Date.parse(value.inspectedAt)),
   );
 }
