@@ -93,9 +93,9 @@ this contract.
 - Public maps use a separate, privacy-reduced projection.
 
 The public projection excludes raw uploads, source payloads, correction
-history, notes, registration or tail numbers, seat data, account email,
-provider identity, exact departure times, session data, internal row IDs, and
-storage locations.
+history, notes, seat data, account email, provider identity, exact departure
+times, session data, internal row IDs, and storage locations. It allowlists
+registration/tail number only as a disclosed viewer-local filter field.
 
 ## Public sharing
 
@@ -135,7 +135,7 @@ opens it in a new browser tab, and provides a copy action. The link uses
 ### Complete, uncapped map
 
 The Share action publishes every current eligible flight. The public
-projection may aggregate flights into coarse routes, but it must preserve the
+projection aggregates flights into canonical-airport routes and preserves the
 complete represented flight count. It must not:
 
 - impose a maximum number of flights;
@@ -245,7 +245,8 @@ No fixture may contain a real person's private flight data.
 - Share publishes the whole eligible map with no flight or route cap.
 - The only public map URL is `/{username}`.
 - The public page and endpoint require no additional secret or request body.
-- Public responses contain only the approved coarse projection.
+- Public responses contain only the approved schema-v2 projection with
+  canonical public airport metadata and viewer-local filter facts.
 - Disable, suspension, rename, and deletion prevent subsequent public loads.
 - Old sharing URLs remain broken and do not redirect.
 - Unit, desktop Playwright, and mobile Playwright coverage enforce this

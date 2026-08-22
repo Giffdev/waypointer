@@ -6,7 +6,27 @@ import {
   publicMapFilterOptions,
 } from "./public-map-filtering";
 
+function airport(
+  code: string,
+  name: string,
+  city: string,
+  country: string,
+  lat: number,
+  lon: number,
+) {
+  return {
+    code,
+    name,
+    city,
+    country,
+    lat,
+    lon,
+    facility: "commercial" as const,
+  };
+}
+
 const projection: PublicMapProjection = {
+  schemaVersion: 2,
   owner: { displayName: "Devin" },
   summary: { flightCount: 3, routeCount: 3 },
   routes: [
@@ -14,22 +34,22 @@ const projection: PublicMapProjection = {
       id: "sea-jfk-commercial",
       kind: "commercial",
       flightCount: 2,
-      origin: { lat: 47.4, lon: -122.3, country: "US" },
-      destination: { lat: 40.6, lon: -73.8, country: "US" },
+      origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
+      destination: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
     },
     {
       id: "jfk-lhr-commercial",
       kind: "commercial",
       flightCount: 1,
-      origin: { lat: 40.6, lon: -73.8, country: "US" },
-      destination: { lat: 51.5, lon: -0.5, country: "GB" },
+      origin: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
+      destination: airport("LHR", "London Heathrow", "London", "GB", 51.471, -0.461),
     },
     {
       id: "sea-pdx-private",
       kind: "private",
       flightCount: 1,
-      origin: { lat: 47.4, lon: -122.3, country: "US" },
-      destination: { lat: 45.6, lon: -122.6, country: "US" },
+      origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
+      destination: airport("PDX", "Portland International", "Portland", "US", 45.589, -122.598),
     },
   ],
   flights: [
@@ -69,7 +89,7 @@ describe("public map viewer filtering", () => {
       summary: {
         flightCount: 3,
         routeCount: 3,
-        regionCount: 4,
+        airportCount: 4,
         countryCount: 2,
       },
       filteringAvailable: true,
@@ -93,7 +113,7 @@ describe("public map viewer filtering", () => {
     expect(slice.summary).toEqual({
       flightCount: 1,
       routeCount: 2,
-      regionCount: 3,
+      airportCount: 3,
       countryCount: 2,
     });
   });
@@ -109,28 +129,35 @@ describe("public map viewer filtering", () => {
       summary: {
         flightCount: 0,
         routeCount: 0,
-        regionCount: 0,
+        airportCount: 0,
         countryCount: 0,
       },
     });
+
   });
 
   it("counts opposite directions as one visible route", () => {
-    const forward = projection.routes[0]!;
+    const forward = { ...projection.routes[0]!, flightCount: 1 };
     const reverse = {
       ...forward,
       id: "jfk-sea-commercial",
       origin: forward.destination,
       destination: forward.origin,
     };
-    const legacyProjection: PublicMapProjection = {
+    const bidirectionalProjection: PublicMapProjection = {
       ...projection,
       summary: { flightCount: 2, routeCount: 2 },
       routes: [forward, reverse],
-      flights: null,
+      flights: [
+        { ...projection.flights[0]!, routeIds: [forward.id] },
+        {
+          ...projection.flights[1]!,
+          routeIds: [reverse.id],
+        },
+      ],
     };
     expect(
-      derivePublicMapSlice(legacyProjection, DEFAULT_PUBLIC_MAP_FILTERS)
+      derivePublicMapSlice(bidirectionalProjection, DEFAULT_PUBLIC_MAP_FILTERS)
         .summary.routeCount,
     ).toBe(1);
   });

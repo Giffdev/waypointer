@@ -18,7 +18,7 @@ Friend graphs, friend/follow requests, followers, invitations, contact discovery
 
 | Class | Examples | Handling |
 |---|---|---|
-| Restricted travel data | Flights, exact airports/times, notes, tail numbers, routes, inferred home airport, imports, provenance | Owner-only except for the explicit redacted share projection; encrypted; excluded from logs, search, and analytics |
+| Restricted travel data | Flights, exact times, notes, tail numbers, routes, inferred home airport, imports, provenance | Owner-only except for fields explicitly included in the whole-map public projection; encrypted; excluded from logs, search, and analytics |
 | Restricted identity/security | Password hashes, OAuth tokens, sessions, recovery/share tokens, email | Server-only; least privilege; tokens encrypted or one-way hashed as applicable |
 | Private account profile | Username, display name, avatar, email | Private; not exposed by the unlisted share URL unless a field is separately approved |
 | Shared reference data | Canonical airport records and public geographic boundaries | May be cached globally, but never joined to a user's history without authorization |
@@ -77,19 +77,19 @@ Requirements marked **BLOCKER** apply before the associated capability may ship.
 - **BLOCKER:** No private flight may contribute to a shared count, route line, airport marker, date range, update timestamp, activity feed, metadata tag, preview image, search result, or error message.
 - **BLOCKER:** Sharing is an explicit Share action for an unlisted URL, with a server-derived complete-map snapshot that has no product flight-count ceiling, a field/precision summary, and forwarding and recognizable-route warnings. Callers cannot select or exclude flight IDs. Resource failures must reject the operation without truncating or replacing the last enabled snapshot.
 - **BLOCKER:** Future flights/itineraries are not shareable in the initial release. An enabled URL reads only the published snapshot: newly imported or newly added flights remain outside that snapshot until an owner-initiated Update action atomically includes the complete current set. Owner-flight mutations and Share/Update use the same database lock, so an overlapping mutation commits before publication is derived. Any update or delete of a selected flight, or any insert, update, or delete of a route stop attached to a selected flight, conservatively disables the whole share. The membership rows remain as the last published record until a successful complete-map republish atomically replaces them and re-enables sharing.
-- Default shared views omit notes, provenance, source IDs/filenames, correction history, flight numbers, seats, passenger data, exact times, and aircraft registration/tail numbers.
+- Default shared views omit notes, provenance, source IDs/filenames, correction history, flight numbers, seats, passenger data, and exact times. Registration/tail number is included only as a disclosed viewer-filter field.
 
 ### Unlisted share URL lifecycle
 
 - **BLOCKER:** Sharing is off by default. Enabling it creates a separate, explicitly redacted server-side shared-map projection with server-derived complete-snapshot membership, redacted values/precision, and a projection version; it must not change the visibility of source flight rows.
-- **BLOCKER:** The only supported public capability is `/{handle}#key={capabilityKey}`. The handle is user-chosen, visible, and not identity-verified. The 256-bit HMAC-derived fragment key is mandatory authorization; only its digest is stored in `map_shares`, and it is sent from the browser in the body of `POST /api/shared/{handle}`, never in an HTTP URL. Internal UUID public IDs are non-public implementation identities; `/shared/{uuid}` and UUID projection access are unsupported.
-- **BLOCKER:** The Share action is explicit consent to publish the complete coarse map. Before it is available, the UI discloses that the user-chosen, unverified username is visible and forwarded with the link. Generated OAuth/Firebase or migration usernames must be edited first and email is never exposed as a fallback. Disablement and renaming immediately make the current route unavailable; re-enable and rename publication rotate the key so every prior handle/key combination remains invalid even after handle reuse.
+- **BLOCKER:** The only supported public route is the intentionally enumerable `/{handle}` URL. The handle is user-chosen, visible, and not identity-verified. Internal UUID public IDs are non-public implementation identities; `/shared/{uuid}` and UUID projection access are unsupported.
+- **BLOCKER:** The Share action is explicit consent to publish the complete map projection, including canonical airport names, identifiers, public reference locations, filter facts, and registration/tail number. Before it is available, the UI discloses that content and that the user-chosen, unverified username is visible and forwardable. Generated OAuth/Firebase or migration usernames must be edited first and email is never exposed as a fallback. Disablement and renaming immediately make the current route unavailable.
 - **BLOCKER:** Disablement, rotation, account disablement, security recovery, or deletion must fail closed at the authorization source immediately. Every share request revalidates current token state; possession of a formerly valid URL is not sufficient.
 - **BLOCKER:** The implemented shared JSON and error responses use the exact `Cache-Control: no-store, max-age=0, s-maxage=0, must-revalidate` header. Share HTML, tiles, images, and metadata must provide equivalent platform/CDN bypass before launch. No personalized share response may enter a shared or stale-while-revalidate cache.
 - **BLOCKER:** Revocation tests must prove old URLs fail from a fresh browser and after prior access, and that CDN, reverse-proxy, server-render, route-data, service-worker, image/preview, and browser-back paths do not reveal revoked content. Incident controls must support immediate cache purge as defense in depth.
-- **BLOCKER:** Shared API responses set `Referrer-Policy: no-referrer`, and the shared page removes the fragment before loading the map. Third-party requests therefore cannot receive the key through an HTTP URL or referrer. Token-bearing query strings are prohibited.
+- **BLOCKER:** Shared API responses set `Referrer-Policy: no-referrer`. Token-bearing query strings are prohibited.
 - **BLOCKER:** Share pages set `X-Robots-Tag: noindex, nofollow, noarchive` and matching HTML robot directives, are omitted from sitemaps/feeds/previews, and do not generate Open Graph images containing travel data. `robots.txt` is supplementary, not an access control.
-- **BLOCKER:** Tokens are removed from application, proxy, CDN, tracing, error, analytics, support, and audit logs. Monitoring may record only a non-reversible share ID and coarse outcome.
+- **BLOCKER:** Account/session/OAuth tokens are removed from application, proxy, CDN, tracing, error, analytics, support, and audit logs. Monitoring may record only a non-reversible share ID and coarse outcome.
 - **BLOCKER:** Unknown, disabled, rotated, malformed, and legacy UUID identifiers return the same generic not-found behavior. Link expiry is deferred. Endpoints, response size, redirects, and timing must not reveal whether an account or old share exists.
 - **BLOCKER:** The UI warns that anyone with the URL can forward or copy its contents. There is no claim of recipient identity, confidentiality after viewing, or screenshot/download prevention.
 - Later hardening: owner-selected expiration, multiple independently revocable URLs, access-count anomaly alerts, or optional viewer verification. These are not required for the simple initial URL.
@@ -97,9 +97,9 @@ Requirements marked **BLOCKER** apply before the associated capability may ship.
 ### Sensitive fields and precision
 
 - **BLOCKER:** Field-level policy is enforced server-side, not by hiding client UI. API contracts for shared views must be allowlists separate from owner contracts.
-- **BLOCKER:** Aircraft registration/tail number, free-text notes, provenance, external IDs, uploaded filenames, correction/audit data, seat/passenger fields, and authentication identity are never shared by default.
-- **BLOCKER:** Exact departure/arrival timestamps are omitted from the share URL. The default displayed precision is month/year; any future date-level option requires a separate explicit toggle and warning. Exact times are out of scope for the initial URL.
-- **BLOCKER:** The authenticated owner view may show exact canonical airports. The implemented capability-protected shared view exposes only region/country labels or coarse coordinates and coarse route geometry. Exact-airport sharing controls are future and unimplemented; any later implementation requires a separate per-share setting, warning, preview, and explicit confirmation while preserving the same handle-plus-fragment authorization model.
+- **BLOCKER:** Free-text notes, provenance, external IDs, uploaded filenames, correction/audit data, seat/passenger fields, and authentication identity are never shared. Registration/tail number is allowlisted only for the disclosed viewer-local filter.
+- **BLOCKER:** Exact departure/arrival timestamps are omitted. Calendar dates are included only to support disclosed viewer-local date-range filtering; exact times remain out of scope.
+- **BLOCKER:** The authenticated owner and public shared views may show canonical airports. The public contract includes only public-safe airport identifiers, display metadata, and reference coordinates; internal airport IDs and non-airport private metadata remain excluded.
 - **BLOCKER:** Do not infer or label “home,” “work,” employer, routine, or absence periods in a shared view. A user must be warned when a selection contains repeated endpoints or a recognizable routine.
 - **BLOCKER:** Downloads/exports from a shared view apply the same redaction and precision rules as the screen. Disabling download is not treated as prevention against a viewer copying data.
 - Later hardening: automatic privacy-risk preview for repeated routes, rare aircraft, and recent travel; optional delay before completed flights appear in a share.
@@ -184,10 +184,10 @@ No phase inherits approval from an earlier phase. Failed isolation, unintended d
 - Token does not appear in application/proxy/CDN/analytics/error logs, referrers, screenshots generated by the service, or third-party requests.
 - `no-store`, no-referrer, no-index/noarchive, sitemap exclusion, and third-party-resource isolation are tested.
 - Disablement and rotation invalidate authorization immediately; old URLs and every identified cache/render path fail after revocation.
-- Consent states that omitting direct account identifiers or a display name does not anonymize repeated coarse endpoints and routes, which may still reveal a home region, routines, employer, or identity. It also states that revocation cannot recall content already opened, copied, forwarded, or screenshotted.
+- Consent states that omitting direct account identifiers or a display name does not anonymize exact airport endpoints, dates, tail numbers, and routes, which may reveal a home region, routines, employer, or identity. It also states that revocation cannot recall content already opened, copied, forwarded, or screenshotted.
 - Token scanning/rate controls and safe not-found responses pass adversarial tests.
 - Owner sharing controls and server-side redaction prove tail numbers, notes, provenance, source details, and exact timestamps are omitted.
-- Forwarding-risk warning, owner-versus-shared location behavior, coarse location/date defaults, automatic complete-snapshot membership, new-flight snapshot isolation, and conservative whole-share disable/republication after selected flight or route-stop mutations are verified.
+- Forwarding-risk warning, disclosed airport/date/tail precision, automatic complete-snapshot membership, new-flight snapshot isolation, and conservative whole-share disable/republication after selected flight or route-stop mutations are verified.
 
 **Current evidence status:** PostgreSQL and API tests prove authorization-source
 disablement/rotation and fresh API reads returning not found. Component tests
@@ -233,7 +233,7 @@ Release owners should attach:
 - auth/OIDC/account-linking and recovery test results;
 - share enable/disable/rotation, cache revocation, enumeration, referrer, indexing, and token-leakage tests;
 - redacted examples of owner versus share URL API contracts;
-- projection-membership tests proving every eligible flight is included automatically by Share/Update, overlapping mutations serialize before publication, later flights stay outside an enabled snapshot until update, any selected flight or route-stop mutation disables the whole share while retaining snapshot membership rows, and exact airports remain owner-only while future sharing controls are unimplemented;
+- projection-membership tests proving every eligible flight is included automatically by Share/Update, overlapping mutations serialize before publication, later flights stay outside an enabled snapshot until update, any selected flight or route-stop mutation disables the whole share while retaining snapshot membership rows, public airports use real identifiers/metadata, and private account/session/source/internal-ID fields remain excluded;
 - log/token leakage scan and retention-job evidence;
 - incident exercise showing rapid share disablement, token/session revocation, and cache purge;
 - an independent security review with all high-severity findings closed.

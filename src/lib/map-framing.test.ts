@@ -137,4 +137,19 @@ describe("personalized initial map framing", () => {
       deriveInitialMapFrame([...routes].reverse()),
     );
   });
+
+  it("does not collapse geographically distinct airports with the same display code", () => {
+    const frame = deriveInitialMapFrame([
+      route(
+        airport("DUP", SEA.lat, SEA.lon),
+        airport("DUP", PDX.lat, PDX.lon),
+      ),
+      route(
+        airport("DUP", LHR.lat, LHR.lon),
+        airport("DUP", CDG.lat, CDG.lon),
+      ),
+    ]);
+
+    expect(frame).toEqual(WORLD_MAP_FRAME);
+  });
 });

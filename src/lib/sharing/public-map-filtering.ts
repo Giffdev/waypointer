@@ -21,7 +21,7 @@ export type PublicMapSlice = {
   summary: {
     flightCount: number;
     routeCount: number;
-    regionCount: number;
+    airportCount: number;
     countryCount: number;
   };
   filteringAvailable: boolean;
@@ -31,7 +31,6 @@ export function publicMapFilterOptions(projection: PublicMapProjection): {
   aircraft: string[];
   registrations: string[];
 } {
-  if (!projection.flights) return { aircraft: [], registrations: [] };
   return {
     aircraft: sortedUnique(
       projection.flights.flatMap((flight) => flight.aircraft),
@@ -48,17 +47,6 @@ export function derivePublicMapSlice(
   projection: PublicMapProjection,
   filters: PublicMapFilters,
 ): PublicMapSlice {
-  if (!projection.flights) {
-    return {
-      routes: projection.routes,
-      summary: summarizeRoutes(
-        projection.routes,
-        projection.summary.flightCount,
-      ),
-      filteringAvailable: false,
-    };
-  }
-
   const routeCounts = new Map<string, number>();
   let flightCount = 0;
   for (const flight of projection.flights) {
@@ -94,7 +82,7 @@ export function hasActivePublicMapFilters(
 }
 
 function matchesFilters(
-  flight: NonNullable<PublicMapProjection["flights"]>[number],
+  flight: PublicMapProjection["flights"][number],
   filters: PublicMapFilters,
 ): boolean {
   return (
@@ -115,20 +103,18 @@ function summarizeRoutes(
   routes: PublicMapProjection["routes"],
   flightCount: number,
 ): PublicMapSlice["summary"] {
-  const regions = new Set<string>();
+  const airports = new Set<string>();
   const countries = new Set<string>();
   const visibleRoutes = new Set<string>();
   for (const route of routes) {
     for (const point of [route.origin, route.destination]) {
-      regions.add(
-        `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`,
-      );
+      airports.add(publicAirportKey(point));
       countries.add(point.country);
     }
     const endpoints = [route.origin, route.destination]
       .map(
         (point) =>
-          `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`,
+          publicAirportKey(point),
       )
       .sort();
     visibleRoutes.add(`${route.kind}|${endpoints.join("|")}`);
@@ -136,9 +122,15 @@ function summarizeRoutes(
   return {
     flightCount,
     routeCount: visibleRoutes.size,
-    regionCount: regions.size,
+    airportCount: airports.size,
     countryCount: countries.size,
   };
+}
+
+function publicAirportKey(
+  point: PublicMapProjection["routes"][number]["origin"],
+): string {
+  return `${point.code}|${point.country}|${point.lat}|${point.lon}`;
 }
 
 function sortedUnique(values: string[]): string[] {

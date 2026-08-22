@@ -10,10 +10,25 @@ import {
   users,
 } from "@/lib/db/schema";
 import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
+import type { Airport } from "@/lib/flight-data";
+import {
+  isPublicAirportCode,
+  preferredAirportCode,
+} from "@/lib/airport-preferred-code";
+import {
+  parsePublicMapProjection,
+  PublicMapProjectionValidationError,
+} from "./client-projection";
 
 const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLIC_COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
+const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 2;
+
+type PublicAirport = Pick<
+  Airport,
+  "code" | "name" | "city" | "country" | "lat" | "lon" | "facility"
+>;
 
 export type OwnerShareStatus = {
   enabled: boolean;
@@ -25,14 +40,15 @@ export type OwnerShareStatus = {
 };
 
 export type PublicMapProjection = {
+  schemaVersion: typeof PUBLIC_MAP_PROJECTION_SCHEMA_VERSION;
   owner: { displayName: string | null };
   summary: { flightCount: number; routeCount: number };
   routes: Array<{
     id: string;
     kind: "commercial" | "private";
     flightCount: number;
-    origin: { lat: number; lon: number; country: string };
-    destination: { lat: number; lon: number; country: string };
+    origin: PublicAirport;
+    destination: PublicAirport;
   }>;
   flights: Array<{
     date: string;
@@ -41,12 +57,13 @@ export type PublicMapProjection = {
     aircraft: string[];
     registration: string | null;
     routeIds: string[];
-  }> | null;
+  }>;
 };
 
 export class ShareNotFoundError extends Error {}
 export class ShareValidationError extends Error {}
 export class ShareEmptyMapError extends Error {}
+export class ShareRepublishRequiredError extends Error {}
 
 export function formatHandleSharePath(handle: string): string {
   return `/${handle}`;
@@ -180,13 +197,23 @@ export async function getPublicMapProjection(
     throw new ShareNotFoundError();
   }
   const result = await getDb().execute<{
-    projection: PublicMapProjection | null;
+    projection: unknown;
   }>(sql`select public_map_projection_by_handle(${handle}) as projection`);
   const projection = result[0]?.projection;
   if (!projection) throw new ShareNotFoundError();
-  const publicRoutes = sanitizeStoredPublicRoutes(projection.routes);
+  if (
+    !projection ||
+    typeof projection !== "object" ||
+    Reflect.get(projection, "schemaVersion") !==
+      PUBLIC_MAP_PROJECTION_SCHEMA_VERSION
+  ) {
+    throw new ShareRepublishRequiredError();
+  }
+  const publicRoutes = sanitizeStoredPublicRoutes(
+    Reflect.get(projection, "routes"),
+  );
   const publicFlights = sanitizeStoredPublicFlights(
-    projection.flights,
+    Reflect.get(projection, "flights"),
     new Map(
       publicRoutes.map(({ id, kind, flightCount }) => [
         id,
@@ -194,15 +221,29 @@ export async function getPublicMapProjection(
       ]),
     ),
   );
-  return {
-    owner: { displayName: projection.owner.displayName },
+  const owner = Reflect.get(projection, "owner");
+  const summary = Reflect.get(projection, "summary");
+  return validatePublicMapProjection({
+    schemaVersion: PUBLIC_MAP_PROJECTION_SCHEMA_VERSION,
+    owner: {
+      displayName:
+        owner && typeof owner === "object"
+          ? Reflect.get(owner, "displayName")
+          : undefined,
+    },
     summary: {
-      flightCount: projection.summary.flightCount,
-      routeCount: projection.summary.routeCount,
+      flightCount:
+        summary && typeof summary === "object"
+          ? Reflect.get(summary, "flightCount")
+          : undefined,
+      routeCount:
+        summary && typeof summary === "object"
+          ? Reflect.get(summary, "routeCount")
+          : undefined,
     },
     routes: publicRoutes,
     flights: publicFlights,
-  };
+  });
 }
 
 export function publicHandleRateLimitKey(identifier: string): string {
@@ -249,15 +290,29 @@ async function createSnapshot(
   }
   const airportRows = await tx.execute<{
     id: string;
+    sourceIdent: string | null;
+    icao: string | null;
+    iata: string | null;
+    localCode: string | null;
+    name: string;
+    city: string | null;
     latitude: number;
     longitude: number;
     country: string;
+    facility: string;
   }>(sql`
     select
       ${airports.id} as id,
+      ${airports.sourceIdent} as "sourceIdent",
+      ${airports.icao} as icao,
+      ${airports.iata} as iata,
+      ${airports.localCode} as "localCode",
+      ${airports.name} as name,
+      ${airports.city} as city,
       ${airports.latitude} as latitude,
       ${airports.longitude} as longitude,
-      ${airports.country} as country
+      ${airports.country} as country,
+      ${airports.facility} as facility
     from ${airports}
     where ${airports.id} in (
       select ${flights.originAirportId}
@@ -298,22 +353,12 @@ async function createSnapshot(
     }
     const routeIds = sequence.slice(0, -1).map((origin, index) => {
       const destination = sequence[index + 1]!;
-      const coarseOrigin = {
-        lat: coarse(origin!.latitude),
-        lon: coarse(origin!.longitude),
-        country: origin!.country,
-      };
-      const coarseDestination = {
-        lat: coarse(destination.latitude),
-        lon: coarse(destination.longitude),
-        country: destination.country,
-      };
+      const publicOrigin = publicAirportFromRow(origin!);
+      const publicDestination = publicAirportFromRow(destination);
       const routeKey = [
         flight.kind,
-        coarseOrigin.lat,
-        coarseOrigin.lon,
-        coarseDestination.lat,
-        coarseDestination.lon,
+        publicAirportKey(publicOrigin),
+        publicAirportKey(publicDestination),
       ].join("|");
       const existing = routeCounts.get(routeKey);
       if (existing) existing.flightCount += 1;
@@ -323,8 +368,8 @@ async function createSnapshot(
           id,
           kind: flight.kind as "commercial" | "private",
           flightCount: 1,
-          origin: coarseOrigin,
-          destination: coarseDestination,
+          origin: publicOrigin,
+          destination: publicDestination,
         });
       }
       return routeCounts.get(routeKey)!.id;
@@ -341,7 +386,8 @@ async function createSnapshot(
       routeIds,
     });
   }
-  const projection: PublicMapProjection = {
+  const projection = validatePublicMapProjection({
+    schemaVersion: PUBLIC_MAP_PROJECTION_SCHEMA_VERSION,
     owner: { displayName: null },
     summary: {
       flightCount: selectedFlights.length,
@@ -351,11 +397,22 @@ async function createSnapshot(
       left.id.localeCompare(right.id),
     ),
     flights: publicFlights,
-  };
+  });
   return {
     flightIds,
     projection,
   };
+}
+
+function validatePublicMapProjection(value: unknown): PublicMapProjection {
+  try {
+    return parsePublicMapProjection(value);
+  } catch (error) {
+    if (error instanceof PublicMapProjectionValidationError) {
+      throw new ShareValidationError();
+    }
+    throw error;
+  }
 }
 
 async function lockOwnerShare(
@@ -365,10 +422,6 @@ async function lockOwnerShare(
   await tx.execute(
     sql`select pg_advisory_xact_lock(hashtextextended(${userId}::uuid::text, 0))`,
   );
-}
-
-function coarse(value: number): number {
-  return Math.round(value * 10) / 10;
 }
 
 function normalizePublicAircraft(
@@ -394,6 +447,13 @@ function normalizePublicMetadata(value: string | null): string | null {
     : null;
 }
 
+function isPublicMetadata(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    normalizePublicMetadata(value) === value
+  );
+}
+
 function isPublicDate(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -414,8 +474,8 @@ function sanitizeStoredPublicFlights(
     { kind: "commercial" | "private"; flightCount: number }
   >,
 ): PublicMapProjection["flights"] {
-  if (!Array.isArray(value)) return null;
-  const publicFlights: NonNullable<PublicMapProjection["flights"]> = [];
+  if (!Array.isArray(value)) throw new ShareValidationError();
+  const publicFlights: PublicMapProjection["flights"] = [];
   const referencesByRouteId = new Map<string, number>();
   for (const candidate of value) {
     if (
@@ -427,7 +487,7 @@ function sanitizeStoredPublicFlights(
       (Reflect.get(candidate, "role") !== "passenger" &&
         Reflect.get(candidate, "role") !== "pilot")
     ) {
-      return null;
+      throw new ShareValidationError();
     }
     const date = Reflect.get(candidate, "date") as string;
     const kind = Reflect.get(candidate, "kind") as
@@ -455,7 +515,7 @@ function sanitizeStoredPublicFlights(
           routeById.get(routeId)?.kind !== kind,
       )
     ) {
-      return null;
+      throw new ShareValidationError();
     }
     publicFlights.push({
       date,
@@ -478,7 +538,7 @@ function sanitizeStoredPublicFlights(
         (referencesByRouteId.get(routeId) ?? 0) !== route.flightCount,
     )
   ) {
-    return null;
+    throw new ShareValidationError();
   }
   return publicFlights;
 }
@@ -525,10 +585,19 @@ function sanitizeStoredPublicPlace(
   if (!value || typeof value !== "object") {
     throw new ShareValidationError();
   }
+  const code = Reflect.get(value, "code");
+  const name = Reflect.get(value, "name");
+  const city = Reflect.get(value, "city");
   const lat = Reflect.get(value, "lat");
   const lon = Reflect.get(value, "lon");
   const country = Reflect.get(value, "country");
+  const facility = Reflect.get(value, "facility");
   if (
+    typeof code !== "string" ||
+    code !== code.trim() ||
+    !isPublicAirportCode(code) ||
+    !isPublicMetadata(name) ||
+    !isPublicMetadata(city) ||
     typeof lat !== "number" ||
     !Number.isFinite(lat) ||
     lat < -90 ||
@@ -539,15 +608,56 @@ function sanitizeStoredPublicPlace(
     lon > 180 ||
     typeof country !== "string" ||
     country !== country.trim() ||
-    !PUBLIC_COUNTRY_PATTERN.test(country)
+    !PUBLIC_COUNTRY_PATTERN.test(country) ||
+    (facility !== "commercial" &&
+      facility !== "general-aviation" &&
+      facility !== "airstrip")
   ) {
     throw new ShareValidationError();
   }
   return {
-    lat: normalizePublicZero(coarse(lat)),
-    lon: normalizePublicZero(coarse(lon)),
+    code,
+    name,
+    city,
     country,
+    lat: normalizePublicZero(lat),
+    lon: normalizePublicZero(lon),
+    facility,
   };
+}
+
+function publicAirportFromRow(
+  row: {
+    sourceIdent: string | null;
+    icao: string | null;
+    iata: string | null;
+    localCode: string | null;
+    name: string;
+    city: string | null;
+    latitude: number;
+    longitude: number;
+    country: string;
+    facility: string;
+  },
+): PublicAirport {
+  return sanitizeStoredPublicPlace({
+    code: preferredAirportCode(row),
+    name: row.name,
+    city: row.city ?? row.name,
+    country: row.country,
+    lat: row.latitude,
+    lon: row.longitude,
+    facility: row.facility,
+  });
+}
+
+function publicAirportKey(airport: PublicAirport): string {
+  return [
+    airport.code,
+    airport.country,
+    airport.lat,
+    airport.lon,
+  ].join("|");
 }
 
 function normalizePublicZero(value: number): number {

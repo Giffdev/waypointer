@@ -3,6 +3,7 @@ import {
   getPublicMapProjection,
   publicHandleRateLimitKey,
   ShareNotFoundError,
+  ShareRepublishRequiredError,
 } from "@/lib/sharing/service";
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
@@ -52,6 +53,18 @@ export async function GET(
       return Response.json(
         { error: { code: "not-found", message: "Waypointer shared map not found." } },
         { status: 404, headers: PUBLIC_HEADERS },
+      );
+    }
+    if (error instanceof ShareRepublishRequiredError) {
+      return Response.json(
+        {
+          error: {
+            code: "republish-required",
+            message:
+              "This shared map must be republished to show real airports.",
+          },
+        },
+        { status: 409, headers: PUBLIC_HEADERS },
       );
     }
     return Response.json(

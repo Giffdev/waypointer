@@ -15,15 +15,20 @@ vi.mock("@/lib/sharing/service", () => ({
   getPublicMapProjection: mocks.getPublicMapProjection,
   publicHandleRateLimitKey: (handle: string) => handle.toLowerCase(),
   ShareNotFoundError: class ShareNotFoundError extends Error {},
+  ShareRepublishRequiredError: class ShareRepublishRequiredError extends Error {},
 }));
 
 import { GET, POST } from "./route";
-import { ShareNotFoundError } from "@/lib/sharing/service";
+import {
+  ShareNotFoundError,
+  ShareRepublishRequiredError,
+} from "@/lib/sharing/service";
 
 describe("public shared map API", () => {
   beforeEach(() => {
     mocks.consumeRateLimit.mockReset().mockResolvedValue(undefined);
     mocks.getPublicMapProjection.mockReset().mockResolvedValue({
+      schemaVersion: 2,
       owner: { displayName: null },
       summary: { flightCount: 0, routeCount: 0 },
       routes: [],
@@ -33,6 +38,7 @@ describe("public shared map API", () => {
 
   it("returns public filter facts without account or session metadata", async () => {
     mocks.getPublicMapProjection.mockResolvedValueOnce({
+      schemaVersion: 2,
       owner: { displayName: "Public Pilot" },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [
@@ -40,8 +46,22 @@ describe("public shared map API", () => {
           id: "route-1",
           kind: "private",
           flightCount: 1,
-          origin: { lat: 47.4, lon: -122.3, country: "US" },
-          destination: { lat: 40.6, lon: -73.8, country: "US" },
+          origin: airport(
+            "SEA",
+            "Seattle-Tacoma International Airport",
+            "Seattle",
+            "US",
+            47.44898,
+            -122.30931,
+          ),
+          destination: airport(
+            "JFK",
+            "John F Kennedy International Airport",
+            "New York",
+            "US",
+            40.63993,
+            -73.77869,
+          ),
         },
       ],
       flights: [
@@ -70,9 +90,33 @@ describe("public shared map API", () => {
         routeIds: ["route-1"],
       },
     ]);
+    expect(body.map.routes[0].origin).toMatchObject({
+      code: "SEA",
+      name: "Seattle-Tacoma International Airport",
+      city: "Seattle",
+    });
+    expect(JSON.stringify(body)).not.toMatch(/"code":"R\d+"/);
     expect(JSON.stringify(body)).not.toMatch(
       /email|session|accountId|userId|notes|fingerprint|flightId/i,
     );
+  });
+
+  it("tells viewers when an old projection must be republished", async () => {
+    mocks.getPublicMapProjection.mockRejectedValueOnce(
+      new ShareRepublishRequiredError(),
+    );
+    const response = await GET(
+      new Request("https://example.test/api/shared/legacy"),
+      { params: Promise.resolve({ handle: "legacy" }) },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "republish-required",
+        message: "This shared map must be republished to show real airports.",
+      },
+    });
   });
 
   it("reads a public username with no token and no-store caching", async () => {
@@ -90,6 +134,25 @@ describe("public shared map API", () => {
     expect(mocks.getPublicMapProjection).toHaveBeenCalledWith("DeVSiN");
     expect(mocks.consumeRateLimit).toHaveBeenCalledTimes(2);
   });
+
+  function airport(
+    code: string,
+    name: string,
+    city: string,
+    country: string,
+    lat: number,
+    lon: number,
+  ) {
+    return {
+      code,
+      name,
+      city,
+      country,
+      lat,
+      lon,
+      facility: "commercial" as const,
+    };
+  }
 
   it("returns the same generic 404 for disabled and unknown handles", async () => {
     mocks.getPublicMapProjection.mockRejectedValueOnce(new ShareNotFoundError());

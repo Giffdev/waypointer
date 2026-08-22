@@ -19,7 +19,8 @@ requests:
 - `GET /api/account/sharing` returns the enabled state, public username,
   canonical path, timestamps, and published flight count.
 - `POST /api/account/sharing` takes no body. It publishes the owner's entire
-  current map and enables sharing.
+  current map and enables sharing. Calling it while sharing is enabled
+  atomically republishes the current map.
 - `DELETE /api/account/sharing` disables public access.
 
 The Share action is the complete opt-in control. There are no per-flight
@@ -40,11 +41,31 @@ function with a fixed `pg_catalog, public` search path and no `PUBLIC` execute
 grant. Production migration provisioning grants execution only to the runtime
 database role.
 
-The response contains aggregate flight and route counts plus coarse routes:
-route ID, flight kind, aggregate count, country, and coordinates rounded to
-one decimal degree. It does not contain per-flight records, dates, duration,
-exact airports, aircraft, registration, source, provenance, raw import fields,
-email, or internal account identifiers.
+Schema version 2 returns a frozen, public-safe whole-map projection:
+
+- aggregate flight and route counts;
+- directional route IDs, kind, count, and both canonical airports;
+- each airport's preferred public identifier (IATA, local, ICAO, then source
+  identifier), name, city, country, facility type, and reference coordinates;
+- the minimum per-flight facts needed for viewer-local filtering: calendar
+  date, commercial/private kind, passenger/pilot role, normalized aircraft
+  labels, registration/tail number when present, and public route references.
+
+The default view includes all published flights. Role, date-range, aircraft,
+and registration filters run only in the viewer and never mutate owner data;
+statistics are recomputed from the filtered projection. The projection has no
+product flight-count ceiling. Rendering and initial framing use bounded,
+linear-time aggregation without truncating the published dataset.
+
+The response does not contain flight IDs, airport database IDs, duration,
+exact times, notes, source/provenance data, import fields, email, session or
+authentication data, or internal account identifiers. Airport display codes
+are labels rather than identities; coordinate-based identities keep distinct
+airports with the same code separate.
+
+Pre-v2 snapshots are not reconstructed into synthetic `R<number>` regions.
+They return `409 republish-required` until the owner uses the authenticated
+Share/Republish action.
 
 Responses use
 `Cache-Control: no-store, max-age=0, s-maxage=0, must-revalidate`. Unknown,
