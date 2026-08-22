@@ -61,7 +61,7 @@
     "firebase": "^12.17.1",
     "jose": "^6.2.8",
     "lucide-react": "^1.28.0",
-    "maplibre-gl": "^6.1.0",
+    "maplibre-gl": "^6.3.0",
     "next": "^16.2.12",
     "next-auth": "5.0.0-beta.32",
     "postgres": "3.4.9",
