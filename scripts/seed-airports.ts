@@ -12,6 +12,7 @@ import {
   airportSearchKey,
   createAirportResolver,
   parseOurAirportsCsv,
+  preferredAirportIataCode,
   type AirportReference,
 } from "../src/lib/import/airport-resolution.ts";
 import {
@@ -148,16 +149,16 @@ export async function applyAirportCatalogRefresh(
     const icaoFrequency = frequencies(references, proposedIcaoCode);
     const iataFrequency = frequencies(
       references,
-      (reference) => reference.iataCode,
+      preferredAirportIataCode,
     );
     const proposedIcao = (reference: AirportReference) => {
       const code = proposedIcaoCode(reference);
       return code && icaoFrequency.get(code) === 1 ? code : undefined;
     };
-    const proposedIata = (reference: AirportReference) =>
-      reference.iataCode && iataFrequency.get(reference.iataCode) === 1
-        ? reference.iataCode
-        : undefined;
+    const proposedIata = (reference: AirportReference) => {
+      const iata = preferredAirportIataCode(reference);
+      return iata && iataFrequency.get(iata) === 1 ? iata : undefined;
+    };
     const assignment = assignAirportSeedIds(
       references,
       existingAirports,

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   createAirportResolver,
   type AirportReference,
@@ -280,6 +282,96 @@ describe("myFlightradar24 CSV adapter v1", () => {
     expect(second).toEqual(first);
     expect(first.flights[0].id).toMatch(/^fr24-/);
     expect(first.flights[0].provenance.idempotencyKey).toHaveLength(64);
+  });
+
+  it("preserves REP in both endpoint positions for historical FlightRadar24 rows", () => {
+    const source = readFileSync(
+      fileURLToPath(
+        new URL(
+          "./__fixtures__/myflightradar24-historical-rep.csv",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    );
+    const resolver = createAirportResolver([
+      {
+        ident: "VTBD",
+        type: "large_airport",
+        name: "Don Mueang International Airport",
+        latitude: 13.9126,
+        longitude: 100.607,
+        isoCountry: "TH",
+        municipality: "Bangkok",
+        scheduledService: true,
+        gpsCode: "VTBD",
+        iataCode: "DMK",
+      },
+      {
+        ident: "KH-0003",
+        type: "closed",
+        name: "Siem Reap International Airport",
+        latitude: 13.410676,
+        longitude: 103.812074,
+        isoCountry: "KH",
+        municipality: "Siem Reap",
+        scheduledService: false,
+        keywords: "REP, VDSR",
+      },
+      {
+        ident: "WSSS",
+        type: "large_airport",
+        name: "Singapore Changi Airport",
+        latitude: 1.35019,
+        longitude: 103.994003,
+        isoCountry: "SG",
+        municipality: "Singapore",
+        scheduledService: true,
+        gpsCode: "WSSS",
+        iataCode: "SIN",
+      },
+    ]);
+
+    const first = buildMyFlightRadar24MapArtifact(
+      parseMyFlightRadar24Csv(source),
+      resolver,
+      metadata,
+    );
+    const repeated = buildMyFlightRadar24MapArtifact(
+      parseMyFlightRadar24Csv(source),
+      resolver,
+      metadata,
+    );
+
+    expect(repeated).toEqual(first);
+    expect(first.summary).toMatchObject({
+      importedRows: 2,
+      mapReadyFlights: 2,
+      unresolvedAirportRows: 0,
+      ambiguousAirportRows: 0,
+    });
+    expect(first.review.unresolvedAirportRows).toEqual([]);
+    expect(first.review.ambiguousAirportRows).toEqual([]);
+    expect(first.flights).toMatchObject([
+      {
+        origin: { code: "DMK" },
+        destination: {
+          code: "REP",
+          name: "Siem Reap International Airport",
+          lat: 13.410676,
+          lon: 103.812074,
+        },
+      },
+      {
+        origin: {
+          code: "REP",
+          name: "Siem Reap International Airport",
+          lat: 13.410676,
+          lon: 103.812074,
+        },
+        destination: { code: "SIN" },
+      },
+    ]);
   });
 
   it("detects same-day route overlaps without merging passenger and pilot records", () => {
