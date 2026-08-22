@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { importProposalValidationState } from "./review";
 import {
   auditAirportReferences,
+  airportIdentifierAliases,
   airportSearchKey,
   airportSearchPhoneticKeys,
+  assertHistoricalAirportReplacementSeparation,
   createAirportResolver,
   preferredAirportIataCode,
   selectBestAirportAliasMatches,
@@ -159,6 +161,17 @@ describe("airport identifier resolution", () => {
   it("preserves former Siem Reap codes without aliasing them to Siem Reap-Angkor", () => {
     const resolve = createAirportResolver([formerSiemReap, siemReapAngkor]);
 
+    expect(airportIdentifierAliases(formerSiemReap)).toEqual(
+      expect.arrayContaining([
+        { code: "REP", type: "iata", priority: 20 },
+        { code: "VDSR", type: "icao", priority: 10 },
+      ]),
+    );
+    const historicalAliasCodes = airportIdentifierAliases(
+      formerSiemReap,
+    ).map(({ code }) => code);
+    expect(historicalAliasCodes).not.toContain("SAI");
+    expect(historicalAliasCodes).not.toContain("VDSA");
     expect(resolve("rep")).toMatchObject({
       status: "resolved",
       reference: {
@@ -193,6 +206,22 @@ describe("airport identifier resolution", () => {
       status: "resolved",
       reference: { ident: "VDSA" },
     });
+  });
+
+  it("rejects replacement identifiers as historical aliases", () => {
+    expect(() =>
+      assertHistoricalAirportReplacementSeparation(
+        "KH-0003",
+        [{ code: "sai", type: "iata", priority: 20 }],
+        {
+          ident: "VDSA",
+          iataCode: "SAI",
+          icaoCode: "VDSA",
+        },
+      ),
+    ).toThrow(
+      "Historical airport KH-0003 cannot alias replacement code SAI.",
+    );
   });
 
   it("keeps reassigned Berlin codes on distinct historical and current records", () => {
