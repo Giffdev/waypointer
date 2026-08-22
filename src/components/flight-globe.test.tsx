@@ -153,9 +153,16 @@ describe("FlightGlobe reduced motion", () => {
         },
       },
     });
-    expect(
-      screen.getByText("Terrain data credits", { exact: true }),
-    ).toBeVisible();
+    const terrainAttribution = screen.getByRole("link", {
+      name: "Mapzen Terrarium terrain attribution",
+    });
+    expect(terrainAttribution).toBeVisible();
+    expect(terrainAttribution).toHaveAttribute(
+      "href",
+      "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
+    );
+    expect(mapMocks.attributionOptions[0]?.customAttribution)
+      .not.toContain("OpenFreeMap");
     expect(
       screen.getByText(/ArcticDEM terrain from DigitalGlobe imagery/),
     ).toBeInTheDocument();

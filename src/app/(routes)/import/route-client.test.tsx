@@ -60,6 +60,29 @@ afterEach(() => {
 });
 
 describe("development import preview", () => {
+  it("discloses original-file retention before file collection", () => {
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+        maxFileBytes={1024 * 1024}
+      />,
+    );
+
+    const notice = screen.getByText(
+      "Your CSV is processed to save flight records. The original file is not retained after this import.",
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+    expect(input).toHaveAttribute(
+      "aria-describedby",
+      "import-retention-notice",
+    );
+    expect(
+      notice.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("plainly distinguishes the empty map from the file being reviewed", () => {
     render(
       <ImportRouteClientView

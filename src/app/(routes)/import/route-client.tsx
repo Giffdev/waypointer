@@ -832,8 +832,13 @@ function ImportWorkflow({
           <div className="workflow-step available">
             <span className="status-chip available">1. Upload</span>
             <FileSpreadsheet size={20} aria-hidden="true" />
+            <p className="import-retention-notice" id="import-retention-notice">
+              Your CSV is processed to save flight records. The original
+              file is not retained after this import.
+            </p>
             <FileDropzone
               id="flight-import-file"
+              ariaDescribedBy="import-retention-notice"
               inputRef={fileInput}
               file={file}
               disabled={
@@ -1829,6 +1834,7 @@ function validGenericMapping(
 
 function FileDropzone({
   id,
+  ariaDescribedBy,
   inputRef: externalInputRef,
   file,
   fileDescription,
@@ -1837,6 +1843,7 @@ function FileDropzone({
   onSelect,
 }: {
   id: string;
+  ariaDescribedBy?: string;
   inputRef?: RefObject<HTMLInputElement | null>;
   file: File | null;
   fileDescription?: string;
@@ -1890,6 +1897,7 @@ function FileDropzone({
         accept=".csv"
         disabled={disabled}
         aria-label="Choose one supported CSV"
+        aria-describedby={ariaDescribedBy}
         onChange={(event) => {
           const selected = event.currentTarget.files?.[0];
           event.currentTarget.value = "";

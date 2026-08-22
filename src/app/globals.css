@@ -237,6 +237,12 @@ body:has(.runtime-mode) .map-stage {
   right: 8px;
   z-index: 3;
 }
+.terrain-attribution-primary {
+  color: #075d70;
+  display: block;
+  font-weight: 700;
+  padding: 5px 8px;
+}
 .terrain-attribution summary {
   cursor: pointer;
   font-weight: 700;
@@ -2191,7 +2197,9 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   border-color: rgba(95, 224, 208, .3);
   color: #d6fff8;
 }
-.import-role-defaults { background: rgba(95,224,208,.06); border: 1px solid rgba(95,224,208,.15); border-radius: 9px; padding: 10px; }
+.import-role-defaults,
+.import-retention-notice { background: rgba(95,224,208,.06); border: 1px solid rgba(95,224,208,.15); border-radius: 9px; padding: 10px; }
+.workflow-step .import-retention-notice { color: #b8d4d4; font-size: 11px; }
 .flight-edit-form label { color: #839ba0; display: grid; font-size: 11px; gap: 6px; min-width: 0; }
 .flight-edit-form input {
   background: #09202c;

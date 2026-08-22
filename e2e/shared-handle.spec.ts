@@ -206,7 +206,15 @@ test("opens a public username route with no key or token", async ({ page }) => {
   await expect(attribution).toContainText("OpenStreetMap");
   await expect(page.locator(".maplibregl-ctrl-attrib-button")).toBeHidden();
   await expect(
-    page.getByText("Terrain data credits", { exact: true }),
+    page.getByRole("link", {
+      name: "Mapzen Terrarium terrain attribution",
+    }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
+  );
+  await expect(
+    page.getByText("All terrain data credits", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Filter shared flights by airport" }),
