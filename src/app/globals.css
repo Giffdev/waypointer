@@ -1985,24 +1985,173 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
 }
 .flight-edit-form legend { color: #d6e7e9; font-size: 12px; font-weight: 800; padding: 0 5px; }
 .manual-flight-modal { max-height: min(92svh, 900px); max-width: 780px; overflow: auto; }
-.manual-flight-form { display: grid; gap: 15px; }
-.manual-flight-form > label, .manual-field-grid label, .airport-search-picker { color: #839ba0; display: grid; font-size: 11px; gap: 6px; }
-.manual-classification { border: 0; display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 0; padding: 0; }
-.manual-classification legend { color: #d6e7e9; font-size: 12px; font-weight: 800; margin-bottom: 8px; }
-.manual-classification label { align-items: center; display: flex; gap: 7px; min-height: 38px; }
-.manual-classification input { height: 18px; width: 18px; }
+.manual-flight-form { display: grid; gap: 18px; margin-top: 22px; }
+.manual-form-section {
+  background: rgba(4, 21, 30, .48);
+  border: 1px solid rgba(149, 199, 202, .34);
+  border-radius: 12px;
+  margin: 0;
+  min-width: 0;
+  padding: 16px;
+}
+.manual-form-section legend {
+  color: #e4f2f3;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 0 6px;
+}
+.manual-section-hint {
+  color: #91a8ad;
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0;
+}
+.manual-required-fields > label,
+.manual-field-grid label,
+.airport-search-picker {
+  color: #d6e7e9;
+  display: grid;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+}
+.manual-required-fields { display: grid; gap: 14px; }
+.manual-classification { display: grid; gap: 10px; }
+.manual-classification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.manual-classification label {
+  align-items: center;
+  background: #092431;
+  border: 1px solid rgba(149, 199, 202, .38);
+  border-radius: 9px;
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 8px;
+  min-height: 44px;
+  padding: 9px 13px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.manual-classification label:hover {
+  background: #0b2b39;
+  border-color: rgba(95, 224, 208, .7);
+}
+.manual-classification label:has(input:checked) {
+  background: rgba(95, 224, 208, .13);
+  border-color: var(--teal);
+  box-shadow: 0 0 0 1px rgba(95, 224, 208, .22);
+  color: #f1ffff;
+}
+.manual-classification label:has(input:focus-visible) {
+  outline: 3px solid #b6fff5;
+  outline-offset: 3px;
+}
+.manual-classification input {
+  accent-color: var(--teal);
+  cursor: pointer;
+  height: 18px;
+  width: 18px;
+}
+.manual-classification label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.manual-flight-form input:not([type="radio"]) {
+  background: #092431;
+  border: 1px solid rgba(149, 199, 202, .48);
+  border-radius: 9px;
+  color: var(--ink);
+  cursor: text;
+  min-height: 48px;
+  min-width: 0;
+  padding: 11px 12px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+  width: 100%;
+}
+.manual-flight-form input[type="date"],
+.manual-flight-form input[type="time"] {
+  color-scheme: dark;
+  cursor: pointer;
+}
+.manual-flight-form input::placeholder { color: #789198; opacity: 1; }
+.manual-flight-form input:not([type="radio"]):hover:not(:disabled) {
+  background: #0b2b39;
+  border-color: rgba(95, 224, 208, .72);
+}
+.manual-flight-form input:not([type="radio"]):focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(95, 224, 208, .16);
+}
+.manual-flight-form input:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.manual-form-section[data-invalid="true"],
+.manual-flight-form input[aria-invalid="true"] {
+  border-color: #ff9b9b;
+  box-shadow: 0 0 0 2px rgba(255, 126, 126, .16);
+}
 .manual-airport-grid, .manual-field-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.manual-optional-fields { border: 1px solid var(--line); border-radius: 10px; padding: 11px; }
-.manual-optional-fields summary { color: #d6e7e9; cursor: pointer; font-size: 12px; font-weight: 800; }
-.manual-field-grid { margin-top: 12px; }
+.manual-optional-fields {
+  background: rgba(4, 21, 30, .36);
+  border: 1px solid rgba(149, 199, 202, .3);
+  border-radius: 12px;
+  padding: 12px 14px;
+  transition: background .15s, border-color .15s;
+}
+.manual-optional-fields:hover,
+.manual-optional-fields[open] {
+  background: rgba(4, 21, 30, .58);
+  border-color: rgba(95, 224, 208, .55);
+}
+.manual-optional-fields summary {
+  align-items: center;
+  color: #e4f2f3;
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  min-height: 44px;
+}
+.manual-optional-fields summary:focus-visible {
+  border-radius: 6px;
+  outline: 3px solid #b6fff5;
+  outline-offset: 3px;
+}
+.manual-optional-fields > .manual-section-hint { margin-top: 6px; }
+.manual-field-grid { margin-top: 14px; }
 .manual-flight-preview { margin: 0; }
 .airport-search-picker { min-width: 0; position: relative; }
-.airport-search-selected { color: #b9d6d8; }
+.airport-search-selected { color: #b9d6d8; font-weight: 600; line-height: 1.45; }
 .airport-search-results { background: #071d29; border: 1px solid #31515e; border-radius: 10px; box-shadow: 0 12px 30px rgba(0,0,0,.35); display: grid; max-height: 260px; overflow: auto; padding: 5px; z-index: 20; }
-.airport-search-results button { background: transparent; border: 0; border-radius: 7px; color: #dbe9eb; display: grid; gap: 3px; padding: 9px; text-align: left; }
+.airport-search-results button { background: transparent; border: 0; border-radius: 7px; color: #dbe9eb; cursor: pointer; display: grid; gap: 3px; padding: 9px; text-align: left; }
 .airport-search-results button:hover, .airport-search-results button:focus-visible { background: rgba(95,224,208,.12); outline: 1px solid rgba(95,224,208,.35); }
 .airport-search-results span, .airport-search-results small { color: #89a3a8; font-size: 10px; }
 .airport-search-results p { color: #91a9ae; font-size: 11px; margin: 8px; }
+.manual-flight-messages { display: grid; gap: 8px; }
+.manual-flight-message {
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  min-height: 0;
+}
+.manual-flight-message:not(:empty) { min-height: 20px; padding: 10px 12px; }
+.manual-flight-message.error:not(:empty) {
+  background: rgba(185, 72, 72, .14);
+  border-color: rgba(255, 132, 132, .46);
+  color: #ffd2d2;
+}
+.manual-flight-message.status:not(:empty) {
+  background: rgba(65, 159, 137, .11);
+  border-color: rgba(95, 224, 208, .3);
+  color: #d6fff8;
+}
 .import-role-defaults { background: rgba(95,224,208,.06); border: 1px solid rgba(95,224,208,.15); border-radius: 9px; padding: 10px; }
 .flight-edit-form label { color: #839ba0; display: grid; font-size: 11px; gap: 6px; min-width: 0; }
 .flight-edit-form input {
@@ -2150,6 +2299,11 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   }
   .stats-ribbon-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .manual-airport-grid, .manual-field-grid { grid-template-columns: 1fr; }
+  .manual-form-section { padding: 12px; }
+  .manual-classification-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .legend-groups { gap: 14px; }
   .legend-group { gap: 7px 11px; }
   .map-actions .primary-button, .map-actions .secondary-button { flex: 1; }
@@ -2228,6 +2382,7 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   select option:disabled { color: GrayText; }
   button:focus-visible,
   a:focus-visible,
+  input:focus-visible,
   select:focus-visible,
   .route-filter-disclosure > summary:focus-visible {
     outline-color: Highlight;
@@ -2248,5 +2403,23 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   }
   .metadata-combobox-popup [role="option"][aria-disabled="true"] {
     color: GrayText;
+  }
+  .manual-form-section,
+  .manual-optional-fields,
+  .manual-classification label,
+  .manual-flight-form input:not([type="radio"]),
+  .airport-search-results {
+    background: Canvas;
+    border-color: ButtonText;
+    color: CanvasText;
+    forced-color-adjust: auto;
+  }
+  .manual-flight-form input:disabled,
+  .manual-classification label:has(input:disabled) {
+    color: GrayText;
+  }
+  .manual-form-section[data-invalid="true"],
+  .manual-flight-form input[aria-invalid="true"] {
+    border-color: Mark;
   }
 }

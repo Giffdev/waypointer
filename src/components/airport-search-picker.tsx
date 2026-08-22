@@ -7,11 +7,17 @@ export function AirportSearchPicker({
   label,
   selected,
   disabled = false,
+  required = false,
+  invalid = false,
+  describedBy,
   onSelect,
 }: {
   label: string;
   selected?: AirportSearchResult | null;
   disabled?: boolean;
+  required?: boolean;
+  invalid?: boolean;
+  describedBy?: string;
   onSelect: (airport: AirportSearchResult) => void;
 }) {
   const id = useId();
@@ -62,6 +68,9 @@ export function AirportSearchPicker({
         aria-autocomplete="list"
         aria-expanded={open}
         aria-controls={`${id}-results`}
+        aria-describedby={describedBy}
+        aria-invalid={invalid}
+        aria-required={required}
         value={query}
         disabled={disabled}
         placeholder="Search code, city, airport name, or spelling"

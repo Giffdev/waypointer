@@ -190,3 +190,113 @@ test("Add flight stays single-line at 1080p and the heading still stacks respons
     ),
   ).toBe(true);
 });
+
+test("Add flight reads as an accessible form on desktop and narrow screens", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chrome",
+    "One desktop browser covers both responsive viewport widths.",
+  );
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/flights");
+  await page.getByRole("button", { name: "Add flight" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Add one flight" });
+  const classification = page.getByRole("group", {
+    name: "Flight classification (required)",
+  });
+  const date = page.getByLabel("Date (required)");
+  const departure = page.getByRole("combobox", {
+    name: "Departure airport (required)",
+  });
+  const arrival = page.getByRole("combobox", {
+    name: "Arrival airport (required)",
+  });
+  const fieldStyles = () =>
+    date.evaluate((input) => {
+      const styles = getComputedStyle(input);
+      return {
+        backgroundColor: styles.backgroundColor,
+        borderStyle: styles.borderStyle,
+        borderWidth: styles.borderWidth,
+        cursor: styles.cursor,
+        height: input.getBoundingClientRect().height,
+      };
+    });
+
+  await expect(dialog).toBeVisible();
+  await expect(classification).toBeVisible();
+  await expect(date).toBeVisible();
+  await expect(departure).toHaveAttribute("aria-required", "true");
+  await expect(arrival).toHaveAttribute("aria-required", "true");
+  await expect.poll(fieldStyles).toMatchObject({
+    borderStyle: "solid",
+    borderWidth: "1px",
+    cursor: "pointer",
+  });
+  const initialStyles = await fieldStyles();
+  expect(initialStyles.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  expect(initialStyles.height).toBeGreaterThanOrEqual(48);
+
+  const initialBorderColor = await date.evaluate(
+    (input) => getComputedStyle(input).borderColor,
+  );
+  await date.hover();
+  await expect
+    .poll(() => date.evaluate((input) => getComputedStyle(input).borderColor))
+    .not.toBe(initialBorderColor);
+  await date.focus();
+  await expect
+    .poll(() => date.evaluate((input) => getComputedStyle(input).boxShadow))
+    .not.toBe("none");
+
+  await page.getByRole("button", { name: "Save flight" }).click();
+  await expect(dialog.getByRole("alert")).toContainText(
+    "Choose Personal or Commercial, a date, and both airports.",
+  );
+  await expect(classification).toHaveAttribute("data-invalid", "true");
+  await expect(date).toHaveAttribute("aria-invalid", "true");
+  await expect(departure).toHaveAttribute("aria-invalid", "true");
+  await expect(arrival).toHaveAttribute("aria-invalid", "true");
+
+  const personal = page.getByRole("radio", { name: "Personal" });
+  const commercial = page.getByRole("radio", { name: "Commercial" });
+  await personal.focus();
+  await personal.press("ArrowRight");
+  await expect(commercial).toBeChecked();
+  await expect(classification).toHaveAttribute("data-invalid", "false");
+
+  await page.getByText("Optional flight details").click();
+  await expect(page.getByLabel("Flight number (optional)")).toBeVisible();
+  await expect(page.getByLabel("Aircraft type (optional)")).toBeVisible();
+  await expect(
+    page.getByLabel("Tail number / registration (optional)"),
+  ).toBeVisible();
+
+  for (const width of [390, 360]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(dialog).toBeVisible();
+    await expect
+      .poll(() =>
+        page
+          .locator(".manual-airport-grid")
+          .evaluate(
+            (grid) =>
+              getComputedStyle(grid).gridTemplateColumns.split(" ").length,
+          ),
+      )
+      .toBe(1);
+    expect(
+      await dialog.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  }
+});
