@@ -172,6 +172,44 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
   });
 
+  it("normalizes stale whitespace in public airport display metadata", async () => {
+    const owner = await createOwner("Whitespace Pilot");
+    const [originId, destinationId] = await createAirports(
+      "Chewelah Municipal  Airport",
+    );
+    await createFlight(owner.id, originId, destinationId);
+
+    await expect(enableMapSharing(owner.id)).resolves.toMatchObject({
+      enabled: true,
+      publishedFlightCount: 1,
+    });
+    await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject({
+      routes: expect.arrayContaining([
+        expect.objectContaining({
+          origin: expect.objectContaining({
+            name: "Chewelah Municipal Airport",
+          }),
+        }),
+      ]),
+    });
+  });
+
+  it("rejects airport display metadata containing control characters", async () => {
+    const owner = await createOwner("Control Character Pilot");
+    const [originId, destinationId] = await createAirports(
+      "Unsafe\tAirport",
+    );
+    await createFlight(owner.id, originId, destinationId);
+
+    await expect(enableMapSharing(owner.id)).rejects.toMatchObject({
+      code: "invalid-airport-metadata",
+    });
+    await expect(getOwnerShareStatus(owner.id)).resolves.toMatchObject({
+      enabled: false,
+      publishedFlightCount: 0,
+    });
+  });
+
   it("does not cap the complete published map", async () => {
     const owner = await createOwner("Large Map Pilot");
     const [originId, destinationId] = await createAirports();
@@ -301,7 +339,9 @@ async function createOwner(
   return { id, username };
 }
 
-async function createAirports(): Promise<[string, string]> {
+async function createAirports(
+  originName = "Public origin",
+): Promise<[string, string]> {
   const originId = randomUUID();
   const destinationId = randomUUID();
   airportIds.push(originId, destinationId);
@@ -313,7 +353,7 @@ async function createAirports(): Promise<[string, string]> {
       (
         ${originId}::uuid,
         'R47',
-        'Public origin',
+        ${originName},
         'Origin',
         'US',
         47.449,
