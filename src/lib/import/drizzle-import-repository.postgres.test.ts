@@ -532,13 +532,40 @@ postgresDescribe("PostgreSQL import journey", () => {
       "historical-rep-postgres-test",
     );
     cleanupAirports.push(...firstRefresh.ids);
+    const firstIdentitySnapshot = await getDb()
+      .select({
+        airportId: airports.id,
+        sourceIdent: airports.sourceIdent,
+        iata: airports.iata,
+        alias: airportAliases.code,
+        aliasType: airportAliases.codeType,
+        aliasPriority: airportAliases.priority,
+      })
+      .from(airports)
+      .innerJoin(airportAliases, eq(airportAliases.airportId, airports.id))
+      .where(inArray(airports.id, firstRefresh.ids))
+      .orderBy(airports.id, airportAliases.priority, airportAliases.code);
     const repeatedRefresh = await applyAirportCatalogRefresh(
       getDb(),
       references,
       "historical-rep-postgres-test",
     );
+    const repeatedIdentitySnapshot = await getDb()
+      .select({
+        airportId: airports.id,
+        sourceIdent: airports.sourceIdent,
+        iata: airports.iata,
+        alias: airportAliases.code,
+        aliasType: airportAliases.codeType,
+        aliasPriority: airportAliases.priority,
+      })
+      .from(airports)
+      .innerJoin(airportAliases, eq(airportAliases.airportId, airports.id))
+      .where(inArray(airports.id, repeatedRefresh.ids))
+      .orderBy(airports.id, airportAliases.priority, airportAliases.code);
 
     expect(repeatedRefresh.ids).toEqual(firstRefresh.ids);
+    expect(repeatedIdentitySnapshot).toEqual(firstIdentitySnapshot);
     expect(repeatedRefresh).toMatchObject({
       created: 0,
       summary: {
@@ -566,6 +593,11 @@ postgresDescribe("PostgreSQL import journey", () => {
         }),
       ]),
     );
+    expect(
+      repeatedIdentitySnapshot
+        .filter(({ sourceIdent }) => sourceIdent === "KH-0003")
+        .map(({ alias }) => alias),
+    ).toEqual(["VDSR", "REP", "KH-0003"]);
 
     const userId = await createUser("historical-rep");
     const repository = new DrizzleImportRepository();
