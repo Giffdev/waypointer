@@ -3,6 +3,7 @@ import { airports, type Flight } from "./flight-data";
 import {
   aggregateFlightRoutes,
   ALL_FLIGHT_FILTERS,
+  airportsForFilteredRoutes,
   filterIndexedFlights,
   getFilterOptions,
   indexFlights,
@@ -68,6 +69,22 @@ describe("flight map filters", () => {
     expect(
       [commercial.forwardFlightCount, commercial.reverseFlightCount].sort(),
     ).toEqual([1, 2]);
+  });
+
+  it("keeps same-code airports distinct in a filtered map slice", () => {
+    const first = { ...airports.SEA, identity: "airport-one", code: "DUP" };
+    const second = { ...airports.PAE, identity: "airport-two", code: "DUP" };
+    const airportsInSlice = airportsForFilteredRoutes([
+      {
+        id: "same-code",
+        origin: first,
+        destination: second,
+        kind: "private",
+        flightCount: 1,
+      },
+    ]);
+
+    expect(airportsInSlice).toHaveLength(2);
   });
 
   it("reports years present and month availability for the active type and year", () => {

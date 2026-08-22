@@ -4,6 +4,7 @@ import {
   publicHandleRateLimitKey,
   ShareNotFoundError,
   ShareRepublishRequiredError,
+  toLegacyPublicMapProjection,
 } from "@/lib/sharing/service";
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
@@ -43,8 +44,15 @@ export async function GET(
         60_000,
       ),
     ]);
+    const projection = await getPublicMapProjection(handle);
+    const directionContract =
+      new URL(request.url).searchParams.get("contract") === "3";
     return Response.json(
-      { map: await getPublicMapProjection(handle) },
+      {
+        map: directionContract
+          ? projection
+          : toLegacyPublicMapProjection(projection),
+      },
       { headers: PUBLIC_HEADERS },
     );
   } catch (error) {

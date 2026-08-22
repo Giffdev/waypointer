@@ -1,4 +1,8 @@
 import type { PublicMapProjection } from "@/lib/sharing/service";
+import {
+  airportExactIdentity,
+  deriveRouteDirectionMode,
+} from "@/lib/flight-data";
 import { isPublicAirportCode } from "@/lib/airport-preferred-code";
 import {
   normalizeAircraftMetadata,
@@ -34,7 +38,7 @@ export function parsePublicMapProjection(
     "routeCount",
   ]);
   if (
-    projection.schemaVersion !== 2 ||
+    projection.schemaVersion !== 3 ||
     !isDisplayName(owner.displayName) ||
     !isNonNegativeInteger(summary.flightCount) ||
     !isNonNegativeInteger(summary.routeCount) ||
@@ -50,21 +54,38 @@ export function parsePublicMapProjection(
   const routeKindById = new Map(
     routes.map(({ id, kind }) => [id, kind] as const),
   );
+  const routeModeById = new Map(
+    routes.map(({ id, directionMode }) => [id, directionMode] as const),
+  );
   const representedLegs = routes.reduce(
     (total, route) => total + route.flightCount,
     0,
   );
   const referencedLegs = flights.reduce(
-    (total, flight) => total + flight.routeIds.length,
+    (total, flight) => total + flight.routeLegs.length,
     0,
   );
   const referencesByRouteId = new Map<string, number>();
+  const forwardReferencesByRouteId = new Map<string, number>();
+  const reverseReferencesByRouteId = new Map<string, number>();
   for (const flight of flights) {
-    for (const routeId of flight.routeIds) {
+    for (const { routeId, direction } of flight.routeLegs) {
       referencesByRouteId.set(
         routeId,
         (referencesByRouteId.get(routeId) ?? 0) + 1,
       );
+      if (direction === "forward") {
+        forwardReferencesByRouteId.set(
+          routeId,
+          (forwardReferencesByRouteId.get(routeId) ?? 0) + 1,
+        );
+      }
+      if (direction === "reverse") {
+        reverseReferencesByRouteId.set(
+          routeId,
+          (reverseReferencesByRouteId.get(routeId) ?? 0) + 1,
+        );
+      }
     }
   }
   if (
@@ -79,11 +100,21 @@ export function parsePublicMapProjection(
         (route) =>
           (referencesByRouteId.get(route.id) ?? 0) !== route.flightCount,
       ) ||
+      routes.some(
+        (route) =>
+          (forwardReferencesByRouteId.get(route.id) ?? 0) !==
+            route.forwardFlightCount ||
+          (reverseReferencesByRouteId.get(route.id) ?? 0) !==
+            route.reverseFlightCount,
+      ) ||
       flights.some(
         (flight) =>
-          flight.routeIds.length === 0 ||
-          flight.routeIds.some(
-            (routeId) => routeKindById.get(routeId) !== flight.kind,
+          flight.routeLegs.length === 0 ||
+          flight.routeLegs.some(
+            ({ routeId, direction }) =>
+              routeKindById.get(routeId) !== flight.kind ||
+              (routeModeById.get(routeId) === "none") !==
+                (direction === "none"),
           ),
       ))
   ) {
@@ -91,7 +122,7 @@ export function parsePublicMapProjection(
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     owner: { displayName: owner.displayName },
     summary: {
       flightCount: summary.flightCount,
@@ -115,7 +146,7 @@ function parsePublicFlights(
       "role",
       "aircraft",
       "registration",
-      "routeIds",
+      "routeLegs",
     ]);
     if (
       typeof flight.date !== "string" ||
@@ -133,10 +164,16 @@ function parsePublicFlights(
         (typeof flight.registration !== "string" ||
           normalizeRegistrationMetadata(flight.registration) !==
             flight.registration)) ||
-      !Array.isArray(flight.routeIds) ||
-      flight.routeIds.some(
-        (routeId) =>
-          typeof routeId !== "string" || !ROUTE_ID_PATTERN.test(routeId),
+      !Array.isArray(flight.routeLegs) ||
+      flight.routeLegs.some(
+        (leg) =>
+          !isRecord(leg) ||
+          Reflect.ownKeys(leg).length !== 2 ||
+          typeof leg.routeId !== "string" ||
+          !ROUTE_ID_PATTERN.test(leg.routeId) ||
+          (leg.direction !== "forward" &&
+            leg.direction !== "reverse" &&
+            leg.direction !== "none"),
       )
     ) {
       throw new PublicMapProjectionValidationError();
@@ -147,7 +184,10 @@ function parsePublicFlights(
       role: flight.role,
       aircraft: [...flight.aircraft],
       registration: flight.registration,
-      routeIds: [...flight.routeIds],
+      routeLegs: flight.routeLegs.map(({ routeId, direction }) => ({
+        routeId,
+        direction,
+      })),
     };
   });
 }
@@ -159,6 +199,9 @@ function parsePublicRoute(
     "id",
     "kind",
     "flightCount",
+    "forwardFlightCount",
+    "reverseFlightCount",
+    "directionMode",
     "origin",
     "destination",
   ]);
@@ -166,7 +209,31 @@ function parsePublicRoute(
     typeof route.id !== "string" ||
     !ROUTE_ID_PATTERN.test(route.id) ||
     (route.kind !== "commercial" && route.kind !== "private") ||
-    !isPositiveInteger(route.flightCount)
+    !isPositiveInteger(route.flightCount) ||
+    !isNonNegativeInteger(route.forwardFlightCount) ||
+    !isNonNegativeInteger(route.reverseFlightCount)
+  ) {
+    throw new PublicMapProjectionValidationError();
+  }
+  const origin = parsePublicAirport(route.origin);
+  const destination = parsePublicAirport(route.destination);
+  const directionMode = route.directionMode;
+  const sameAirport =
+    publicAirportIdentity(origin) === publicAirportIdentity(destination);
+  if (
+    (directionMode !== "one-way" &&
+      directionMode !== "both" &&
+      directionMode !== "none") ||
+    directionMode !==
+      deriveRouteDirectionMode(
+        route.forwardFlightCount,
+        route.reverseFlightCount,
+        sameAirport,
+      ) ||
+    (sameAirport
+      ? route.forwardFlightCount !== 0 || route.reverseFlightCount !== 0
+      : route.forwardFlightCount + route.reverseFlightCount !==
+        route.flightCount)
   ) {
     throw new PublicMapProjectionValidationError();
   }
@@ -174,9 +241,18 @@ function parsePublicRoute(
     id: route.id,
     kind: route.kind,
     flightCount: route.flightCount,
-    origin: parsePublicAirport(route.origin),
-    destination: parsePublicAirport(route.destination),
+    forwardFlightCount: route.forwardFlightCount,
+    reverseFlightCount: route.reverseFlightCount,
+    directionMode,
+    origin,
+    destination,
   };
+}
+
+function publicAirportIdentity(
+  airport: PublicMapProjection["routes"][number]["origin"],
+): string {
+  return airportExactIdentity(airport);
 }
 
 function parsePublicAirport(

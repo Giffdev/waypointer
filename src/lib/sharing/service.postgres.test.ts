@@ -81,6 +81,49 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       sharePath: `/${owner.username}`,
       publishedFlightCount: 2,
     });
+    const [storedShare] = await withUserDb(owner.id, (tx) =>
+      tx
+        .select({ projection: mapShares.projection })
+        .from(mapShares)
+        .where(eq(mapShares.userId, owner.id)),
+    );
+    expect(Reflect.get(storedShare!.projection as object, "schemaVersion")).toBe(
+      2,
+    );
+    const storedFlights = Reflect.get(
+      storedShare!.projection as object,
+      "flights",
+    ) as Array<Record<string, unknown>>;
+    expect(storedFlights).toHaveLength(2);
+    expect(storedFlights.every((flight) => Array.isArray(flight.routeIds))).toBe(
+      true,
+    );
+    expect(storedFlights.every((flight) => Array.isArray(flight.routeLegs))).toBe(
+      true,
+    );
+    const storedRoutes = Reflect.get(
+      storedShare!.projection as object,
+      "routes",
+    ) as Array<Record<string, unknown>>;
+    const canonicalRoutes = Reflect.get(
+      storedShare!.projection as object,
+      "canonicalRoutes",
+    ) as Array<Record<string, unknown>>;
+    expect(storedRoutes).toHaveLength(2);
+    expect(storedRoutes.every((route) => !("directionMode" in route))).toBe(
+      true,
+    );
+    expect(canonicalRoutes).toEqual([
+      expect.objectContaining({
+        flightCount: 2,
+        forwardFlightCount: 1,
+        reverseFlightCount: 1,
+        directionMode: "both",
+      }),
+    ]);
+    expect(
+      storedFlights.flatMap((flight) => flight.routeIds).toSorted(),
+    ).toEqual(storedRoutes.map((route) => route.id).toSorted());
     const memberships = await withUserDb(owner.id, (tx) =>
       tx
         .select({ flightId: mapShareFlights.flightId })
@@ -94,9 +137,9 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     const originCode = "R47";
     const destinationCode = "SOURCE-ONLY";
     expect(projection).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       owner: { displayName: null },
-      summary: { flightCount: 2, routeCount: 2 },
+      summary: { flightCount: 2, routeCount: 1 },
       flights: [
         expect.objectContaining({
           date: "2026-08-14",
@@ -109,29 +152,19 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
           registration: "N12345",
         }),
       ],
-      routes: expect.arrayContaining([
+      routes: [
         expect.objectContaining({
-          origin: expect.objectContaining({
-            code: originCode,
-            name: "Public origin",
-            city: "Origin",
-            country: "US",
-            lat: 47.449,
-            lon: -122.309,
-            facility: "general-aviation",
-          }),
-          destination: expect.objectContaining({
-            code: destinationCode,
-            name: "Public destination",
-            city: "Destination",
-            country: "US",
-            lat: 40.64,
-            lon: -73.779,
-            facility: "commercial",
-          }),
+          flightCount: 2,
+          forwardFlightCount: 1,
+          reverseFlightCount: 1,
+          directionMode: "both",
         }),
-      ]),
+      ],
     });
+    expect(
+      [projection.routes[0]!.origin.code, projection.routes[0]!.destination.code]
+        .toSorted(),
+    ).toEqual([destinationCode, originCode].toSorted());
     const privateFlights = await new DrizzleImportRepository().listFlights(
       owner.id,
     );
@@ -183,15 +216,13 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       enabled: true,
       publishedFlightCount: 1,
     });
-    await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject({
-      routes: expect.arrayContaining([
-        expect.objectContaining({
-          origin: expect.objectContaining({
-            name: "Chewelah Municipal Airport",
-          }),
-        }),
+    const projection = await getPublicMapProjection(owner.username);
+    expect(
+      projection.routes.flatMap(({ origin, destination }) => [
+        origin.name,
+        destination.name,
       ]),
-    });
+    ).toContain("Chewelah Municipal Airport");
   });
 
   it("rejects airport display metadata containing control characters", async () => {

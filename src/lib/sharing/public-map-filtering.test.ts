@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PublicMapProjection } from "./service";
+import { airportExactIdentity } from "@/lib/flight-data";
 import {
   DEFAULT_PUBLIC_MAP_FILTERS,
   derivePublicMapSlice,
@@ -27,7 +28,7 @@ function airport(
 }
 
 const projection: PublicMapProjection = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   owner: { displayName: "Devin" },
   summary: { flightCount: 3, routeCount: 3 },
   routes: [
@@ -35,6 +36,9 @@ const projection: PublicMapProjection = {
       id: "sea-jfk-commercial",
       kind: "commercial",
       flightCount: 2,
+      forwardFlightCount: 2,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
       origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
       destination: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
     },
@@ -42,6 +46,9 @@ const projection: PublicMapProjection = {
       id: "jfk-lhr-commercial",
       kind: "commercial",
       flightCount: 1,
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
       origin: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
       destination: airport("LHR", "London Heathrow", "London", "GB", 51.471, -0.461),
     },
@@ -49,6 +56,9 @@ const projection: PublicMapProjection = {
       id: "sea-pdx-private",
       kind: "private",
       flightCount: 1,
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
       origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
       destination: airport("PDX", "Portland International", "Portland", "US", 45.589, -122.598),
     },
@@ -60,7 +70,9 @@ const projection: PublicMapProjection = {
       role: "passenger",
       aircraft: ["Boeing 737", "B737"],
       registration: "N12345",
-      routeIds: ["sea-jfk-commercial"],
+      routeLegs: [
+        { routeId: "sea-jfk-commercial", direction: "forward" },
+      ],
     },
     {
       date: "2026-02-15",
@@ -68,7 +80,10 @@ const projection: PublicMapProjection = {
       role: "pilot",
       aircraft: ["Boeing 777"],
       registration: "N777AA",
-      routeIds: ["sea-jfk-commercial", "jfk-lhr-commercial"],
+      routeLegs: [
+        { routeId: "sea-jfk-commercial", direction: "forward" },
+        { routeId: "jfk-lhr-commercial", direction: "forward" },
+      ],
     },
     {
       date: "2026-03-20",
@@ -76,7 +91,9 @@ const projection: PublicMapProjection = {
       role: "pilot",
       aircraft: ["Cessna 172"],
       registration: "N172ZZ",
-      routeIds: ["sea-pdx-private"],
+      routeLegs: [
+        { routeId: "sea-pdx-private", direction: "forward" },
+      ],
     },
   ],
 };
@@ -138,30 +155,60 @@ describe("public map viewer filtering", () => {
 
   });
 
-  it("counts opposite directions as one visible route", () => {
-    const forward = { ...projection.routes[0]!, flightCount: 1 };
-    const reverse = {
-      ...forward,
-      id: "jfk-sea-commercial",
-      origin: forward.destination,
-      destination: forward.origin,
+  it("preserves canonical direction semantics through viewer-local filtering", () => {
+    const canonical = {
+      ...projection.routes[0]!,
+      flightCount: 2,
+      forwardFlightCount: 1,
+      reverseFlightCount: 1,
+      directionMode: "both" as const,
     };
     const bidirectionalProjection: PublicMapProjection = {
       ...projection,
-      summary: { flightCount: 2, routeCount: 2 },
-      routes: [forward, reverse],
+      summary: { flightCount: 2, routeCount: 1 },
+      routes: [canonical],
       flights: [
-        { ...projection.flights[0]!, routeIds: [forward.id] },
+        {
+          ...projection.flights[0]!,
+          routeLegs: [
+            { routeId: canonical.id, direction: "forward" as const },
+          ],
+        },
         {
           ...projection.flights[1]!,
-          routeIds: [reverse.id],
+          routeLegs: [
+            { routeId: canonical.id, direction: "reverse" as const },
+          ],
         },
       ],
     };
-    expect(
-      derivePublicMapSlice(bidirectionalProjection, DEFAULT_PUBLIC_MAP_FILTERS)
-        .summary.routeCount,
-    ).toBe(1);
+    const all = derivePublicMapSlice(
+      bidirectionalProjection,
+      DEFAULT_PUBLIC_MAP_FILTERS,
+    );
+    expect(all.routes[0]).toMatchObject({
+      forwardFlightCount: 1,
+      reverseFlightCount: 1,
+      directionMode: "both",
+    });
+    const passenger = derivePublicMapSlice(bidirectionalProjection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
+      role: "passenger",
+    });
+    expect(passenger.routes[0]).toMatchObject({
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
+    });
+    const pilot = derivePublicMapSlice(bidirectionalProjection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
+      role: "pilot",
+    });
+    expect(pilot.routes[0]).toMatchObject({
+      forwardFlightCount: 0,
+      reverseFlightCount: 1,
+      directionMode: "one-way",
+    });
   });
 
   it("deduplicates and sorts public filter options", () => {
@@ -235,7 +282,7 @@ describe("public map viewer filtering", () => {
   function airportKey(
     value: PublicMapProjection["routes"][number]["origin"],
   ): string {
-    return `${value.code}|${value.country}|${value.lat}|${value.lon}`;
+    return airportExactIdentity(value);
   }
 
   it("processes a large uncapped projection in linear time", () => {
@@ -243,14 +290,20 @@ describe("public map viewer filtering", () => {
     const largeProjection: PublicMapProjection = {
       ...projection,
       summary: { flightCount, routeCount: 1 },
-      routes: [{ ...projection.routes[0], flightCount }],
+      routes: [{
+        ...projection.routes[0],
+        flightCount,
+        forwardFlightCount: flightCount,
+      }],
       flights: Array.from({ length: flightCount }, (_, index) => ({
         date: "2026-08-01",
         kind: "commercial" as const,
         role: index % 2 ? ("pilot" as const) : ("passenger" as const),
         aircraft: ["Boeing 737"],
         registration: "N12345",
-        routeIds: ["sea-jfk-commercial"],
+        routeLegs: [
+          { routeId: "sea-jfk-commercial", direction: "forward" as const },
+        ],
       })),
     };
     const startedAt = performance.now();
@@ -268,14 +321,20 @@ describe("public map viewer filtering", () => {
     const largeProjection: PublicMapProjection = {
       ...projection,
       summary: { flightCount, routeCount: 1 },
-      routes: [{ ...projection.routes[0], flightCount }],
+      routes: [{
+        ...projection.routes[0],
+        flightCount,
+        forwardFlightCount: flightCount,
+      }],
       flights: Array.from({ length: flightCount }, (_, index) => ({
         date: "2026-08-01",
         kind: "commercial" as const,
         role: index % 2 ? ("pilot" as const) : ("passenger" as const),
         aircraft: [`Aircraft ${index}`],
         registration: `N${index}`,
-        routeIds: ["sea-jfk-commercial"],
+        routeLegs: [
+          { routeId: "sea-jfk-commercial", direction: "forward" as const },
+        ],
       })),
     };
     const startedAt = performance.now();

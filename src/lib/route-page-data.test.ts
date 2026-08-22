@@ -136,6 +136,31 @@ describe("route URL and data contracts", () => {
     expect(data).not.toHaveProperty("facts");
   });
 
+  it("counts distinct same-code airports in owner map statistics", () => {
+    const first = {
+      ...airports.SEA,
+      identity: "first-sea",
+    };
+    const second = {
+      ...airports.SEA,
+      identity: "second-sea",
+      name: "Distinct SEA airport",
+      lat: airports.SEA.lat + 0.5,
+    };
+    const persisted = buildPersistedFlightData(
+      [
+        flight("first", { origin: first }),
+        flight("second", { origin: second }),
+      ],
+      "2026-08-11T00:00:00.000Z",
+    );
+    const map = buildMapPageContract(getInitialFilters(), persisted, null);
+
+    expect(
+      map.statsCards.find(({ label }) => label === "Mapped airports")?.value,
+    ).toBe("3");
+  });
+
   it("never fills an authenticated empty account with representative samples", () => {
     const persisted = buildPersistedFlightData(
       [],

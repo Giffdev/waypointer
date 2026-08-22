@@ -1,4 +1,8 @@
-import type { Airport, MapRoute } from "@/lib/flight-data";
+import {
+  airportExactIdentity,
+  type Airport,
+  type MapRoute,
+} from "@/lib/flight-data";
 import { routeDirection } from "@/lib/route-direction";
 
 type MapLegendProps = {
@@ -19,13 +23,16 @@ export function MapLegend({
     routes.map((route) => routeDirection(route).mode),
   );
   const hasOneWayDirection = directionModes.has("one-way");
-  const hasReciprocalDirection = directionModes.has("reciprocal");
-  const activeAirportCodes = new Set(
-    routes.flatMap(({ origin, destination }) => [origin.code, destination.code]),
+  const hasBothDirections = directionModes.has("both");
+  const activeAirportIdentities = new Set(
+    routes.flatMap(({ origin, destination }) => [
+      airportExactIdentity(origin),
+      airportExactIdentity(destination),
+    ]),
   );
-  const hasActiveAirports = activeAirportCodes.size > 0;
+  const hasActiveAirports = activeAirportIdentities.size > 0;
   const hasContextAirports = airports.some(
-    ({ code }) => !activeAirportCodes.has(code),
+    (airport) => !activeAirportIdentities.has(airportExactIdentity(airport)),
   );
   const entries = [
     hasCommercial && (
@@ -60,12 +67,12 @@ export function MapLegend({
         One-way route
       </span>
     ),
-    hasReciprocalDirection && (
-      <span key="reciprocal-direction">
+    hasBothDirections && (
+      <span key="both-directions">
         <i className="legend-direction" aria-hidden="true">
           ↔
         </i>
-        Reciprocal route
+        Both directions
       </span>
     ),
     hasActiveAirports && (

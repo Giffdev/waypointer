@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FilterCombobox } from "@/components/filter-combobox";
 import GlobePanel from "@/components/globe-panel";
-import type { Airport, MapRoute } from "@/lib/flight-data";
+import {
+  airportExactIdentity,
+  type Airport,
+} from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
 import { MapLegend } from "@/components/map-legend";
@@ -53,7 +56,7 @@ export function SharedMapView({ handle }: { handle: string }) {
         Date.now() + PUBLIC_MAP_REVALIDATE_INTERVAL_MS;
       setState((current) => (current === "ready" ? current : "loading"));
 
-      void fetch(`/api/shared/${encodeURIComponent(handle)}`, {
+      void fetch(`/api/shared/${encodeURIComponent(handle)}?contract=3`, {
         signal: controller.signal,
         cache: "no-store",
       })
@@ -223,13 +226,8 @@ export function SharedMapProjectionView({
     () => toSharedMapData(slice.routes),
     [slice.routes],
   );
-  const focusedAirportCode = useMemo(
-    () =>
-      mapData.airports.find(
-        (airport) => publicAirportKey(airport) === resolvedFilters.airport,
-      )?.code ?? "",
-    [mapData.airports, resolvedFilters.airport],
-  );
+  const focusedAirportIdentity =
+    resolvedFilters.airport === "all" ? "" : resolvedFilters.airport;
   const busiestRoute = useMemo(
     () =>
       mapData.routes.toSorted(
@@ -403,7 +401,7 @@ export function SharedMapProjectionView({
           visibleKind="all"
           zoom={mapData.homeFrame.zoom}
           zoomCommandToken={0}
-          focusAirportCode={focusedAirportCode}
+          focusAirportCode={focusedAirportIdentity}
           selectedRouteId=""
           resetToken={0}
           homeFrame={mapData.homeFrame}
@@ -458,7 +456,6 @@ export function toSharedMapData(
   publicRoutes: PublicMapProjection["routes"],
 ) {
   const airportByKey = new Map<string, Airport>();
-  const routes = new Map<string, MapRoute>();
   const airportFor = (point: PublicMapProjection["routes"][number]["origin"]) => {
     const key = publicAirportKey(point);
     const existing = airportByKey.get(key);
@@ -467,51 +464,24 @@ export function toSharedMapData(
     airportByKey.set(key, airport);
     return airport;
   };
-  for (const route of publicRoutes) {
-    const origin = airportFor(route.origin);
-    const destination = airportFor(route.destination);
-    const originKey = publicAirportKey(route.origin);
-    const destinationKey = publicAirportKey(route.destination);
-    const endpoints = [originKey, destinationKey].sort();
-    const key = `${route.kind}|${endpoints.join("|")}`;
-    const existing = routes.get(key);
-    if (existing) {
-      existing.flightCount += route.flightCount;
-      const incomingForward = endpoints[0] === originKey;
-      if (incomingForward) {
-        existing.forwardFlightCount =
-          (existing.forwardFlightCount ?? 0) + route.flightCount;
-      } else {
-        existing.reverseFlightCount =
-          (existing.reverseFlightCount ?? 0) + route.flightCount;
-      }
-      continue;
-    }
-    const canonical = endpoints[0] === originKey;
-    routes.set(key, {
-      id: `shared-route-${routes.size + 1}`,
-      origin: canonical ? origin : destination,
-      destination: canonical ? destination : origin,
-      kind: route.kind,
-      flightCount: route.flightCount,
-      forwardFlightCount: canonical ? route.flightCount : 0,
-      reverseFlightCount: canonical ? 0 : route.flightCount,
-    });
-  }
-  const aggregatedRoutes = [...routes.values()];
+  const canonicalRoutes = publicRoutes.map((route) => ({
+    ...route,
+    origin: airportFor(route.origin),
+    destination: airportFor(route.destination),
+  }));
   const frameStride = Math.max(
     1,
-    Math.ceil(aggregatedRoutes.length / MAX_PUBLIC_FRAME_ROUTES),
+    Math.ceil(canonicalRoutes.length / MAX_PUBLIC_FRAME_ROUTES),
   );
   const frameRoutes =
     frameStride === 1
-      ? aggregatedRoutes
-      : aggregatedRoutes
+      ? canonicalRoutes
+      : canonicalRoutes
           .filter((_, index) => index % frameStride === 0)
           .slice(0, MAX_PUBLIC_FRAME_ROUTES);
   return {
     airports: [...airportByKey.values()],
-    routes: aggregatedRoutes,
+    routes: canonicalRoutes,
     homeFrame: deriveInitialMapFrame(frameRoutes),
   };
 }
@@ -519,7 +489,7 @@ export function toSharedMapData(
 function publicAirportKey(
   point: PublicMapProjection["routes"][number]["origin"],
 ): string {
-  return `${point.code}|${point.country}|${point.lat}|${point.lon}`;
+  return airportExactIdentity(point);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

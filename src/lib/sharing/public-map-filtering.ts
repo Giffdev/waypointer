@@ -1,4 +1,8 @@
 import type { PublicMapProjection } from "./service";
+import {
+  airportExactIdentity,
+  deriveRouteDirectionMode,
+} from "@/lib/flight-data";
 
 export type PublicMapFilters = {
   role: "all" | "pilot" | "passenger";
@@ -86,7 +90,7 @@ export function publicMapFilterOptionsForFilters(
       availableRegistrations.add(fold(flight.registration));
     }
     if (matchesFilters(flight, airportFilters, routeAirportKeys)) {
-      for (const routeId of flight.routeIds) {
+      for (const { routeId } of flight.routeLegs) {
         for (const airportKey of routeAirportKeys.get(routeId) ?? []) {
           availableAirports.add(airportKey);
         }
@@ -114,19 +118,41 @@ export function derivePublicMapSlice(
   filters: PublicMapFilters,
 ): PublicMapSlice {
   const routeAirportKeys = routeAirportKeysById(projection);
-  const routeCounts = new Map<string, number>();
+  const routeCounts = new Map<
+    string,
+    { flightCount: number; forward: number; reverse: number }
+  >();
   let flightCount = 0;
   for (const flight of projection.flights) {
     if (!matchesFilters(flight, filters, routeAirportKeys)) continue;
     flightCount += 1;
-    for (const routeId of flight.routeIds) {
-      routeCounts.set(routeId, (routeCounts.get(routeId) ?? 0) + 1);
+    for (const { routeId, direction } of flight.routeLegs) {
+      const counts = routeCounts.get(routeId) ?? {
+        flightCount: 0,
+        forward: 0,
+        reverse: 0,
+      };
+      counts.flightCount += 1;
+      if (direction === "forward") counts.forward += 1;
+      if (direction === "reverse") counts.reverse += 1;
+      routeCounts.set(routeId, counts);
     }
   }
   const routes = projection.routes.flatMap((route) => {
-    const flightCountForRoute = routeCounts.get(route.id) ?? 0;
-    return flightCountForRoute
-      ? [{ ...route, flightCount: flightCountForRoute }]
+    const counts = routeCounts.get(route.id);
+    return counts
+      ? [{
+          ...route,
+          flightCount: counts.flightCount,
+          forwardFlightCount: counts.forward,
+          reverseFlightCount: counts.reverse,
+          directionMode: deriveRouteDirectionMode(
+            counts.forward,
+            counts.reverse,
+            publicAirportKey(route.origin) ===
+              publicAirportKey(route.destination),
+          ),
+        }]
       : [];
   });
   return {
@@ -166,7 +192,7 @@ function matchesFilters(
       (flight.registration !== null &&
         fold(flight.registration) === fold(filters.registration))) &&
     (filters.airport === "all" ||
-      flight.routeIds.some((routeId) =>
+      flight.routeLegs.some(({ routeId }) =>
         routeAirportKeys.get(routeId)?.includes(filters.airport),
       ))
   );
@@ -241,7 +267,7 @@ function summarizeRoutes(
 function publicAirportKey(
   point: PublicMapProjection["routes"][number]["origin"],
 ): string {
-  return `${point.code}|${point.country}|${point.lat}|${point.lon}`;
+  return airportExactIdentity(point);
 }
 
 function sortedUnique(values: string[]): string[] {

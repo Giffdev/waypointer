@@ -14,6 +14,7 @@ import { createMapZoomController, type MapZoomController } from "@/lib/map-camer
 import type { FlightFilters, FlightPeriodFilter } from "@/lib/flight-filters";
 import type { MapPageContract } from "@/lib/route-contracts";
 import { formatRouteDirection } from "@/lib/route-direction";
+import { airportExactIdentity } from "@/lib/flight-data";
 import { flightTypeLabels, hasActiveFlightFilters, MONTH_NAMES, periodLabels, quickPeriods, serializeFiltersForHref } from "@/components/dashboard-shared";
 
 const emptyFilters: FlightFilters = {
@@ -30,13 +31,13 @@ export default function MapRouteClient({ data }: { data: MapPageContract }) {
   const router = useRouter();
   const pathname = usePathname();
   const filters = data.filters;
-  const activeAirportCodes = useMemo(
-    () => new Set(data.activeAirportCodes),
-    [data.activeAirportCodes],
+  const activeAirportIdentities = useMemo(
+    () => new Set(data.activeAirportIdentities),
+    [data.activeAirportIdentities],
   );
   const [mapZoom, setMapZoom] = useState(data.homeFrame.zoom);
   const [mapZoomCommandToken, setMapZoomCommandToken] = useState(0);
-  const [focusAirportCode, setFocusAirportCode] = useState("");
+  const [focusAirportIdentity, setFocusAirportIdentity] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState("");
   const [resetToken, setResetToken] = useState(0);
   const [autoRotate, setAutoRotate] = useState(false);
@@ -45,22 +46,25 @@ export default function MapRouteClient({ data }: { data: MapPageContract }) {
   const airportFocusSelectRef = useRef<HTMLInputElement>(null);
   const mapZoomControllerRef = useRef<MapZoomController | null>(null);
   const mapViewRequestRef = useRef(0);
+  const activeAirportCodes = activeAirportIdentities;
+  const focusAirportCode = focusAirportIdentity;
+  const setFocusAirportCode = setFocusAirportIdentity;
   mapZoomControllerRef.current ??= createMapZoomController(data.homeFrame.zoom);
-  const selectedAirport = useMemo(() => data.airports.find((airport) => airport.code === focusAirportCode), [data.airports, focusAirportCode]);
-  const focusedRoutes = useMemo(() => focusAirportCode ? data.routes.filter((route) => route.origin.code === focusAirportCode || route.destination.code === focusAirportCode).toSorted((left, right) => right.flightCount - left.flightCount || left.id.localeCompare(right.id)) : [], [focusAirportCode, data.routes]);
+  const selectedAirport = useMemo(() => data.airports.find((airport) => airportExactIdentity(airport) === focusAirportIdentity), [data.airports, focusAirportIdentity]);
+  const focusedRoutes = useMemo(() => focusAirportIdentity ? data.routes.filter((route) => airportExactIdentity(route.origin) === focusAirportIdentity || airportExactIdentity(route.destination) === focusAirportIdentity).toSorted((left, right) => right.flightCount - left.flightCount || left.id.localeCompare(right.id)) : [], [focusAirportIdentity, data.routes]);
   const busiestRoute = data.busiestRoute
     ? data.routes.find(({ id }) => id === data.busiestRoute?.id) ?? null
     : null;
   const focusedRouteCount = focusedRoutes.length;
   const updateFilters = (nextFilters: FlightFilters) => {
-    setFocusAirportCode("");
+    setFocusAirportIdentity("");
     setSelectedRouteId("");
     router.push(`${pathname}${serializeFiltersForHref(nextFilters)}`, { scroll: false });
   };
-  const clearAirportFocus = (restore = false) => { setFocusAirportCode(""); setSelectedRouteId(""); if (restore) window.setTimeout(() => airportFocusSelectRef.current?.focus(), 0); };
+  const clearAirportFocus = (restore = false) => { setFocusAirportIdentity(""); setSelectedRouteId(""); if (restore) window.setTimeout(() => airportFocusSelectRef.current?.focus(), 0); };
   const syncMapZoom = useCallback((zoom: number) => { const synchronizedZoom = mapZoomControllerRef.current!.sync(zoom); setMapZoom((currentZoom) => displayedMapZoom(currentZoom) === displayedMapZoom(synchronizedZoom) ? currentZoom : synchronizedZoom); }, []);
   const stepMapZoom = useCallback((delta: number) => { setMapZoom(mapZoomControllerRef.current!.step(delta)); setMapZoomCommandToken((token) => token + 1); }, []);
-  const resetMap = () => { setFocusAirportCode(""); setSelectedRouteId(""); setAutoRotate(false); setResetToken((token) => token + 1); };
+  const resetMap = () => { setFocusAirportIdentity(""); setSelectedRouteId(""); setAutoRotate(false); setResetToken((token) => token + 1); };
   const changeMapView = async (nextMode: MapViewMode) => {
     const requestId = ++mapViewRequestRef.current;
     const previousMode = mapViewMode;

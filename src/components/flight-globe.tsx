@@ -11,7 +11,12 @@ import {
   type MapGeoJSONFeature,
   type StyleSpecification,
 } from "maplibre-gl";
-import type { Airport, FlightKind, MapRoute } from "@/lib/flight-data";
+import {
+  airportExactIdentity,
+  type Airport,
+  type FlightKind,
+  type MapRoute,
+} from "@/lib/flight-data";
 import {
   calculateHomeCamera,
   initialMapZoomForWidth,
@@ -248,8 +253,8 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             latest?.focusAirportCode ?? "",
           );
           showAirportPopup(map, feature);
-          const code = String(feature.properties?.code ?? "");
-          if (code) onSelectAirportRef.current(code);
+          const identity = String(feature.properties?.identity ?? "");
+          if (identity) onSelectAirportRef.current(identity);
           return;
         }
 
@@ -417,7 +422,10 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loadedRef.current || !props.focusAirportCode) return;
-    const airport = props.airports.find(({ code }) => code === props.focusAirportCode);
+    const airport = props.airports.find(
+      (candidate) =>
+        airportExactIdentity(candidate) === props.focusAirportCode,
+    );
     if (!airport) return;
     const minimumZoom =
       airport.facility === "commercial" ? 8 : airport.facility === "general-aviation" ? 9 : 10;
@@ -801,8 +809,8 @@ function routeKindFilter(kind: FlightKind, focusAirportCode: string) {
     kindFilter,
     [
       "any",
-      ["==", ["get", "originCode"], focusAirportCode],
-      ["==", ["get", "destinationCode"], focusAirportCode],
+      ["==", ["get", "originIdentity"], focusAirportCode],
+      ["==", ["get", "destinationIdentity"], focusAirportCode],
     ],
   ];
 }
@@ -818,8 +826,8 @@ function routeInspectionFilter(
   if (focusAirportCode) {
     filters.push([
       "any",
-      ["==", ["get", "originCode"], focusAirportCode],
-      ["==", ["get", "destinationCode"], focusAirportCode],
+      ["==", ["get", "originIdentity"], focusAirportCode],
+      ["==", ["get", "destinationIdentity"], focusAirportCode],
     ]);
   }
   if (filters.length === 0) return ["has", "id"];
@@ -838,8 +846,8 @@ function routeDirectionFilter(
   if (focusAirportCode) {
     filters.push([
       "any",
-      ["==", ["get", "originCode"], focusAirportCode],
-      ["==", ["get", "destinationCode"], focusAirportCode],
+      ["==", ["get", "originIdentity"], focusAirportCode],
+      ["==", ["get", "destinationIdentity"], focusAirportCode],
     ]);
   }
   if (selectedRouteId) {

@@ -1,7 +1,12 @@
-import type { Airport, MapRoute } from "./flight-data";
-import { airportGeometryIdentity } from "./route-aggregation";
+import {
+  deriveRouteDirectionMode,
+  type Airport,
+  type MapRoute,
+  type RouteDirectionMode,
+} from "./flight-data";
+import { airportIdentity } from "./route-aggregation";
 
-export type RouteDirectionMode = "one-way" | "reciprocal" | "none";
+export type { RouteDirectionMode } from "./flight-data";
 
 export type RouteDirection = {
   mode: RouteDirectionMode;
@@ -14,8 +19,7 @@ export type RouteDirection = {
 
 export function routeDirection(route: MapRoute): RouteDirection {
   const sameAirport =
-    airportGeometryIdentity(route.origin) ===
-    airportGeometryIdentity(route.destination);
+    airportIdentity(route.origin) === airportIdentity(route.destination);
   const hasDirectionalCounts =
     route.forwardFlightCount !== undefined ||
     route.reverseFlightCount !== undefined;
@@ -42,9 +46,14 @@ export function routeDirection(route: MapRoute): RouteDirection {
       reverseFlightCount: 0,
     };
   }
-  if (forwardFlightCount > 0 && reverseFlightCount > 0) {
+  const mode = deriveRouteDirectionMode(
+    forwardFlightCount,
+    reverseFlightCount,
+    sameAirport,
+  );
+  if (mode === "both") {
     return {
-      mode: "reciprocal",
+      mode,
       cue: "↔",
       origin: route.origin,
       destination: route.destination,

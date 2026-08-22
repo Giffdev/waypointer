@@ -10,7 +10,12 @@ import {
   users,
 } from "@/lib/db/schema";
 import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
-import type { Airport } from "@/lib/flight-data";
+import {
+  airportExactIdentity,
+  deriveRouteDirectionMode,
+  type Airport,
+  type RouteDirectionMode,
+} from "@/lib/flight-data";
 import {
   normalizeAircraftMetadata,
   normalizeRegistrationMetadata,
@@ -27,7 +32,8 @@ import {
 const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLIC_COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
-const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 2;
+const STORED_MAP_PROJECTION_SCHEMA_VERSION = 2;
+const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 3;
 
 type PublicAirport = Pick<
   Airport,
@@ -51,6 +57,9 @@ export type PublicMapProjection = {
     id: string;
     kind: "commercial" | "private";
     flightCount: number;
+    forwardFlightCount: number;
+    reverseFlightCount: number;
+    directionMode: RouteDirectionMode;
     origin: PublicAirport;
     destination: PublicAirport;
   }>;
@@ -60,8 +69,28 @@ export type PublicMapProjection = {
     role: "passenger" | "pilot";
     aircraft: string[];
     registration: string | null;
-    routeIds: string[];
+    routeLegs: Array<{
+      routeId: string;
+      direction: "forward" | "reverse" | "none";
+    }>;
   }>;
+};
+
+export type LegacyPublicMapProjection = {
+  schemaVersion: 2;
+  owner: PublicMapProjection["owner"];
+  summary: PublicMapProjection["summary"];
+  routes: Array<
+    Pick<
+      PublicMapProjection["routes"][number],
+      "id" | "kind" | "flightCount" | "origin" | "destination"
+    >
+  >;
+  flights: Array<
+    Omit<PublicMapProjection["flights"][number], "routeLegs"> & {
+      routeIds: string[];
+    }
+  >;
 };
 
 export class ShareNotFoundError extends Error {}
@@ -214,22 +243,16 @@ export async function getPublicMapProjection(
     !projection ||
     typeof projection !== "object" ||
     Reflect.get(projection, "schemaVersion") !==
-      PUBLIC_MAP_PROJECTION_SCHEMA_VERSION
+      STORED_MAP_PROJECTION_SCHEMA_VERSION
   ) {
     throw new ShareRepublishRequiredError();
   }
-  const publicRoutes = sanitizeStoredPublicRoutes(
-    Reflect.get(projection, "routes"),
-  );
-  const publicFlights = sanitizeStoredPublicFlights(
-    Reflect.get(projection, "flights"),
-    new Map(
-      publicRoutes.map(({ id, kind, flightCount }) => [
-        id,
-        { kind, flightCount },
-      ]),
-    ),
-  );
+  const { routes: publicRoutes, flights: publicFlights } =
+    normalizeStoredPublicProjection(
+      Reflect.get(projection, "canonicalRoutes") ??
+        Reflect.get(projection, "routes"),
+      Reflect.get(projection, "flights"),
+    );
   const owner = Reflect.get(projection, "owner");
   const summary = Reflect.get(projection, "summary");
   return validatePublicMapProjection({
@@ -246,9 +269,7 @@ export async function getPublicMapProjection(
           ? Reflect.get(summary, "flightCount")
           : undefined,
       routeCount:
-        summary && typeof summary === "object"
-          ? Reflect.get(summary, "routeCount")
-          : undefined,
+        publicRoutes.length,
     },
     routes: publicRoutes,
     flights: publicFlights,
@@ -259,10 +280,81 @@ export function publicHandleRateLimitKey(identifier: string): string {
   return normalizeUsername(identifier);
 }
 
+export function toLegacyPublicMapProjection(
+  projection: PublicMapProjection,
+): LegacyPublicMapProjection {
+  const routeIdsByDirection = new Map<
+    string,
+    Record<"forward" | "reverse" | "none", string>
+  >();
+  const routes: LegacyPublicMapProjection["routes"] = [];
+  for (const route of projection.routes) {
+    const ids = {
+      forward: legacyRouteId(route.id, "forward"),
+      reverse: legacyRouteId(route.id, "reverse"),
+      none: legacyRouteId(route.id, "none"),
+    };
+    routeIdsByDirection.set(route.id, ids);
+    if (route.forwardFlightCount > 0) {
+      routes.push({
+        id: ids.forward,
+        kind: route.kind,
+        flightCount: route.forwardFlightCount,
+        origin: route.origin,
+        destination: route.destination,
+      });
+    }
+    if (route.reverseFlightCount > 0) {
+      routes.push({
+        id: ids.reverse,
+        kind: route.kind,
+        flightCount: route.reverseFlightCount,
+        origin: route.destination,
+        destination: route.origin,
+      });
+    }
+    if (route.directionMode === "none") {
+      routes.push({
+        id: ids.none,
+        kind: route.kind,
+        flightCount: route.flightCount,
+        origin: route.origin,
+        destination: route.destination,
+      });
+    }
+  }
+  return {
+    schemaVersion: 2,
+    owner: projection.owner,
+    summary: {
+      flightCount: projection.summary.flightCount,
+      routeCount: routes.length,
+    },
+    routes,
+    flights: projection.flights.map(({ routeLegs, ...flight }) => ({
+      ...flight,
+      routeIds: routeLegs.map(({ routeId, direction }) => {
+        const ids = routeIdsByDirection.get(routeId);
+        if (!ids) throw new ShareValidationError();
+        return ids[direction];
+      }),
+    })),
+  };
+}
+
+function legacyRouteId(
+  routeId: string,
+  direction: "forward" | "reverse" | "none",
+): string {
+  return createHash("md5")
+    .update(JSON.stringify([routeId, direction]))
+    .digest("hex");
+}
+
 async function createSnapshot(
   tx: DatabaseTransaction,
   userId: string,
-): Promise<{ projection: PublicMapProjection; flightIds: string[] }> {
+): Promise<{ projection: unknown; flightIds: string[] }> {
   const selectedFlights = await tx
     .select({
       id: flights.id,
@@ -360,28 +452,55 @@ async function createSnapshot(
     if (sequence.length < 2 || sequence.some((airport) => !airport)) {
       throw new ShareValidationError("invalid-flight-route");
     }
-    const routeIds = sequence.slice(0, -1).map((origin, index) => {
+    const routeLegs = sequence.slice(0, -1).map((origin, index) => {
       const destination = sequence[index + 1]!;
-      const publicOrigin = publicAirportFromRow(origin!);
-      const publicDestination = publicAirportFromRow(destination);
-      const routeKey = [
+      const originRow = origin!;
+      const sameAirport = originRow.id === destination.id;
+      const isForward =
+        sameAirport || originRow.id.localeCompare(destination.id) < 0;
+      const first = isForward ? originRow : destination;
+      const second = isForward ? destination : originRow;
+      const publicOrigin = publicAirportFromRow(first);
+      const publicDestination = publicAirportFromRow(second);
+      const routeKey = JSON.stringify([
         flight.kind,
-        publicAirportKey(publicOrigin),
-        publicAirportKey(publicDestination),
-      ].join("|");
+        first.id,
+        second.id,
+      ]);
       const existing = routeCounts.get(routeKey);
-      if (existing) existing.flightCount += 1;
-      else {
+      const direction: PublicMapProjection["flights"][number]["routeLegs"][number]["direction"] =
+        sameAirport
+        ? "none"
+        : isForward
+          ? "forward"
+          : "reverse";
+      if (existing) {
+        existing.flightCount += 1;
+        if (direction === "forward") existing.forwardFlightCount += 1;
+        if (direction === "reverse") existing.reverseFlightCount += 1;
+        existing.directionMode = deriveRouteDirectionMode(
+          existing.forwardFlightCount,
+          existing.reverseFlightCount,
+          sameAirport,
+        );
+      } else {
         const id = createHash("md5").update(routeKey).digest("hex");
         routeCounts.set(routeKey, {
           id,
           kind: flight.kind as "commercial" | "private",
           flightCount: 1,
+          forwardFlightCount: direction === "forward" ? 1 : 0,
+          reverseFlightCount: direction === "reverse" ? 1 : 0,
+          directionMode: deriveRouteDirectionMode(
+            direction === "forward" ? 1 : 0,
+            direction === "reverse" ? 1 : 0,
+            sameAirport,
+          ),
           origin: publicOrigin,
           destination: publicDestination,
         });
       }
-      return routeCounts.get(routeKey)!.id;
+      return { routeId: routeCounts.get(routeKey)!.id, direction };
     });
     publicFlights.push({
       date: flight.date,
@@ -392,10 +511,10 @@ async function createSnapshot(
         flight.aircraft,
       ]),
       registration: normalizeRegistrationMetadata(flight.registration) ?? null,
-      routeIds,
+      routeLegs,
     });
   }
-  const projection = validatePublicMapProjection({
+  const publicProjection = validatePublicMapProjection({
     schemaVersion: PUBLIC_MAP_PROJECTION_SCHEMA_VERSION,
     owner: { displayName: null },
     summary: {
@@ -409,7 +528,21 @@ async function createSnapshot(
   });
   return {
     flightIds,
-    projection,
+    projection: rollbackCompatibleStoredProjection(publicProjection),
+  };
+}
+
+export function rollbackCompatibleStoredProjection(
+  projection: PublicMapProjection,
+): unknown {
+  const legacy = toLegacyPublicMapProjection(projection);
+  return {
+    ...legacy,
+    canonicalRoutes: projection.routes,
+    flights: legacy.flights.map((flight, index) => ({
+      ...flight,
+      routeLegs: projection.flights[index]!.routeLegs,
+    })),
   };
 }
 
@@ -479,100 +612,25 @@ function isPublicDate(value: unknown): value is string {
   );
 }
 
-function sanitizeStoredPublicFlights(
-  value: unknown,
-  routeById: ReadonlyMap<
-    string,
-    { kind: "commercial" | "private"; flightCount: number }
-  >,
-): PublicMapProjection["flights"] {
-  if (!Array.isArray(value)) throw new ShareValidationError();
-  const publicFlights: PublicMapProjection["flights"] = [];
-  const referencesByRouteId = new Map<string, number>();
-  for (const candidate of value) {
-    if (
-      !candidate ||
-      typeof candidate !== "object" ||
-      !isPublicDate(Reflect.get(candidate, "date")) ||
-      (Reflect.get(candidate, "kind") !== "commercial" &&
-        Reflect.get(candidate, "kind") !== "private") ||
-      (Reflect.get(candidate, "role") !== "passenger" &&
-        Reflect.get(candidate, "role") !== "pilot")
-    ) {
-      throw new ShareValidationError();
-    }
-    const date = Reflect.get(candidate, "date") as string;
-    const kind = Reflect.get(candidate, "kind") as
-      | "commercial"
-      | "private";
-    const role = Reflect.get(candidate, "role") as "passenger" | "pilot";
-    const aircraft = Reflect.get(candidate, "aircraft");
-    const registration = Reflect.get(candidate, "registration");
-    const routeIds = Reflect.get(candidate, "routeIds");
-    if (
-      !Array.isArray(aircraft) ||
-      aircraft.some((item) => typeof item !== "string") ||
-      (registration !== null &&
-        typeof registration !== "string") ||
-      !Array.isArray(routeIds) ||
-      routeIds.length === 0 ||
-      routeIds.some(
-        (routeId) =>
-          typeof routeId !== "string" ||
-          routeById.get(routeId)?.kind !== kind,
-      )
-    ) {
-      throw new ShareValidationError();
-    }
-    const normalizedAircraft = normalizePublicAircraft(aircraft);
-    const normalizedRegistration =
-      registration === null
-        ? null
-        : normalizeRegistrationMetadata(registration) ?? null;
-    publicFlights.push({
-      date,
-      kind,
-      role,
-      aircraft: normalizedAircraft,
-      registration: normalizedRegistration,
-      routeIds: [...routeIds],
-    });
-    for (const routeId of routeIds) {
-      referencesByRouteId.set(
-        routeId,
-        (referencesByRouteId.get(routeId) ?? 0) + 1,
-      );
-    }
-  }
-  if (
-    [...routeById].some(
-      ([routeId, route]) =>
-        (referencesByRouteId.get(routeId) ?? 0) !== route.flightCount,
-    )
-  ) {
+function normalizeStoredPublicProjection(
+  routeValue: unknown,
+  flightValue: unknown,
+): Pick<PublicMapProjection, "routes" | "flights"> {
+  if (!Array.isArray(routeValue) || routeValue.length === 0) {
     throw new ShareValidationError();
   }
-  return publicFlights;
-}
-
-function sanitizeStoredPublicRoutes(
-  value: unknown,
-): PublicMapProjection["routes"] {
-  if (!Array.isArray(value)) throw new ShareValidationError();
-  const routeIds = new Set<string>();
-  return value.map((candidate) => {
+  const storedIds = new Set<string>();
+  const storedRoutes = routeValue.map((candidate) => {
     if (!candidate || typeof candidate !== "object") {
       throw new ShareValidationError();
     }
     const id = Reflect.get(candidate, "id");
     const kind = Reflect.get(candidate, "kind");
     const flightCount = Reflect.get(candidate, "flightCount");
-    const origin = Reflect.get(candidate, "origin");
-    const destination = Reflect.get(candidate, "destination");
     if (
       typeof id !== "string" ||
       !PUBLIC_ROUTE_ID_PATTERN.test(id) ||
-      routeIds.has(id) ||
+      storedIds.has(id) ||
       (kind !== "commercial" && kind !== "private") ||
       typeof flightCount !== "number" ||
       !Number.isSafeInteger(flightCount) ||
@@ -580,15 +638,212 @@ function sanitizeStoredPublicRoutes(
     ) {
       throw new ShareValidationError();
     }
-    routeIds.add(id);
+    storedIds.add(id);
+    const hasDirection = Object.hasOwn(candidate, "directionMode");
     return {
       id,
       kind,
       flightCount,
-      origin: sanitizeStoredPublicPlace(origin),
-      destination: sanitizeStoredPublicPlace(destination),
+      origin: sanitizeStoredPublicPlace(Reflect.get(candidate, "origin")),
+      destination: sanitizeStoredPublicPlace(
+        Reflect.get(candidate, "destination"),
+      ),
+      hasDirection,
+      forwardFlightCount: Reflect.get(candidate, "forwardFlightCount"),
+      reverseFlightCount: Reflect.get(candidate, "reverseFlightCount"),
+      directionMode: Reflect.get(candidate, "directionMode"),
     };
   });
+  const isLegacy = storedRoutes.every((route) => !route.hasDirection);
+  if (!isLegacy && storedRoutes.some((route) => !route.hasDirection)) {
+    throw new ShareValidationError();
+  }
+  const routeReferenceByStoredId = new Map<
+    string,
+    {
+      routeId: string;
+      direction: "forward" | "reverse" | "none";
+    }
+  >();
+  let routes: PublicMapProjection["routes"];
+  if (isLegacy) {
+    const canonicalRoutes = new Map<
+      string,
+      PublicMapProjection["routes"][number]
+    >();
+    for (const route of storedRoutes) {
+      const originKey = publicAirportKey(route.origin);
+      const destinationKey = publicAirportKey(route.destination);
+      const sameAirport = originKey === destinationKey;
+      const forward = sameAirport || originKey.localeCompare(destinationKey) < 0;
+      const first = forward ? route.origin : route.destination;
+      const second = forward ? route.destination : route.origin;
+      const canonicalKey = JSON.stringify([
+        route.kind,
+        publicAirportKey(first),
+        publicAirportKey(second),
+      ]);
+      const direction = sameAirport
+        ? "none"
+        : forward
+          ? "forward"
+          : "reverse";
+      const existing = canonicalRoutes.get(canonicalKey);
+      const canonicalId = existing?.id ?? route.id;
+      if (existing) {
+        existing.flightCount += route.flightCount;
+        if (direction === "forward") {
+          existing.forwardFlightCount += route.flightCount;
+        }
+        if (direction === "reverse") {
+          existing.reverseFlightCount += route.flightCount;
+        }
+        existing.directionMode = deriveRouteDirectionMode(
+          existing.forwardFlightCount,
+          existing.reverseFlightCount,
+          sameAirport,
+        );
+      } else {
+        canonicalRoutes.set(canonicalKey, {
+          id: canonicalId,
+          kind: route.kind,
+          flightCount: route.flightCount,
+          forwardFlightCount:
+            direction === "forward" ? route.flightCount : 0,
+          reverseFlightCount:
+            direction === "reverse" ? route.flightCount : 0,
+          directionMode: deriveRouteDirectionMode(
+            direction === "forward" ? route.flightCount : 0,
+            direction === "reverse" ? route.flightCount : 0,
+            sameAirport,
+          ),
+          origin: first,
+          destination: second,
+        });
+      }
+      routeReferenceByStoredId.set(route.id, {
+        routeId: canonicalId,
+        direction,
+      });
+    }
+    routes = [...canonicalRoutes.values()].toSorted((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+  } else {
+    routes = storedRoutes.map((route) => {
+      const forwardFlightCount = route.forwardFlightCount;
+      const reverseFlightCount = route.reverseFlightCount;
+      const sameAirport =
+        publicAirportKey(route.origin) === publicAirportKey(route.destination);
+      if (
+        typeof forwardFlightCount !== "number" ||
+        !Number.isSafeInteger(forwardFlightCount) ||
+        forwardFlightCount < 0 ||
+        typeof reverseFlightCount !== "number" ||
+        !Number.isSafeInteger(reverseFlightCount) ||
+        reverseFlightCount < 0 ||
+        route.directionMode !==
+          deriveRouteDirectionMode(
+            forwardFlightCount,
+            reverseFlightCount,
+            sameAirport,
+          ) ||
+        (sameAirport
+          ? forwardFlightCount !== 0 || reverseFlightCount !== 0
+          : forwardFlightCount + reverseFlightCount !== route.flightCount)
+      ) {
+        throw new ShareValidationError();
+      }
+      return {
+        id: route.id,
+        kind: route.kind,
+        flightCount: route.flightCount,
+        forwardFlightCount,
+        reverseFlightCount,
+        directionMode: route.directionMode,
+        origin: route.origin,
+        destination: route.destination,
+      };
+    });
+  }
+  const routeById = new Map(routes.map((route) => [route.id, route]));
+  if (!Array.isArray(flightValue)) throw new ShareValidationError();
+  const publicFlights: PublicMapProjection["flights"] = flightValue.map(
+    (candidate) => {
+      if (
+        !candidate ||
+        typeof candidate !== "object" ||
+        !isPublicDate(Reflect.get(candidate, "date")) ||
+        (Reflect.get(candidate, "kind") !== "commercial" &&
+          Reflect.get(candidate, "kind") !== "private") ||
+        (Reflect.get(candidate, "role") !== "passenger" &&
+          Reflect.get(candidate, "role") !== "pilot")
+      ) {
+        throw new ShareValidationError();
+      }
+      const kind = Reflect.get(candidate, "kind") as
+        | "commercial"
+        | "private";
+      const aircraft = Reflect.get(candidate, "aircraft");
+      const registration = Reflect.get(candidate, "registration");
+      if (
+        !Array.isArray(aircraft) ||
+        aircraft.some((item) => typeof item !== "string") ||
+        (registration !== null && typeof registration !== "string")
+      ) {
+        throw new ShareValidationError();
+      }
+      let routeLegs: PublicMapProjection["flights"][number]["routeLegs"];
+      if (isLegacy) {
+        const routeIds = Reflect.get(candidate, "routeIds");
+        if (!Array.isArray(routeIds) || routeIds.length === 0) {
+          throw new ShareValidationError();
+        }
+        routeLegs = routeIds.map((routeId) => {
+          if (typeof routeId !== "string") throw new ShareValidationError();
+          const reference = routeReferenceByStoredId.get(routeId);
+          if (!reference || routeById.get(reference.routeId)?.kind !== kind) {
+            throw new ShareValidationError();
+          }
+          return reference;
+        });
+      } else {
+        const storedLegs = Reflect.get(candidate, "routeLegs");
+        if (!Array.isArray(storedLegs) || storedLegs.length === 0) {
+          throw new ShareValidationError();
+        }
+        routeLegs = storedLegs.map((leg) => {
+          if (!leg || typeof leg !== "object") {
+            throw new ShareValidationError();
+          }
+          const routeId = Reflect.get(leg, "routeId");
+          const direction = Reflect.get(leg, "direction");
+          if (
+            typeof routeId !== "string" ||
+            (direction !== "forward" &&
+              direction !== "reverse" &&
+              direction !== "none") ||
+            routeById.get(routeId)?.kind !== kind
+          ) {
+            throw new ShareValidationError();
+          }
+          return { routeId, direction };
+        });
+      }
+      return {
+        date: Reflect.get(candidate, "date") as string,
+        kind,
+        role: Reflect.get(candidate, "role") as "passenger" | "pilot",
+        aircraft: normalizePublicAircraft(aircraft),
+        registration:
+          registration === null
+            ? null
+            : normalizeRegistrationMetadata(registration) ?? null,
+        routeLegs,
+      };
+    },
+  );
+  return { routes, flights: publicFlights };
 }
 
 function sanitizeStoredPublicPlace(
@@ -671,12 +926,7 @@ function publicAirportFromRow(
 }
 
 function publicAirportKey(airport: PublicAirport): string {
-  return [
-    airport.code,
-    airport.country,
-    airport.lat,
-    airport.lon,
-  ].join("|");
+  return airportExactIdentity(airport);
 }
 
 function normalizePublicZero(value: number): number {

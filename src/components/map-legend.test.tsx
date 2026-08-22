@@ -49,7 +49,7 @@ describe("MapLegend", () => {
     expect(screen.getByText("More flights")).toBeTruthy();
     expect(screen.getByText("Selected route")).toBeTruthy();
     expect(screen.getByText("One-way route")).toBeTruthy();
-    expect(screen.getByText("Reciprocal route")).toBeTruthy();
+    expect(screen.getByText("Both directions")).toBeTruthy();
     expect(screen.getByText("Flown airport")).toBeTruthy();
     expect(screen.getByText("Context airport")).toBeTruthy();
   });
@@ -97,5 +97,23 @@ describe("MapLegend", () => {
     expect(screen.getByText("Selected route")).toBeTruthy();
     expect(screen.queryByText("One-way route")).toBeNull();
     expect(screen.queryByText("Reciprocal route")).toBeNull();
+  });
+
+  it("treats a distinct same-code airport as contextual", () => {
+    const contextualSea = {
+      ...airports.SEA,
+      identity: "contextual-sea",
+      name: "Distinct SEA airport",
+    };
+    render(
+      <MapLegend
+        airports={[airports.SEA, airports.HNL, contextualSea]}
+        routes={[commercialRoute]}
+        selectedRouteId=""
+      />,
+    );
+
+    expect(screen.getByText("Flown airport")).toBeTruthy();
+    expect(screen.getByText("Context airport")).toBeTruthy();
   });
 });

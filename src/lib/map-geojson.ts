@@ -1,6 +1,6 @@
 import type { Airport, MapRoute } from "./flight-data";
 import { routeFrequencyStrength } from "./map-visualization";
-import { airportGeometryIdentity } from "./route-aggregation";
+import { airportIdentity } from "./route-aggregation";
 import {
   formatRouteDirection,
   routeDirection,
@@ -26,8 +26,10 @@ export type RouteFeatureCollection = {
       directionDetail: string;
       routeTitle: string;
       strength: number;
+      originIdentity: string;
       originCode: string;
       originName: string;
+      destinationIdentity: string;
       destinationCode: string;
       destinationName: string;
       routeLabel: string;
@@ -45,6 +47,7 @@ export type AirportFeatureCollection = {
   features: Array<{
     type: "Feature";
     properties: {
+      identity: string;
       code: string;
       name: string;
       city: string;
@@ -71,7 +74,7 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
       const routeTitle = formatRouteDirection(route);
       const directionDetail = routeDirectionDetail(route);
       const directionSummary =
-        direction.mode === "reciprocal" ? ` (${directionDetail})` : "";
+        direction.mode === "both" ? ` (${directionDetail})` : "";
       return {
         type: "Feature",
         properties: {
@@ -80,14 +83,16 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
           flightCount: route.flightCount,
           forwardFlightCount: direction.forwardFlightCount,
           reverseFlightCount: direction.reverseFlightCount,
-          bidirectional: direction.mode === "reciprocal",
+          bidirectional: direction.mode === "both",
           directionMode: direction.mode,
           directionCue: direction.cue,
           directionDetail,
           routeTitle,
           strength: routeFrequencyStrength(route.flightCount, maximumRouteCount),
+          originIdentity: airportIdentity(route.origin),
           originCode: route.origin.code,
           originName: route.origin.name,
+          destinationIdentity: airportIdentity(route.destination),
           destinationCode: route.destination.code,
           destinationName: route.destination.name,
           routeLabel: `${routeTitle} · ${route.flightCount} ${route.flightCount === 1 ? "flight" : "flights"}${directionSummary}`,
@@ -114,8 +119,8 @@ export function createAirportFeatureCollection(
 ): AirportFeatureCollection {
   const traffic = new Map<string, number>();
   for (const route of routes) {
-    const originIdentity = airportGeometryIdentity(route.origin);
-    const destinationIdentity = airportGeometryIdentity(route.destination);
+    const originIdentity = airportIdentity(route.origin);
+    const destinationIdentity = airportIdentity(route.destination);
     traffic.set(
       originIdentity,
       (traffic.get(originIdentity) ?? 0) + route.flightCount,
@@ -133,8 +138,8 @@ export function createAirportFeatureCollection(
   );
   const activeAirports = new Set(
     routes.flatMap((route) => [
-      airportGeometryIdentity(route.origin),
-      airportGeometryIdentity(route.destination),
+      airportIdentity(route.origin),
+      airportIdentity(route.destination),
     ]),
   );
 
@@ -143,13 +148,14 @@ export function createAirportFeatureCollection(
     features: airports.map((airport) => ({
       type: "Feature",
       properties: {
+        identity: airportIdentity(airport),
         code: airport.code,
         name: airport.name,
         city: airport.city,
         facility: airport.facility,
-        traffic: traffic.get(airportGeometryIdentity(airport)) ?? 0,
-        isHub: hubs.has(airportGeometryIdentity(airport)),
-        isActive: activeAirports.has(airportGeometryIdentity(airport)),
+        traffic: traffic.get(airportIdentity(airport)) ?? 0,
+        isHub: hubs.has(airportIdentity(airport)),
+        isActive: activeAirports.has(airportIdentity(airport)),
       },
       geometry: {
         type: "Point",

@@ -3,7 +3,11 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Airport, MapRoute } from "@/lib/flight-data";
+import {
+  airportExactIdentity,
+  type Airport,
+  type MapRoute,
+} from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 
 const mapMocks = vi.hoisted(() => {
@@ -99,6 +103,7 @@ const route: MapRoute = {
   kind: "private",
   flightCount: 1,
 };
+const originIdentity = airportExactIdentity(origin);
 const homeFrame: MapFrame = {
   center: [5, 6],
   zoom: 3,
@@ -183,7 +188,9 @@ describe("FlightGlobe reduced motion", () => {
     expect(map.jumpTo).toHaveBeenCalled();
     expect(map.flyTo).not.toHaveBeenCalled();
 
-    view.rerender(<FlightGlobe {...props} focusAirportCode="AAA" />);
+    view.rerender(
+      <FlightGlobe {...props} focusAirportCode={originIdentity} />,
+    );
     await waitFor(() =>
       expect(map.jumpTo).toHaveBeenCalledWith({
         center: [20, 10],
@@ -267,7 +274,9 @@ describe("FlightGlobe reduced motion", () => {
     const view = render(<FlightGlobe {...props} />);
     const map = await readyMap();
 
-    view.rerender(<FlightGlobe {...props} focusAirportCode="AAA" />);
+    view.rerender(
+      <FlightGlobe {...props} focusAirportCode={originIdentity} />,
+    );
     await waitFor(() =>
       expect(map.flyTo).toHaveBeenCalledWith({
         center: [20, 10],

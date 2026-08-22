@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   consumeRateLimit: vi.fn(),
   getPublicMapProjection: vi.fn(),
+  toLegacyPublicMapProjection: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/rate-limit", () => ({
@@ -14,6 +15,7 @@ vi.mock("@/lib/auth/rate-limit", () => ({
 vi.mock("@/lib/sharing/service", () => ({
   getPublicMapProjection: mocks.getPublicMapProjection,
   publicHandleRateLimitKey: (handle: string) => handle.toLowerCase(),
+  toLegacyPublicMapProjection: mocks.toLegacyPublicMapProjection,
   ShareNotFoundError: class ShareNotFoundError extends Error {},
   ShareRepublishRequiredError: class ShareRepublishRequiredError extends Error {},
 }));
@@ -28,17 +30,36 @@ describe("public shared map API", () => {
   beforeEach(() => {
     mocks.consumeRateLimit.mockReset().mockResolvedValue(undefined);
     mocks.getPublicMapProjection.mockReset().mockResolvedValue({
-      schemaVersion: 2,
+      schemaVersion: 3,
       owner: { displayName: null },
       summary: { flightCount: 0, routeCount: 0 },
       routes: [],
       flights: [],
     });
+    mocks.toLegacyPublicMapProjection
+      .mockReset()
+      .mockReturnValue({
+        schemaVersion: 2,
+        owner: { displayName: null },
+        summary: { flightCount: 0, routeCount: 0 },
+        routes: [],
+        flights: [],
+      });
+  });
+
+  it("keeps the default endpoint on the rollback-compatible v2 contract", async () => {
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+
+    expect((await response.json()).map.schemaVersion).toBe(2);
+    expect(mocks.toLegacyPublicMapProjection).toHaveBeenCalledOnce();
   });
 
   it("returns public filter facts without account or session metadata", async () => {
     mocks.getPublicMapProjection.mockResolvedValueOnce({
-      schemaVersion: 2,
+      schemaVersion: 3,
       owner: { displayName: "Public Pilot" },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [
@@ -46,6 +67,9 @@ describe("public shared map API", () => {
           id: "route-1",
           kind: "private",
           flightCount: 1,
+          forwardFlightCount: 1,
+          reverseFlightCount: 0,
+          directionMode: "one-way",
           origin: airport(
             "SEA",
             "Seattle-Tacoma International Airport",
@@ -71,12 +95,12 @@ describe("public shared map API", () => {
           role: "pilot",
           aircraft: ["Cessna 172"],
           registration: "N12345",
-          routeIds: ["route-1"],
+          routeLegs: [{ routeId: "route-1", direction: "forward" }],
         },
       ],
     });
     const response = await GET(
-      new Request("https://example.test/api/shared/devsin"),
+      new Request("https://example.test/api/shared/devsin?contract=3"),
       { params: Promise.resolve({ handle: "devsin" }) },
     );
     const body = await response.json();
@@ -87,13 +111,18 @@ describe("public shared map API", () => {
         role: "pilot",
         aircraft: ["Cessna 172"],
         registration: "N12345",
-        routeIds: ["route-1"],
+        routeLegs: [{ routeId: "route-1", direction: "forward" }],
       },
     ]);
     expect(body.map.routes[0].origin).toMatchObject({
       code: "SEA",
       name: "Seattle-Tacoma International Airport",
       city: "Seattle",
+    });
+    expect(body.map.routes[0]).toMatchObject({
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
     });
     expect(JSON.stringify(body)).not.toMatch(/"code":"R\d+"/);
     expect(JSON.stringify(body)).not.toMatch(

@@ -87,7 +87,7 @@ export function buildMapPageContract(
     filteredFlightCount: scoped.filteredFlights.length,
     routes: scoped.filteredRoutes,
     airports: shared.displayAirports,
-    activeAirportCodes: [...scoped.activeAirportCodes],
+    activeAirportIdentities: [...scoped.activeAirportIdentities],
     homeFrame: shared.homeFrame,
     statsCards: scoped.statsCards,
     busiestRoute: scoped.busiestRoute

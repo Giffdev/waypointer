@@ -22,6 +22,7 @@ import {
   type StatsSlice,
 } from "@/lib/flight-statistics";
 import {
+  airportExactIdentity,
   airportsForRoutes,
   mergeFlightCollections,
   sampleFlights,
@@ -111,10 +112,10 @@ export function createSharedFlightData(localData: LocalFlightData | null, statis
   const importedAirports = localData?.airports;
   const displayAirports =
     authoritative
-      ? Array.from(new Map([...airportsForRoutes(allHistoryRoutes), ...(importedAirports ?? [])].map((airport) => [airport.code, airport])).values())
+      ? Array.from(new Map([...airportsForRoutes(allHistoryRoutes), ...(importedAirports ?? [])].map((airport) => [airportExactIdentity(airport), airport])).values())
       : !importedAirports?.length
         ? uniqueAirports
-        : Array.from(new Map([...airportsForRoutes(allHistoryRoutes), ...importedAirports].map((airport) => [airport.code, airport])).values());
+        : Array.from(new Map([...airportsForRoutes(allHistoryRoutes), ...importedAirports].map((airport) => [airportExactIdentity(airport), airport])).values());
   const homeFrame = deriveInitialMapFrame(allHistoryRoutes);
   return { localData, displayFlights, indexedFlights, stableStatisticsContext, relativePeriods, statisticsFacts, allHistoryRoutes, displayAirports, homeFrame };
 }
@@ -128,7 +129,12 @@ export function buildRouteScopedView(
   const resolvedPrimaryPeriods = { ...Object.fromEntries(Object.entries(shared.relativePeriods).map(([preset, resolved]) => [preset, resolved.primary])), ...(filters.period === "custom" ? { custom: insightsPeriods.primary } : {}) };
   const filteredFlights = filterIndexedFlights(shared.indexedFlights, filters, resolvedPrimaryPeriods);
   const filteredRoutes = aggregateFlightRoutes(filteredFlights);
-  const activeAirportCodes = new Set(filteredRoutes.flatMap((route) => [route.origin.code, route.destination.code]));
+  const activeAirportIdentities = new Set(
+    filteredRoutes.flatMap((route) => [
+      airportExactIdentity(route.origin),
+      airportExactIdentity(route.destination),
+    ]),
+  );
   const filterOptions = getFilterOptions(
     shared.indexedFlights,
     filters,
@@ -154,10 +160,10 @@ export function buildRouteScopedView(
   const primaryStats = aggregateStatsSlice(statisticsFacts, insightsPeriods.primary, statsFilters);
   const comparisonStats = insightsPeriods.comparison ? aggregateStatsSlice(statisticsFacts, insightsPeriods.comparison, statsFilters) : null;
   const busiestRoute = busiestDirectionalRoute(filteredRoutes);
-  const statsCards = buildStatsCards(filters.type, primaryStats.metrics, primaryStats.byRole, comparisonStats, activeAirportCodes.size, distanceUnit);
+  const statsCards = buildStatsCards(filters.type, primaryStats.metrics, primaryStats.byRole, comparisonStats, activeAirportIdentities.size, distanceUnit);
   const completenessText = buildCompletenessText(filters.type, primaryStats.metrics, primaryStats.byRole, distanceUnit);
   const visibleFlights = filteredFlights.toSorted((left, right) => right.date.localeCompare(left.date) || left.id.localeCompare(right.id));
-  return { insightsPeriods, filteredFlights, filteredRoutes, activeAirportCodes, filterOptions, primaryStats, comparisonStats, busiestRoute, statsCards, completenessText, visibleFlights };
+  return { insightsPeriods, filteredFlights, filteredRoutes, activeAirportIdentities, filterOptions, primaryStats, comparisonStats, busiestRoute, statsCards, completenessText, visibleFlights };
 }
 
 export function findLatestYearForMonth(indexedFlights: IndexedFlight[], filters: FlightFilters, month: number): number | "all" {

@@ -17,7 +17,7 @@ function airport(
 }
 
 const projection = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   owner: { displayName: null },
   summary: { flightCount: 1, routeCount: 1 },
   routes: [
@@ -25,6 +25,9 @@ const projection = {
       id: "route-1",
       kind: "commercial",
       flightCount: 1,
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
       origin: airport(
         "SEA",
         "Seattle-Tacoma International Airport",
@@ -52,7 +55,7 @@ const projection = {
       role: "passenger",
       aircraft: ["Boeing 737"],
       registration: "N12345",
-      routeIds: ["route-1"],
+      routeLegs: [{ routeId: "route-1", direction: "forward" }],
     },
   ],
 };
@@ -64,6 +67,43 @@ describe("public map projection parser", () => {
       parsePublicMapProjection({
         ...projection,
         accountId: "private-owner",
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
+  });
+
+  it("rejects direction modes, counts, and flight legs that disagree", () => {
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        routes: [
+          {
+            ...projection.routes[0],
+            directionMode: "both",
+          },
+        ],
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        routes: [
+          {
+            ...projection.routes[0],
+            forwardFlightCount: 0,
+            reverseFlightCount: 1,
+          },
+        ],
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        flights: [
+          {
+            ...projection.flights[0],
+            routeLegs: [{ routeId: "route-1", direction: "reverse" }],
+          },
+        ],
       }),
     ).toThrow(PublicMapProjectionValidationError);
   });
@@ -207,7 +247,9 @@ describe("public map projection parser", () => {
         flights: [
           {
             ...projection.flights[0],
-            routeIds: ["missing-route"],
+            routeLegs: [
+              { routeId: "missing-route", direction: "forward" },
+            ],
           },
         ],
       }),
@@ -240,7 +282,7 @@ describe("public map projection parser", () => {
   it("rejects per-route count mismatches even when global totals match", () => {
     expect(() =>
       parsePublicMapProjection({
-        schemaVersion: 2,
+        schemaVersion: 3,
         owner: projection.owner,
         summary: { flightCount: 2, routeCount: 2 },
         routes: [
@@ -255,7 +297,10 @@ describe("public map projection parser", () => {
           projection.flights[0],
           {
             ...projection.flights[0],
-            routeIds: ["route-2", "route-2"],
+            routeLegs: [
+              { routeId: "route-2", direction: "forward" },
+              { routeId: "route-2", direction: "forward" },
+            ],
           },
         ],
       }),

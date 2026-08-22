@@ -1299,6 +1299,7 @@ function airportCode(row: AirportRow): string {
 
 function toAirport(row: AirportRow): Airport {
   return {
+    identity: row.id,
     code: airportCode(row),
     name: row.name,
     city: row.city ?? row.name,
