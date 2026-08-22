@@ -5,8 +5,20 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const mocks = vi.hoisted(() => ({
+  firebaseAuth: { name: "firebase-auth" },
+  firebaseSignOut: vi.fn(),
+  serverSignOut: vi.fn(),
+}));
+
+vi.mock("firebase/auth", () => ({
+  signOut: mocks.firebaseSignOut,
+}));
+vi.mock("@/lib/auth/firebase-client", () => ({
+  getFirebaseAuth: () => mocks.firebaseAuth,
+}));
 vi.mock("@/app/auth/sign-out/actions", () => ({
-  signOutToHomepage: vi.fn(),
+  signOutToHomepage: mocks.serverSignOut,
 }));
 
 import AppNavigation from "./app-navigation";
@@ -24,6 +36,8 @@ afterEach(cleanup);
 
 describe("application navigation", () => {
   beforeEach(() => {
+    mocks.firebaseSignOut.mockReset().mockResolvedValue(undefined);
+    mocks.serverSignOut.mockReset().mockResolvedValue(undefined);
     pathname = "/map";
     query =
       "type=private&period=custom&year=2025&month=7&source=ForeFlight&aircraft=C172&registration=N123EX";
@@ -105,10 +119,10 @@ describe("application navigation", () => {
     expect(screen.getByRole("menuitem", { name: "Settings" }))
       .toHaveAttribute("href", "/settings");
     expect(screen.getByRole("menuitem", { name: "Sign out" }))
-      .toHaveAttribute("type", "submit");
+      .toHaveAttribute("type", "button");
   });
 
-  it("keeps the sign-out form connected through submission", async () => {
+  it("starts sign-out without relying on a connected native form", async () => {
     const user = userEvent.setup();
     render(
       <AppNavigation
@@ -121,17 +135,13 @@ describe("application navigation", () => {
       }),
     );
     const button = screen.getByRole("menuitem", { name: "Sign out" });
-    const form = button.closest("form");
-    expect(form).not.toBeNull();
-    let connectedDuringSubmit = false;
-    form?.addEventListener("submit", (event) => {
-      event.preventDefault();
-      connectedDuringSubmit = form.isConnected;
-    });
+    expect(button).toHaveAttribute("type", "button");
+    expect(button.closest("form")).toBeNull();
 
     await user.click(button);
 
-    expect(connectedDuringSubmit).toBe(true);
+    expect(mocks.firebaseSignOut).toHaveBeenCalledWith(mocks.firebaseAuth);
+    expect(mocks.serverSignOut).toHaveBeenCalledOnce();
     expect(
       screen.getByRole("menu", { name: "Account actions" }),
     ).toBeInTheDocument();

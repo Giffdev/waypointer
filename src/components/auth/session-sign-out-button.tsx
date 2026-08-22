@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useTransition, type ReactNode } from "react";
 import { signOut as signOutFirebase } from "firebase/auth";
 import { signOutToHomepage } from "@/app/auth/sign-out/actions";
 import { getFirebaseAuth } from "@/lib/auth/firebase-client";
@@ -67,29 +67,23 @@ export function SessionSignOutButton({
   className?: string;
   role?: "menuitem";
 }) {
-  const [pending, setPending] = useState(false);
+  const [pending, startTransition] = useTransition();
 
   return (
-    <form
-      action={async () => {
-        setPending(true);
-        try {
+    <button
+      aria-busy={pending}
+      className={className}
+      disabled={pending}
+      onClick={() => {
+        startTransition(async () => {
           await clearFirebaseBrowserSessionWithinDeadline();
           await signOutToHomepage();
-        } finally {
-          setPending(false);
-        }
+        });
       }}
+      role={role}
+      type="button"
     >
-      <button
-        aria-busy={pending}
-        className={className}
-        disabled={pending}
-        role={role}
-        type="submit"
-      >
-        {children}
-      </button>
-    </form>
+      {children}
+    </button>
   );
 }
