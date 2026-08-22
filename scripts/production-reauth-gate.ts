@@ -1,14 +1,24 @@
 export const CANONICAL_PRODUCTION_ORIGIN =
   "https://waypointer-app.vercel.app";
 
+type ProductionGoogleReauthEnvironment = Readonly<{
+  FLIGHT_MAP_E2E_GOOGLE_REAUTH?: string;
+  FLIGHT_MAP_E2E_BASE_URL?: string;
+  FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE?: string;
+  FLIGHT_MAP_E2E_GOOGLE_EMAIL?: string;
+  FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS?: string;
+}>;
+
 export function isProductionGoogleReauthRequested(
-  env: NodeJS.ProcessEnv,
+  env: ProductionGoogleReauthEnvironment,
 ): boolean {
   const value = env.FLIGHT_MAP_E2E_GOOGLE_REAUTH;
   return value !== undefined && value !== "false";
 }
 
-export function requireProductionGoogleReauthConfig(env: NodeJS.ProcessEnv) {
+export function requireProductionGoogleReauthConfig(
+  env: ProductionGoogleReauthEnvironment,
+) {
   if (env.FLIGHT_MAP_E2E_GOOGLE_REAUTH !== "true") {
     throw new Error(
       "FLIGHT_MAP_E2E_GOOGLE_REAUTH must be exactly true or false.",
