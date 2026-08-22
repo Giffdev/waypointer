@@ -29,6 +29,7 @@ export const RELEASE_DEPLOYMENT_TRUST = {
   projectName: "flight-map",
   environment: "production",
   productionAlias: "waypointer-app.vercel.app",
+  projectProductionUrl: "flight-map-one.vercel.app",
   gitProvider: "github",
   gitRepoOwner: "giffdev",
   gitRepoName: "waypointer",
@@ -1242,7 +1243,8 @@ function runtimeClaimsMatch(
       claims.deploymentId === expectation.deploymentId &&
       claims.deploymentUrl === expectation.deploymentUrl &&
       claims.projectId === expectation.projectId &&
-      claims.productionUrl === expectation.productionAlias &&
+      claims.productionUrl ===
+        RELEASE_DEPLOYMENT_TRUST.projectProductionUrl &&
       claims.environment === expectation.environment &&
       claims.targetEnvironment === expectation.environment &&
       claims.gitProvider === expectation.sourceCommit.type &&

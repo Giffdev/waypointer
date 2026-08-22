@@ -93,7 +93,8 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
     VERCEL_DEPLOYMENT_ID: expectation.deploymentId,
     VERCEL_URL: new URL(expectation.deploymentUrl).hostname,
     VERCEL_PROJECT_ID: expectation.projectId,
-    VERCEL_PROJECT_PRODUCTION_URL: expectation.productionAlias,
+    VERCEL_PROJECT_PRODUCTION_URL:
+      RELEASE_DEPLOYMENT_TRUST.projectProductionUrl,
     FLIGHT_MAP_DEPLOYMENT_METHOD: expectation.deploymentMethod,
     FLIGHT_MAP_GIT_PROVIDER: "github",
     FLIGHT_MAP_GIT_REPO_OWNER: expectation.sourceCommit.owner,

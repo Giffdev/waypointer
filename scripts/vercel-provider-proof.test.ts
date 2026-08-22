@@ -6,7 +6,10 @@ import {
   SignJWT,
 } from "jose";
 import { describe, expect, it, vi } from "vitest";
-import { releaseRuntimeClaimsFromEnvironment } from "../src/lib/release-attestation";
+import {
+  releaseRuntimeClaimsFromEnvironment,
+  releaseRuntimeClaimsSha256,
+} from "../src/lib/release-attestation";
 import {
   canonicalJson,
   DEPLOYMENT_SOURCE_MANIFEST_SELECTION,
@@ -260,7 +263,8 @@ function runtimeClaims(expectation: ProviderReleaseExpectation) {
     VERCEL_DEPLOYMENT_ID: expectation.deploymentId,
     VERCEL_URL: new URL(expectation.deploymentUrl).hostname,
     VERCEL_PROJECT_ID: expectation.projectId,
-    VERCEL_PROJECT_PRODUCTION_URL: expectation.productionAlias,
+    VERCEL_PROJECT_PRODUCTION_URL:
+      RELEASE_DEPLOYMENT_TRUST.projectProductionUrl,
     FLIGHT_MAP_DEPLOYMENT_METHOD:
       expectation.proofMode ===
       "vercel-cli-source-provider-oidc-alias"
@@ -903,6 +907,32 @@ describe("Vercel provider proof", () => {
             providerFetchFor(expectation) as typeof fetch,
           applicationFetch: applicationFetchFor(expectation, {
             runtime: forgedRuntime,
+          }) as typeof fetch,
+          oidcVerify: oidcEvidence,
+          challenge,
+        },
+      ),
+    ).rejects.toMatchObject({ diagnosticCode: "health-check-failed" });
+
+    const aliasAsProjectUrl = runtimeClaims(expectation);
+    aliasAsProjectUrl.productionUrl = expectation.productionAlias;
+    const {
+      runtimeClaimsSha256: _previousRuntimeClaimsSha256,
+      ...aliasAsProjectUrlCore
+    } = aliasAsProjectUrl;
+    void _previousRuntimeClaimsSha256;
+    aliasAsProjectUrl.runtimeClaimsSha256 =
+      releaseRuntimeClaimsSha256(aliasAsProjectUrlCore);
+    await expect(
+      verifyReleaseEndpoint(
+        expectation,
+        "__Secure-authjs.session-token=ephemeral-token-value",
+        {
+          vercelApiToken: "vercel-api-token-value",
+          providerFetch:
+            providerFetchFor(expectation) as typeof fetch,
+          applicationFetch: applicationFetchFor(expectation, {
+            runtime: aliasAsProjectUrl,
           }) as typeof fetch,
           oidcVerify: oidcEvidence,
           challenge,
