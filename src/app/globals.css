@@ -166,6 +166,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   min-height: 44px;
   padding: 9px 10px;
 }
+.account-menu-popup form { display: contents; }
+.account-menu-popup button[role="menuitem"] {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
 .account-menu-popup [role="menuitem"]:hover,
 .account-menu-popup [role="menuitem"]:focus {
   background: #16414b;

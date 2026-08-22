@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { signOutToHomepage } from "@/app/auth/sign-out/actions";
 import { useState, type FormEvent } from "react";
 import {
   normalizeUsername,
@@ -263,7 +263,13 @@ export default function SettingsClient({
             </p>
           </section>
         )}
-        {configured && <Link href="/auth/sign-out">Sign out</Link>}
+        {configured && (
+          <form action={signOutToHomepage}>
+            <button className="secondary-button" type="submit">
+              Sign out
+            </button>
+          </form>
+        )}
       </section>
     </main>
   );

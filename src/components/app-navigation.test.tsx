@@ -4,6 +4,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/app/auth/sign-out/actions", () => ({
+  signOutToHomepage: vi.fn(),
+}));
+
 import AppNavigation from "./app-navigation";
 
 let pathname = "/map";
@@ -100,7 +105,7 @@ describe("application navigation", () => {
     expect(screen.getByRole("menuitem", { name: "Settings" }))
       .toHaveAttribute("href", "/settings");
     expect(screen.getByRole("menuitem", { name: "Sign out" }))
-      .toHaveAttribute("href", "/auth/sign-out");
+      .toHaveAttribute("type", "submit");
   });
 
   it("supports keyboard navigation, Escape focus restoration, and outside dismissal", async () => {
