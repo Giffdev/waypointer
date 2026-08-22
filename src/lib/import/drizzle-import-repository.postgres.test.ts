@@ -33,6 +33,8 @@ import {
   isImportProposalCommitReady,
 } from "./review";
 import { createManualFlight } from "@/lib/flights/service";
+import { applyAirportCatalogRefresh } from "../../../scripts/seed-airports";
+import type { AirportReference } from "./airport-resolution";
 
 const enabled =
   process.env.FLIGHT_MAP_RUN_POSTGRES_IMPORT_TESTS === "true" &&
@@ -40,6 +42,15 @@ const enabled =
 const postgresDescribe = enabled ? describe : describe.skip;
 const fixture = readFileSync(
   fileURLToPath(new URL("./__fixtures__/foreflight-v1.csv", import.meta.url)),
+  "utf8",
+);
+const historicalRepFixture = readFileSync(
+  fileURLToPath(
+    new URL(
+      "./__fixtures__/myflightradar24-historical-rep.csv",
+      import.meta.url,
+    ),
+  ),
   "utf8",
 );
 const cleanupUsers: string[] = [];
@@ -463,6 +474,189 @@ postgresDescribe("PostgreSQL import journey", () => {
         0,
       ),
     ).toBe(1);
+  });
+
+  it("refreshes, resolves, and idempotently imports historical REP flights without remapping them to SAI", async () => {
+    const references: AirportReference[] = [
+      {
+        ident: "VTBD",
+        type: "large_airport",
+        name: "Don Mueang International Airport",
+        latitude: 13.9126,
+        longitude: 100.607,
+        isoCountry: "TH",
+        municipality: "Bangkok",
+        scheduledService: true,
+        gpsCode: "VTBD",
+        iataCode: "DMK",
+      },
+      {
+        ident: "KH-0003",
+        type: "closed",
+        name: "Siem Reap International Airport",
+        latitude: 13.410676,
+        longitude: 103.812074,
+        isoCountry: "KH",
+        municipality: "Siem Reap",
+        scheduledService: false,
+        keywords: "REP, VDSR",
+      },
+      {
+        ident: "VDSA",
+        type: "large_airport",
+        name: "Siem Reap-Angkor International Airport",
+        latitude: 13.36974,
+        longitude: 104.223831,
+        isoCountry: "KH",
+        municipality: "Siem Reap",
+        scheduledService: true,
+        gpsCode: "VDSA",
+        iataCode: "SAI",
+      },
+      {
+        ident: "WSSS",
+        type: "large_airport",
+        name: "Singapore Changi Airport",
+        latitude: 1.35019,
+        longitude: 103.994003,
+        isoCountry: "SG",
+        municipality: "Singapore",
+        scheduledService: true,
+        gpsCode: "WSSS",
+        iataCode: "SIN",
+      },
+    ];
+    const firstRefresh = await applyAirportCatalogRefresh(
+      getDb(),
+      references,
+      "historical-rep-postgres-test",
+    );
+    cleanupAirports.push(...firstRefresh.ids);
+    const repeatedRefresh = await applyAirportCatalogRefresh(
+      getDb(),
+      references,
+      "historical-rep-postgres-test",
+    );
+
+    expect(repeatedRefresh.ids).toEqual(firstRefresh.ids);
+    expect(repeatedRefresh).toMatchObject({
+      created: 0,
+      summary: {
+        matchedBySourceIdent: 4,
+        collisions: 0,
+        ambiguities: 0,
+      },
+    });
+    const refreshedAirports = await getDb()
+      .select({
+        sourceIdent: airports.sourceIdent,
+        iata: airports.iata,
+      })
+      .from(airports)
+      .where(inArray(airports.id, firstRefresh.ids));
+    expect(refreshedAirports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceIdent: "KH-0003",
+          iata: "REP",
+        }),
+        expect.objectContaining({
+          sourceIdent: "VDSA",
+          iata: "SAI",
+        }),
+      ]),
+    );
+
+    const userId = await createUser("historical-rep");
+    const repository = new DrizzleImportRepository();
+    const rep = await repository.resolveIdentifier(userId, "REP");
+    const vdsr = await repository.resolveIdentifier(userId, "VDSR");
+    const sai = await repository.resolveIdentifier(userId, "SAI");
+    expect(rep).toMatchObject({
+      status: "resolved",
+      airport: {
+        code: "REP",
+        name: "Siem Reap International Airport",
+        lat: 13.410676,
+        lon: 103.812074,
+      },
+    });
+    expect(vdsr).toMatchObject({
+      status: "resolved",
+    });
+    expect(sai).toMatchObject({
+      status: "resolved",
+      airport: {
+        code: "SAI",
+        name: "Siem Reap-Angkor International Airport",
+        lat: 13.36974,
+        lon: 104.223831,
+      },
+    });
+    if (
+      rep.status !== "resolved" ||
+      vdsr.status !== "resolved" ||
+      sai.status !== "resolved"
+    ) {
+      throw new Error("Expected REP, VDSR, and SAI to resolve.");
+    }
+    expect(vdsr.airportId).toBe(rep.airportId);
+    expect(sai.airportId).not.toBe(rep.airportId);
+
+    const first = await runAutomaticImport(
+      userId,
+      historicalRepFixture,
+      "historical-rep.csv",
+      repository,
+    );
+    expect(first).toMatchObject({
+      status: "committed",
+      reused: false,
+      completion: {
+        importedRows: 2,
+        duplicateRows: 0,
+        reviewRequiredRows: 0,
+      },
+    });
+    const detail = await getUserImportBatch(
+      userId,
+      first.batchId,
+      1,
+      10,
+      repository,
+    );
+    expect(detail?.rows.rows).toHaveLength(2);
+    expect(
+      detail?.rows.rows.every(
+        ({ issues, validationState, commitReady }) =>
+          issues.length === 0 &&
+          validationState === "ready" &&
+          commitReady,
+      ),
+    ).toBe(true);
+
+    const repeated = await runAutomaticImport(
+      userId,
+      historicalRepFixture,
+      "renamed-historical-rep.csv",
+      repository,
+    );
+    expect(repeated).toMatchObject({
+      batchId: first.batchId,
+      status: "committed",
+      reused: true,
+      completion: { importedRows: 2 },
+    });
+    expect(await repository.listFlights(userId)).toMatchObject([
+      {
+        origin: { code: "REP" },
+        destination: { code: "SIN" },
+      },
+      {
+        origin: { code: "DMK" },
+        destination: { code: "REP" },
+      },
+    ]);
   });
 
   it("persists one parent with ordered repeated stops and tenant-scoped legs", async () => {

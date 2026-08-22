@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   airportIdentifierAliases,
   parseOurAirportsCsv,
+  preferredAirportIataCode,
   type AirportReference,
 } from "../src/lib/import/airport-resolution";
 import {
@@ -48,6 +49,51 @@ describe("airport catalog refresh identity planning", () => {
       summary: {
         matchedBySourceIdent: 2,
         matchedLegacy: 0,
+        collisions: 0,
+        ambiguities: 0,
+      },
+    });
+  });
+
+  it("adopts a verified historical REP row without remapping it to SAI", () => {
+    const formerSiemReap: AirportReference = {
+      ident: "KH-0003",
+      type: "closed",
+      name: "Siem Reap International Airport",
+      latitude: 13.410676,
+      longitude: 103.812074,
+      isoCountry: "KH",
+      municipality: "Siem Reap",
+      scheduledService: false,
+      keywords: "REP, VDSR",
+    };
+    const legacy = existingAirport(
+      "historical-rep-id",
+      "REP",
+      "VDSR",
+      "REP",
+      formerSiemReap.name,
+      formerSiemReap.latitude,
+      formerSiemReap.longitude,
+      "legacy-code-backfill",
+    );
+
+    expect(preferredAirportIataCode(formerSiemReap)).toBe("REP");
+    expect(
+      assignAirportSeedIds(
+        [formerSiemReap],
+        [legacy],
+        () => "VDSR",
+        preferredAirportIataCode,
+        () => {
+          throw new Error("The historical airport UUID must be reused.");
+        },
+      ),
+    ).toMatchObject({
+      ids: ["historical-rep-id"],
+      created: 0,
+      summary: {
+        matchedLegacy: 1,
         collisions: 0,
         ambiguities: 0,
       },
@@ -446,16 +492,16 @@ describe("airport catalog refresh identity planning", () => {
       const icaoFrequency = frequencies(references, proposedIcaoCode);
       const iataFrequency = frequencies(
         references,
-        (reference) => reference.iataCode,
+        preferredAirportIataCode,
       );
       const proposedIcao = (reference: AirportReference) => {
         const code = proposedIcaoCode(reference);
         return code && icaoFrequency.get(code) === 1 ? code : undefined;
       };
-      const proposedIata = (reference: AirportReference) =>
-        reference.iataCode && iataFrequency.get(reference.iataCode) === 1
-          ? reference.iataCode
-          : undefined;
+      const proposedIata = (reference: AirportReference) => {
+        const iata = preferredAirportIataCode(reference);
+        return iata && iataFrequency.get(iata) === 1 ? iata : undefined;
+      };
       const existing = references.map((reference, index) =>
         existingAirport(
           `airport-${index}`,

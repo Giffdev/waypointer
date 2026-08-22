@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { AirportReference } from "../src/lib/import/airport-resolution.ts";
+import {
+  airportIdentifierAliases,
+  type AirportReference,
+} from "../src/lib/import/airport-resolution.ts";
 import { AirportCatalogSafetyError } from "./postgres-diagnostics.ts";
 
 export interface ExistingAirportIdentity {
@@ -61,6 +64,7 @@ function compatibleLegacySourceIdentifiers(reference: AirportReference) {
       reference.gpsCode,
       reference.iataCode,
       reference.localCode,
+      ...airportIdentifierAliases(reference).map(({ code }) => code),
     ].filter((value): value is string => Boolean(value)),
   );
 }

@@ -5,6 +5,7 @@ import {
   airportSearchKey,
   airportSearchPhoneticKeys,
   createAirportResolver,
+  preferredAirportIataCode,
   selectBestAirportAliasMatches,
   type AirportReference,
 } from "./airport-resolution";
@@ -165,6 +166,12 @@ describe("airport identifier resolution", () => {
         name: "Siem Reap International Airport",
         type: "closed",
       },
+      airport: {
+        code: "REP",
+        name: "Siem Reap International Airport",
+        lat: 13.410676,
+        lon: 103.812074,
+      },
     });
     expect(resolve("VDSR")).toMatchObject({
       status: "resolved",
@@ -175,6 +182,11 @@ describe("airport identifier resolution", () => {
       reference: {
         ident: "VDSA",
         name: "Siem Reap-Angkor International Airport",
+      },
+      airport: {
+        code: "SAI",
+        lat: 13.36974,
+        lon: 104.223831,
       },
     });
     expect(resolve("VDSA")).toMatchObject({
@@ -211,16 +223,20 @@ describe("airport identifier resolution", () => {
   });
 
   it("does not apply curated aliases when a source identity no longer matches", () => {
+    const changedIdentity = {
+      ...formerSiemReap,
+      name: "Different Airport",
+    };
+    expect(preferredAirportIataCode(changedIdentity)).toBeUndefined();
     expect(
-      createAirportResolver([
-        {
-          ...formerSiemReap,
-          name: "Different Airport",
-        },
-      ])("REP"),
+      createAirportResolver([changedIdentity])("REP"),
     ).toEqual({
       status: "not-found",
       identifier: "REP",
+    });
+    expect(createAirportResolver([changedIdentity])("KH-0003")).toMatchObject({
+      status: "resolved",
+      airport: { code: "KH-0003" },
     });
   });
 

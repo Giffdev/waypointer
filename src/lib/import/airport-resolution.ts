@@ -62,6 +62,29 @@ const CURATED_AIRPORT_IDENTIFIER_ALIASES: Readonly<
   },
 };
 
+function curatedAirportIdentifierAliases(
+  reference: AirportReference,
+): AirportIdentifierAlias[] {
+  const curated = CURATED_AIRPORT_IDENTIFIER_ALIASES[reference.ident];
+  return curated &&
+    reference.name === curated.name &&
+    reference.isoCountry === curated.isoCountry &&
+    reference.type === curated.type
+    ? curated.aliases
+    : [];
+}
+
+export function preferredAirportIataCode(
+  reference: AirportReference,
+): string | undefined {
+  return (
+    reference.iataCode ??
+    curatedAirportIdentifierAliases(reference).find(
+      ({ type }) => type === "iata",
+    )?.code.toUpperCase()
+  );
+}
+
 export type AirportCatalogAudit = {
   totalAirports: number;
   usFaaLidAirports: number;
@@ -107,7 +130,7 @@ function facilityFor(reference: AirportReference): AirportFacility {
 
 function canonicalCode(reference: AirportReference): string {
   return (
-    reference.iataCode ||
+    preferredAirportIataCode(reference) ||
     reference.localCode ||
     reference.gpsCode ||
     reference.ident
@@ -117,14 +140,6 @@ function canonicalCode(reference: AirportReference): string {
 export function airportIdentifierAliases(
   reference: AirportReference,
 ): AirportIdentifierAlias[] {
-  const curated = CURATED_AIRPORT_IDENTIFIER_ALIASES[reference.ident];
-  const curatedAliases =
-    curated &&
-    reference.name === curated.name &&
-    reference.isoCountry === curated.isoCountry &&
-    reference.type === curated.type
-      ? curated.aliases
-      : [];
   const candidates: AirportIdentifierAlias[] = [
     ...(reference.gpsCode
       ? [{ code: reference.gpsCode, type: "icao" as const, priority: 10 }]
@@ -132,7 +147,7 @@ export function airportIdentifierAliases(
     ...(reference.iataCode
       ? [{ code: reference.iataCode, type: "iata" as const, priority: 20 }]
       : []),
-    ...curatedAliases,
+    ...curatedAirportIdentifierAliases(reference),
     ...(reference.localCode
       ? [{
           code: reference.localCode,
