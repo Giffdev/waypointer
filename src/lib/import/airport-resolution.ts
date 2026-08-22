@@ -33,15 +33,21 @@ export type AirportIdentifierAlias = {
   priority: number;
 };
 
-type CuratedAirportIdentifierAliases = {
+type CuratedHistoricalAirportIdentity = {
   name: string;
   isoCountry: string;
   type: string;
   aliases: AirportIdentifierAlias[];
+  replacement?: {
+    relationship: "replacement";
+    ident: string;
+    iataCode?: string;
+    icaoCode?: string;
+  };
 };
 
 const CURATED_AIRPORT_IDENTIFIER_ALIASES: Readonly<
-  Record<string, CuratedAirportIdentifierAliases>
+  Record<string, CuratedHistoricalAirportIdentity>
 > = {
   "DE-0440": {
     name: "Berlin-Schönefeld Airport",
@@ -59,19 +65,60 @@ const CURATED_AIRPORT_IDENTIFIER_ALIASES: Readonly<
       { code: "VDSR", type: "icao", priority: 10 },
       { code: "REP", type: "iata", priority: 20 },
     ],
+    replacement: {
+      relationship: "replacement",
+      ident: "VDSA",
+      iataCode: "SAI",
+      icaoCode: "VDSA",
+    },
   },
 };
 
-function curatedAirportIdentifierAliases(
-  reference: AirportReference,
-): AirportIdentifierAlias[] {
+function matchingCuratedAirportIdentity(reference: AirportReference) {
   const curated = CURATED_AIRPORT_IDENTIFIER_ALIASES[reference.ident];
   return curated &&
     reference.name === curated.name &&
     reference.isoCountry === curated.isoCountry &&
     reference.type === curated.type
-    ? curated.aliases
-    : [];
+    ? curated
+    : undefined;
+}
+
+export function assertHistoricalAirportReplacementSeparation(
+  sourceIdent: string,
+  aliases: readonly AirportIdentifierAlias[],
+  replacement?: {
+    ident: string;
+    iataCode?: string;
+    icaoCode?: string;
+  },
+) {
+  const replacementCodes = new Set(
+    [replacement?.ident, replacement?.iataCode, replacement?.icaoCode]
+      .filter((code): code is string => Boolean(code))
+      .map((code) => code.toUpperCase()),
+  );
+  const conflictingAlias = aliases.find(({ code }) =>
+    replacementCodes.has(code.toUpperCase()),
+  );
+  if (conflictingAlias) {
+    throw new Error(
+      `Historical airport ${sourceIdent} cannot alias replacement code ${conflictingAlias.code.toUpperCase()}.`,
+    );
+  }
+}
+
+function curatedAirportIdentifierAliases(
+  reference: AirportReference,
+): AirportIdentifierAlias[] {
+  const curated = matchingCuratedAirportIdentity(reference);
+  if (!curated) return [];
+  assertHistoricalAirportReplacementSeparation(
+    reference.ident,
+    curated.aliases,
+    curated.replacement,
+  );
+  return curated.aliases;
 }
 
 export function preferredAirportIataCode(
