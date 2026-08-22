@@ -61,7 +61,12 @@ export type PublicMapProjection = {
 };
 
 export class ShareNotFoundError extends Error {}
-export class ShareValidationError extends Error {}
+export class ShareValidationError extends Error {
+  constructor(readonly code = "invalid-share-projection") {
+    super("Invalid share projection.");
+    this.name = "ShareValidationError";
+  }
+}
 export class ShareEmptyMapError extends Error {}
 export class ShareRepublishRequiredError extends Error {}
 
@@ -166,7 +171,7 @@ export async function enableMapSharing(
       select count(*)::integer as "flightCount" from inserted
     `);
     if (inserted[0]?.flightCount !== snapshot.flightIds.length) {
-      throw new ShareValidationError();
+      throw new ShareValidationError("membership-count-mismatch");
     }
   });
   return getOwnerShareStatus(userId);
@@ -340,7 +345,7 @@ async function createSnapshot(
       (flight.role !== "passenger" && flight.role !== "pilot") ||
       !isPublicDate(flight.date)
     ) {
-      throw new ShareValidationError();
+      throw new ShareValidationError("invalid-flight-facts");
     }
     const stopIds =
       stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
@@ -349,7 +354,7 @@ async function createSnapshot(
       ];
     const sequence = stopIds.map((airportId) => airportById.get(airportId));
     if (sequence.length < 2 || sequence.some((airport) => !airport)) {
-      throw new ShareValidationError();
+      throw new ShareValidationError("invalid-flight-route");
     }
     const routeIds = sequence.slice(0, -1).map((origin, index) => {
       const destination = sequence[index + 1]!;
@@ -409,7 +414,7 @@ function validatePublicMapProjection(value: unknown): PublicMapProjection {
     return parsePublicMapProjection(value);
   } catch (error) {
     if (error instanceof PublicMapProjectionValidationError) {
-      throw new ShareValidationError();
+      throw new ShareValidationError("invalid-generated-projection");
     }
     throw error;
   }
@@ -640,15 +645,22 @@ function publicAirportFromRow(
     facility: string;
   },
 ): PublicAirport {
-  return sanitizeStoredPublicPlace({
-    code: preferredAirportCode(row),
-    name: row.name,
-    city: row.city ?? row.name,
-    country: row.country,
-    lat: row.latitude,
-    lon: row.longitude,
-    facility: row.facility,
-  });
+  try {
+    return sanitizeStoredPublicPlace({
+      code: preferredAirportCode(row),
+      name: row.name,
+      city: row.city ?? row.name,
+      country: row.country,
+      lat: row.latitude,
+      lon: row.longitude,
+      facility: row.facility,
+    });
+  } catch (error) {
+    if (error instanceof ShareValidationError) {
+      throw new ShareValidationError("invalid-airport-metadata");
+    }
+    throw error;
+  }
 }
 
 function publicAirportKey(airport: PublicAirport): string {

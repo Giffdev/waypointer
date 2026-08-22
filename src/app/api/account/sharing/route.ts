@@ -5,6 +5,7 @@ import {
   enableMapSharing,
   getOwnerShareStatus,
   ShareEmptyMapError,
+  ShareValidationError,
 } from "@/lib/sharing/service";
 import {
   SHARING_NO_STORE_HEADERS,
@@ -37,6 +38,15 @@ export async function POST(request: Request) {
       { headers: SHARING_NO_STORE_HEADERS },
     );
   } catch (error) {
+    if (error instanceof ShareValidationError) {
+      console.error("Map sharing publication validation failed.", {
+        code: error.code,
+      });
+    } else if (!(error instanceof ShareEmptyMapError)) {
+      console.error("Map sharing publication failed.", {
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
     return withSharingNoStore(
       accountApiError(
         error instanceof ShareEmptyMapError
