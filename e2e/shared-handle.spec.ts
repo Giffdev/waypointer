@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
 
 const projection = {
+  schemaVersion: 2,
   owner: { displayName: null },
   summary: { flightCount: 3, routeCount: 1 },
   routes: [
@@ -8,8 +10,50 @@ const projection = {
       id: "public-route",
       kind: "commercial",
       flightCount: 3,
-      origin: { lat: 47.4, lon: -122.3, country: "US" },
-      destination: { lat: 40.6, lon: -73.8, country: "US" },
+      origin: {
+        code: "SEA",
+        name: "Seattle-Tacoma International Airport",
+        city: "Seattle",
+        lat: 47.4,
+        lon: -122.3,
+        country: "US",
+        facility: "commercial",
+      },
+      destination: {
+        code: "JFK",
+        name: "John F Kennedy International Airport",
+        city: "New York",
+        lat: 40.6,
+        lon: -73.8,
+        country: "US",
+        facility: "commercial",
+      },
+    },
+  ],
+  flights: [
+    {
+      date: "2025-01-10",
+      kind: "commercial",
+      role: "passenger",
+      aircraft: ["Boeing 737"],
+      registration: "N100AA",
+      routeIds: ["public-route"],
+    },
+    {
+      date: "2026-02-20",
+      kind: "commercial",
+      role: "passenger",
+      aircraft: ["Airbus A320"],
+      registration: "N200BB",
+      routeIds: ["public-route"],
+    },
+    {
+      date: "2026-03-15",
+      kind: "commercial",
+      role: "pilot",
+      aircraft: ["Cessna 172"],
+      registration: "N300CC",
+      routeIds: ["public-route"],
     },
   ],
 };
@@ -65,7 +109,7 @@ test("enables the entire public map and returns an absolute username link", asyn
   await page.goto("/settings");
   await page.getByRole("button", { name: "Share my map" }).click();
 
-  const publicUrl = `${new URL(page.url()).origin}/readable-pilot`;
+  const publicUrl = `${CANONICAL_PRODUCTION_ORIGIN}/readable-pilot`;
   await expect(page.getByRole("textbox", { name: "Public map link" })).toHaveValue(
     publicUrl,
   );
@@ -100,6 +144,66 @@ test("opens a public username route with no key or token", async ({ page }) => {
     page.getByRole("region", { name: "Shared Waypointer map" }),
   ).toBeVisible();
   expect(requests).toEqual([{ method: "GET", body: null }]);
+});
+
+test("filters the public map locally on desktop and mobile", async ({ page }) => {
+  const apiWrites: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith("/api/") && request.method() !== "GET") {
+      apiWrites.push(`${request.method()} ${path}`);
+    }
+  });
+  await page.route(/\/api\/shared\/readable-pilot$/, (route) =>
+    route.fulfill({ json: { map: projection } }),
+  );
+
+  await page.goto("/readable-pilot");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 3 of 3 shared flights",
+  );
+  await expect(page.getByText("Map legend")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Statistics for this view" }),
+  ).toBeVisible();
+
+  await page
+    .getByLabel("Filter shared flights by role")
+    .selectOption("pilot");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 1 of 3 shared flights",
+  );
+  await page.getByRole("button", { name: "Clear filters" }).click();
+
+  await page.getByLabel("Filter shared flights from date").fill("2026-01-01");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 2 of 3 shared flights",
+  );
+  await page.getByRole("button", { name: "Clear filters" }).click();
+
+  const aircraft = page.getByRole("combobox", {
+    name: "Filter shared flights by aircraft",
+  });
+  await aircraft.fill("Cessna 172");
+  await aircraft.press("Enter");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 1 of 3 shared flights",
+  );
+  await page.getByRole("button", { name: "Clear filters" }).click();
+
+  const registration = page.getByRole("combobox", {
+    name: "Filter shared flights by tail number or registration",
+  });
+  await registration.fill("N300CC");
+  await registration.press("Enter");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 1 of 3 shared flights",
+  );
+
+  expect(apiWrites).toEqual([]);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth + 1));
 });
 
 test("shows the generic unavailable state for an unknown or disabled handle", async ({

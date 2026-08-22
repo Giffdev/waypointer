@@ -8,10 +8,16 @@ import {
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
 export const runtime = "nodejs";
+// Revoking a public share must take effect on the next request, so this
+// response deliberately stays out of browser and CDN caches.
 const PUBLIC_HEADERS = {
   ...SHARING_NO_STORE_HEADERS,
   "X-Content-Type-Options": "nosniff",
 };
+// Published projections include one compact filter record per flight. Keep
+// each viewer bounded without making one busy public handle deny other viewers.
+const PUBLIC_MAP_IP_REQUESTS_PER_MINUTE = 120;
+const PUBLIC_MAP_HANDLE_REQUESTS_PER_MINUTE = 10;
 
 export async function GET(
   request: Request,
@@ -24,11 +30,16 @@ export async function GET(
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
       "unknown";
     await Promise.all([
-      consumeRateLimit("public-map-ip", ip, 120, 60_000),
+      consumeRateLimit(
+        "public-map-ip",
+        ip,
+        PUBLIC_MAP_IP_REQUESTS_PER_MINUTE,
+        60_000,
+      ),
       consumeRateLimit(
         "public-map-handle",
-        publicHandleRateLimitKey(handle),
-        60,
+        `${publicHandleRateLimitKey(handle)}:${ip}`,
+        PUBLIC_MAP_HANDLE_REQUESTS_PER_MINUTE,
         60_000,
       ),
     ]);

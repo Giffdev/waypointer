@@ -12,6 +12,10 @@ import {
 import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
 import type { Airport } from "@/lib/flight-data";
 import {
+  normalizeAircraftMetadata,
+  normalizeRegistrationMetadata,
+} from "@/lib/flight-metadata";
+import {
   isPublicAirportCode,
   preferredAirportCode,
 } from "@/lib/airport-preferred-code";
@@ -387,7 +391,7 @@ async function createSnapshot(
         flight.aircraftType,
         flight.aircraft,
       ]),
-      registration: normalizePublicMetadata(flight.registration),
+      registration: normalizeRegistrationMetadata(flight.registration) ?? null,
       routeIds,
     });
   }
@@ -433,13 +437,13 @@ function normalizePublicAircraft(
   values: Array<string | null>,
 ): string[] {
   const unique = new Map<string, string>();
-  for (const value of values) {
-    const normalized = normalizePublicMetadata(value);
+  for (const value of values.slice(0, 16)) {
+    const normalized = normalizeAircraftMetadata(value);
     if (normalized) {
       unique.set(normalized.toLocaleLowerCase("en-US"), normalized);
     }
   }
-  return [...unique.values()];
+  return [...unique.values()].slice(0, 8);
 }
 
 function normalizePublicMetadata(value: string | null): string | null {
@@ -504,14 +508,9 @@ function sanitizeStoredPublicFlights(
     const routeIds = Reflect.get(candidate, "routeIds");
     if (
       !Array.isArray(aircraft) ||
-      aircraft.some(
-        (item) =>
-          typeof item !== "string" ||
-          normalizePublicMetadata(item) !== item,
-      ) ||
+      aircraft.some((item) => typeof item !== "string") ||
       (registration !== null &&
-        (typeof registration !== "string" ||
-          normalizePublicMetadata(registration) !== registration)) ||
+        typeof registration !== "string") ||
       !Array.isArray(routeIds) ||
       routeIds.length === 0 ||
       routeIds.some(
@@ -522,12 +521,17 @@ function sanitizeStoredPublicFlights(
     ) {
       throw new ShareValidationError();
     }
+    const normalizedAircraft = normalizePublicAircraft(aircraft);
+    const normalizedRegistration =
+      registration === null
+        ? null
+        : normalizeRegistrationMetadata(registration) ?? null;
     publicFlights.push({
       date,
       kind,
       role,
-      aircraft: [...aircraft],
-      registration,
+      aircraft: normalizedAircraft,
+      registration: normalizedRegistration,
       routeIds: [...routeIds],
     });
     for (const routeId of routeIds) {

@@ -35,7 +35,7 @@ function normalizeMetadataText(value: string | null | undefined): string | undef
     return undefined;
   }
   const sentinelKey = normalized
-    .toLocaleLowerCase()
+    .toLocaleLowerCase("en-US")
     .replace(/[\s./_()-]+/g, "");
   return SENTINEL_KEYS.has(sentinelKey) ? undefined : normalized;
 }

@@ -4,6 +4,7 @@ import {
   DEFAULT_PUBLIC_MAP_FILTERS,
   derivePublicMapSlice,
   publicMapFilterOptions,
+  publicMapFilterOptionsForFilters,
 } from "./public-map-filtering";
 
 function airport(
@@ -164,9 +165,32 @@ describe("public map viewer filtering", () => {
 
   it("deduplicates and sorts public filter options", () => {
     expect(publicMapFilterOptions(projection)).toEqual({
-      aircraft: ["B737", "Boeing 737", "Boeing 777", "Cessna 172"],
-      registrations: ["N172ZZ", "N777AA", "N12345"],
+      aircraft: ["B737", "Boeing 737", "Boeing 777", "Cessna 172"].map(
+        (value) => ({ value, available: true }),
+      ),
+      registrations: ["N172ZZ", "N777AA", "N12345"].map((value) => ({
+        value,
+        available: true,
+      })),
     });
+  });
+
+  it("marks options unavailable when they conflict with active filters", () => {
+    const options = publicMapFilterOptionsForFilters(projection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
+      role: "passenger",
+    });
+    expect(options.aircraft).toEqual([
+      { value: "B737", available: true },
+      { value: "Boeing 737", available: true },
+      { value: "Boeing 777", available: false },
+      { value: "Cessna 172", available: false },
+    ]);
+    expect(options.registrations).toEqual([
+      { value: "N172ZZ", available: false },
+      { value: "N777AA", available: false },
+      { value: "N12345", available: true },
+    ]);
   });
 
   it("processes a large uncapped projection in linear time", () => {
@@ -192,5 +216,33 @@ describe("public map viewer filtering", () => {
     expect(slice.summary.flightCount).toBe(12_500);
     expect(slice.routes[0]?.flightCount).toBe(12_500);
     expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("derives availability linearly across unique metadata values", () => {
+    const flightCount = 10_000;
+    const largeProjection: PublicMapProjection = {
+      ...projection,
+      summary: { flightCount, routeCount: 1 },
+      routes: [{ ...projection.routes[0], flightCount }],
+      flights: Array.from({ length: flightCount }, (_, index) => ({
+        date: "2026-08-01",
+        kind: "commercial" as const,
+        role: index % 2 ? ("pilot" as const) : ("passenger" as const),
+        aircraft: [`Aircraft ${index}`],
+        registration: `N${index}`,
+        routeIds: ["sea-jfk-commercial"],
+      })),
+    };
+    const startedAt = performance.now();
+    const options = publicMapFilterOptionsForFilters(largeProjection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
+      role: "pilot",
+    });
+    expect(options.aircraft).toHaveLength(flightCount);
+    expect(options.registrations).toHaveLength(flightCount);
+    expect(options.aircraft.filter(({ available }) => available)).toHaveLength(
+      flightCount / 2,
+    );
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
   });
 });

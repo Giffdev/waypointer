@@ -1,5 +1,9 @@
 import type { PublicMapProjection } from "@/lib/sharing/service";
 import { isPublicAirportCode } from "@/lib/airport-preferred-code";
+import {
+  normalizeAircraftMetadata,
+  normalizeRegistrationMetadata,
+} from "@/lib/flight-metadata";
 
 const ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const COUNTRY_PATTERN =
@@ -119,9 +123,15 @@ function parsePublicFlights(
       (flight.role !== "passenger" && flight.role !== "pilot") ||
       !Array.isArray(flight.aircraft) ||
       flight.aircraft.length > 8 ||
-      flight.aircraft.some((value) => !isPublicMetadata(value)) ||
+      flight.aircraft.some(
+        (value) =>
+          typeof value !== "string" ||
+          normalizeAircraftMetadata(value) !== value,
+      ) ||
       (flight.registration !== null &&
-        !isPublicMetadata(flight.registration)) ||
+        (typeof flight.registration !== "string" ||
+          normalizeRegistrationMetadata(flight.registration) !==
+            flight.registration)) ||
       !Array.isArray(flight.routeIds) ||
       flight.routeIds.some(
         (routeId) =>

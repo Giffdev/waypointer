@@ -30,6 +30,11 @@ describe("flight metadata normalization", () => {
     expect(normalizeAircraftMetadata("N/A")).toBeUndefined();
   });
 
+  it("uses locale-stable sentinel folding for Turkish dotted I", () => {
+    expect(normalizeAircraftMetadata("NİL")).toBe("NİL");
+    expect(normalizeAircraftMetadata("NIL")).toBeUndefined();
+  });
+
   it("keeps explicit registrations separate while cleaning placeholders", () => {
     expect(normalizeRegistrationMetadata(" N172EX ")).toBe("N172EX");
     expect(normalizeRegistrationMetadata("0")).toBeUndefined();

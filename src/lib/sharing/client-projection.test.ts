@@ -182,6 +182,18 @@ describe("public map projection parser", () => {
         ],
       }),
     ).toThrow(PublicMapProjectionValidationError);
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        flights: [
+          {
+            ...projection.flights[0],
+            aircraft: ["N/A"],
+            registration: "-",
+          },
+        ],
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
   });
 
   it("rejects per-route count mismatches even when global totals match", () => {

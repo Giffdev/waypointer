@@ -132,7 +132,10 @@ describe("public shared map API", () => {
       "no-store, max-age=0, s-maxage=0, must-revalidate",
     );
     expect(mocks.getPublicMapProjection).toHaveBeenCalledWith("DeVSiN");
-    expect(mocks.consumeRateLimit).toHaveBeenCalledTimes(2);
+    expect(mocks.consumeRateLimit.mock.calls).toEqual([
+      ["public-map-ip", "192.0.2.1", 120, 60_000],
+      ["public-map-handle", "devsin:192.0.2.1", 10, 60_000],
+    ]);
   });
 
   function airport(

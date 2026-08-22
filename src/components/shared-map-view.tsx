@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { FilterCombobox } from "@/components/filter-combobox";
 import GlobePanel from "@/components/globe-panel";
 import type { Airport, MapRoute } from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
@@ -12,25 +13,42 @@ import {
   DEFAULT_PUBLIC_MAP_FILTERS,
   derivePublicMapSlice,
   hasActivePublicMapFilters,
-  publicMapFilterOptions,
+  publicMapFilterOptionsForFilters,
   type PublicMapFilters,
 } from "@/lib/sharing/public-map-filtering";
 import type { PublicMapProjection } from "@/lib/sharing/service";
 
+const PUBLIC_MAP_REVALIDATE_INTERVAL_MS = 30_000;
+
 export function SharedMapView({ handle }: { handle: string }) {
   const [projection, setProjection] = useState<PublicMapProjection | null>(null);
   const [state, setState] = useState<
-    "loading" | "ready" | "not-found" | "republish-required" | "error"
+    | "loading"
+    | "ready"
+    | "not-found"
+    | "republish-required"
+    | "rate-limited"
+    | "error"
   >("loading");
+  const nextRequestAtRef = useRef(0);
 
   useEffect(() => {
+    nextRequestAtRef.current = 0;
     let disposed = false;
     let activeController: AbortController | null = null;
 
     function loadProjection() {
-      if (disposed || activeController) return;
+      if (
+        disposed ||
+        activeController ||
+        Date.now() < nextRequestAtRef.current
+      ) {
+        return;
+      }
       const controller = new AbortController();
       activeController = controller;
+      nextRequestAtRef.current =
+        Date.now() + PUBLIC_MAP_REVALIDATE_INTERVAL_MS;
       setState("loading");
 
       void fetch(`/api/shared/${encodeURIComponent(handle)}`, {
@@ -55,12 +73,30 @@ export function SharedMapView({ handle }: { handle: string }) {
             setState("republish-required");
             return;
           }
+          if (response.status === 429) {
+            const retryAfterSeconds = Number(
+              response.headers.get("Retry-After"),
+            );
+            if (
+              Number.isSafeInteger(retryAfterSeconds) &&
+              retryAfterSeconds > 0
+            ) {
+              nextRequestAtRef.current = Math.max(
+                nextRequestAtRef.current,
+                Date.now() + retryAfterSeconds * 1_000,
+              );
+            }
+            setProjection(null);
+            setState("rate-limited");
+            return;
+          }
           if (!response.ok) throw new Error();
-          setProjection(
-            parsePublicMapProjection(
-              isRecord(body) ? body.map : undefined,
-            ),
+          const parsedProjection = parsePublicMapProjection(
+            isRecord(body) ? body.map : undefined,
           );
+          nextRequestAtRef.current =
+            Date.now() + PUBLIC_MAP_REVALIDATE_INTERVAL_MS;
+          setProjection(parsedProjection);
           setState("ready");
         })
         .catch((error) => {
@@ -118,6 +154,14 @@ export function SharedMapView({ handle }: { handle: string }) {
       </main>
     );
   }
+  if (state === "rate-limited") {
+    return (
+      <main className="shared-map-state">
+        <h1>Shared map temporarily busy</h1>
+        <p role="alert">Please wait a moment, then try this link again.</p>
+      </main>
+    );
+  }
   if (state === "error" || !projection) {
     return (
       <main className="shared-map-state">
@@ -127,7 +171,7 @@ export function SharedMapView({ handle }: { handle: string }) {
     );
   }
 
-  return <SharedMapProjectionView projection={projection} />;
+  return <SharedMapProjectionView key={handle} projection={projection} />;
 }
 
 export function SharedMapProjectionView({
@@ -144,8 +188,8 @@ export function SharedMapProjectionView({
     [filters, projection],
   );
   const filterOptions = useMemo(
-    () => publicMapFilterOptions(projection),
-    [projection],
+    () => publicMapFilterOptionsForFilters(projection, filters),
+    [filters, projection],
   );
   const mapData = useMemo(
     () => toSharedMapData(slice.routes),
@@ -232,52 +276,40 @@ export function SharedMapProjectionView({
                 }
               />
             </label>
-            <label>
-              <span>Aircraft</span>
-              <select
-                aria-label="Filter shared flights by aircraft"
-                value={filters.aircraft}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    aircraft: event.target.value,
-                  }))
-                }
-              >
-                <option value="all">All aircraft</option>
-                {filterOptions.aircraft.map((aircraft) => (
-                  <option value={aircraft} key={aircraft}>
-                    {aircraft}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>Tail number</span>
-              <select
-                aria-label="Filter shared flights by tail number"
-                value={filters.registration}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    registration: event.target.value,
-                  }))
-                }
-              >
-                <option value="all">All tail numbers</option>
-                {filterOptions.registrations.map((registration) => (
-                  <option value={registration} key={registration}>
-                    {registration}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FilterCombobox
+              label="Aircraft type / model"
+              ariaLabel="Filter shared flights by aircraft"
+              searchLabel="shared aircraft search"
+              allLabel="All shared aircraft"
+              value={filters.aircraft}
+              options={filterOptions.aircraft}
+              onChange={(aircraft) =>
+                setFilters((current) => ({ ...current, aircraft }))
+              }
+            />
+            <FilterCombobox
+              label="Tail number / registration"
+              ariaLabel="Filter shared flights by tail number or registration"
+              searchLabel="shared registration search"
+              allLabel="All shared registrations"
+              value={filters.registration}
+              options={filterOptions.registrations}
+              onChange={(registration) =>
+                setFilters((current) => ({ ...current, registration }))
+              }
+            />
           </div>
           <p className="shared-map-filter-status" role="status" aria-live="polite">
             Showing {slice.summary.flightCount.toLocaleString()} of{" "}
             {projection.summary.flightCount.toLocaleString()} shared flights.
             Filters apply only in this browser.
           </p>
+          {slice.summary.flightCount === 0 && (
+            <div className="filter-empty-state">
+              <strong>No shared flights match these filters</strong>
+              <span>Choose another filter or use Clear filters.</span>
+            </div>
+          )}
       </section>
       <section
         className="shared-map-statistics"
