@@ -40,6 +40,9 @@ describe("MapSharingPanel", () => {
 
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.getByText(/entire map/i)).toBeVisible();
+    expect(
+      screen.getByText(/flight dates, roles, aircraft, and tail numbers/i),
+    ).toBeVisible();
     expect(screen.getByText(/does not cap or truncate/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Share my map" }));
 

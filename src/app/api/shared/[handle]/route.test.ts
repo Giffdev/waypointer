@@ -27,7 +27,52 @@ describe("public shared map API", () => {
       owner: { displayName: null },
       summary: { flightCount: 0, routeCount: 0 },
       routes: [],
+      flights: [],
     });
+  });
+
+  it("returns public filter facts without account or session metadata", async () => {
+    mocks.getPublicMapProjection.mockResolvedValueOnce({
+      owner: { displayName: "Public Pilot" },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [
+        {
+          id: "route-1",
+          kind: "private",
+          flightCount: 1,
+          origin: { lat: 47.4, lon: -122.3, country: "US" },
+          destination: { lat: 40.6, lon: -73.8, country: "US" },
+        },
+      ],
+      flights: [
+        {
+          date: "2026-08-14",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routeIds: ["route-1"],
+        },
+      ],
+    });
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+    const body = await response.json();
+    expect(body.map.flights).toEqual([
+      {
+        date: "2026-08-14",
+        kind: "private",
+        role: "pilot",
+        aircraft: ["Cessna 172"],
+        registration: "N12345",
+        routeIds: ["route-1"],
+      },
+    ]);
+    expect(JSON.stringify(body)).not.toMatch(
+      /email|session|accountId|userId|notes|fingerprint|flightId/i,
+    );
   });
 
   it("reads a public username with no token and no-store caching", async () => {

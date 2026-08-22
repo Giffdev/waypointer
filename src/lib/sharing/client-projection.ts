@@ -14,7 +14,16 @@ export class PublicMapProjectionValidationError extends Error {
 export function parsePublicMapProjection(
   value: unknown,
 ): PublicMapProjection {
-  const projection = exactRecord(value, ["owner", "summary", "routes"]);
+  if (!isRecord(value)) throw new PublicMapProjectionValidationError();
+  const hasFlightsKey = Object.hasOwn(value, "flights");
+  const projection = exactRecord(
+    value,
+    hasFlightsKey
+      ? ["owner", "summary", "routes", "flights"]
+      : ["owner", "summary", "routes"],
+  );
+  const hasFlightDimensions =
+    hasFlightsKey && projection.flights !== null;
   const owner = exactRecord(projection.owner, ["displayName"]);
   const summary = exactRecord(projection.summary, [
     "flightCount",
@@ -30,17 +39,51 @@ export function parsePublicMapProjection(
   }
 
   const routes = projection.routes.map(parsePublicRoute);
+  const flights = hasFlightDimensions
+    ? parsePublicFlights(projection.flights)
+    : null;
   const routeIds = new Set(routes.map(({ id }) => id));
+  const routeKindById = new Map(
+    routes.map(({ id, kind }) => [id, kind] as const),
+  );
   const representedLegs = routes.reduce(
     (total, route) => total + route.flightCount,
     0,
   );
+  const referencedLegs =
+    flights?.reduce(
+      (total, flight) => total + flight.routeIds.length,
+      0,
+    ) ?? null;
+  const referencesByRouteId = new Map<string, number>();
+  for (const flight of flights ?? []) {
+    for (const routeId of flight.routeIds) {
+      referencesByRouteId.set(
+        routeId,
+        (referencesByRouteId.get(routeId) ?? 0) + 1,
+      );
+    }
+  }
   if (
     summary.routeCount !== routes.length ||
     routeIds.size !== routes.length ||
     (summary.flightCount === 0) !== (routes.length === 0) ||
     !Number.isSafeInteger(representedLegs) ||
-    summary.flightCount > representedLegs
+    summary.flightCount > representedLegs ||
+    (flights !== null &&
+      (flights.length !== summary.flightCount ||
+        referencedLegs !== representedLegs ||
+        routes.some(
+          (route) =>
+            (referencesByRouteId.get(route.id) ?? 0) !== route.flightCount,
+        ) ||
+        flights.some(
+          (flight) =>
+            flight.routeIds.length === 0 ||
+            flight.routeIds.some(
+              (routeId) => routeKindById.get(routeId) !== flight.kind,
+            ),
+        )))
   ) {
     throw new PublicMapProjectionValidationError();
   }
@@ -52,7 +95,52 @@ export function parsePublicMapProjection(
       routeCount: summary.routeCount,
     },
     routes,
+    flights,
   };
+}
+
+function parsePublicFlights(
+  value: unknown,
+): NonNullable<PublicMapProjection["flights"]> {
+  if (!Array.isArray(value)) {
+    throw new PublicMapProjectionValidationError();
+  }
+  return value.map((entry) => {
+    const flight = exactRecord(entry, [
+      "date",
+      "kind",
+      "role",
+      "aircraft",
+      "registration",
+      "routeIds",
+    ]);
+    if (
+      typeof flight.date !== "string" ||
+      !isPublicDate(flight.date) ||
+      (flight.kind !== "commercial" && flight.kind !== "private") ||
+      (flight.role !== "passenger" && flight.role !== "pilot") ||
+      !Array.isArray(flight.aircraft) ||
+      flight.aircraft.length > 8 ||
+      flight.aircraft.some((value) => !isPublicMetadata(value)) ||
+      (flight.registration !== null &&
+        !isPublicMetadata(flight.registration)) ||
+      !Array.isArray(flight.routeIds) ||
+      flight.routeIds.some(
+        (routeId) =>
+          typeof routeId !== "string" || !ROUTE_ID_PATTERN.test(routeId),
+      )
+    ) {
+      throw new PublicMapProjectionValidationError();
+    }
+    return {
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: [...flight.aircraft],
+      registration: flight.registration,
+      routeIds: [...flight.routeIds],
+    };
+  });
 }
 
 function parsePublicRoute(
@@ -124,6 +212,28 @@ function isDisplayName(value: unknown): value is string | null {
       value === value.trim() &&
       value.length >= 1 &&
       value.length <= 100)
+  );
+}
+
+function isPublicMetadata(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value === value.trim() &&
+    value.length >= 1 &&
+    value.length <= 100 &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function isPublicDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.getUTCFullYear() === Number(match[1]) &&
+    date.getUTCMonth() + 1 === Number(match[2]) &&
+    date.getUTCDate() === Number(match[3])
   );
 }
 

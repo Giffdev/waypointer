@@ -22,7 +22,7 @@ describe("public map sharing contracts", () => {
     expect(publicHandleRateLimitKey(" DeVSiN ")).toBe("devsin");
   });
 
-  it("returns only aggregate route data from stored projections", async () => {
+  it("returns only approved data from stored projections", async () => {
     const execute = vi.fn().mockResolvedValue([
       {
         projection: {
@@ -34,14 +34,14 @@ describe("public map sharing contracts", () => {
               kind: "private",
               flightCount: 1,
               origin: {
-                lat: 47.4,
-                lon: -122.3,
+                lat: 47.456,
+                lon: -122.349,
                 country: "US",
                 airportCode: "SEA",
               },
               destination: {
-                lat: 40.6,
-                lon: -73.8,
+                lat: 40.64,
+                lon: -73.879,
                 country: "US",
                 airportCode: "JFK",
               },
@@ -62,12 +62,99 @@ describe("public map sharing contracts", () => {
           id: "route-1",
           kind: "private",
           flightCount: 1,
-          origin: { lat: 47.4, lon: -122.3, country: "US" },
-          destination: { lat: 40.6, lon: -73.8, country: "US" },
+          origin: { lat: 47.5, lon: -122.3, country: "US" },
+          destination: { lat: 40.6, lon: -73.9, country: "US" },
         },
       ],
+      flights: null,
     });
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("returns only the approved viewer-filter flight facts", async () => {
+    const execute = vi.fn().mockResolvedValue([
+      {
+        projection: {
+          owner: { displayName: "Devin", email: "private@example.com" },
+          summary: { flightCount: 1, routeCount: 1 },
+          routes: [
+            {
+              id: "route-1",
+              kind: "commercial",
+              flightCount: 1,
+              origin: { lat: 47.4, lon: -122.3, country: "US" },
+              destination: { lat: 40.6, lon: -73.8, country: "US" },
+            },
+          ],
+          flights: [
+            {
+              date: "2026-08-01",
+              kind: "commercial",
+              role: "pilot",
+              aircraft: ["Boeing 737"],
+              registration: "N12345",
+              routeIds: ["route-1"],
+              id: "private-flight-id",
+              notes: "private notes",
+              userId: "private-owner-id",
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.getDb.mockReturnValue({ execute });
+
+    const result = await getPublicMapProjection("devsin");
+    expect(result.flights).toEqual([
+      {
+        date: "2026-08-01",
+        kind: "commercial",
+        role: "pilot",
+        aircraft: ["Boeing 737"],
+        registration: "N12345",
+        routeIds: ["route-1"],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toMatch(
+      /private-flight-id|private notes|private-owner-id|private@example\.com/,
+    );
+  });
+
+  it("degrades inconsistent stored flight dimensions to a legacy view", async () => {
+    const route = (id: string, flightCount: number) => ({
+      id,
+      kind: "commercial",
+      flightCount,
+      origin: { lat: 47.4, lon: -122.3, country: "US" },
+      destination: { lat: 40.6, lon: -73.8, country: "US" },
+    });
+    const flight = (routeIds: string[]) => ({
+      date: "2026-08-01",
+      kind: "commercial",
+      role: "pilot",
+      aircraft: [],
+      registration: null,
+      routeIds,
+    });
+    mocks.getDb.mockReturnValue({
+      execute: vi.fn().mockResolvedValue([
+        {
+          projection: {
+            owner: { displayName: null },
+            summary: { flightCount: 2, routeCount: 2 },
+            routes: [route("route-1", 2), route("route-2", 1)],
+            flights: [
+              flight(["route-1"]),
+              flight(["route-2", "route-2"]),
+            ],
+          },
+        },
+      ]),
+    });
+
+    await expect(getPublicMapProjection("devsin")).resolves.toMatchObject({
+      flights: null,
+    });
   });
 
   it("rejects reserved roots and UUID identifiers before querying", async () => {
