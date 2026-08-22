@@ -62,6 +62,31 @@ function verifiedInput(
 }
 
 describe("guided airport release operator", () => {
+  it.each(["0014", "0015", "0016", "0017"] as const)(
+    "accepts the supported %s migration boundary",
+    (migrationBoundary) => {
+      expect(() =>
+        createSnapshotAttestation(verifiedInput({
+          target: {
+            ...target,
+            migrationBoundary,
+          },
+        })),
+      ).not.toThrow();
+    },
+  );
+
+  it("rejects an unsupported migration boundary", () => {
+    expect(() =>
+      createSnapshotAttestation(verifiedInput({
+        target: {
+          ...target,
+          migrationBoundary: "0018",
+        } as OperatorTargetInspection,
+      })),
+    ).toThrow();
+  });
+
   it("rejects an arbitrary pasted br-ID absent from provider data", () => {
     expect(() =>
       createSnapshotAttestation(verifiedInput({
