@@ -10,7 +10,9 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { airportExactIdentity } from "@/lib/flight-data";
 import { formatRouteDirection } from "@/lib/route-direction";
+import type { PublicMapProjection } from "@/lib/sharing/service";
 import { SharedMapView, toSharedMapData } from "./shared-map-view";
 
 vi.mock("@/components/globe-panel", () => ({
@@ -18,12 +20,18 @@ vi.mock("@/components/globe-panel", () => ({
     airports,
     routes,
     viewMode,
+    focusAirportCode,
   }: {
     airports: Array<{ code: string; name: string }>;
     routes: unknown[];
     viewMode: string;
+    focusAirportCode: string;
   }) => (
-    <div data-testid="shared-globe" data-view-mode={viewMode}>
+    <div
+      data-testid="shared-globe"
+      data-view-mode={viewMode}
+      data-focus={focusAirportCode}
+    >
       {routes.length} routes ·{" "}
       {airports.map(({ code, name }) => `${code} ${name}`).join(" · ")}
     </div>
@@ -47,6 +55,10 @@ describe("SharedMapView", () => {
       await screen.findByRole("heading", { name: "Shared Waypointer map" }),
     ).toBeVisible();
     expect(screen.getByTestId("shared-globe")).toHaveTextContent("1 routes");
+    expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+      "data-focus",
+      "",
+    );
     expect(screen.getByTestId("shared-globe")).toHaveTextContent(
       "LAX Los Angeles International Airport",
     );
@@ -78,35 +90,27 @@ describe("SharedMapView", () => {
       "flat",
     );
     expect(fetch).toHaveBeenCalledWith(
-      "/api/shared/public-handle",
+      "/api/shared/public-handle?contract=3",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("key");
   });
 
-  it("aggregates public return legs into one truthful reciprocal route", () => {
-    const forward = {
+  it("consumes the canonical public direction contract without re-aggregation", () => {
+    const canonical: PublicMapProjection["routes"][number] = {
       ...sharedMap().map.routes[0],
       kind: "commercial" as const,
+      directionMode: "both",
     };
-    const mapData = toSharedMapData([
-      { ...forward, flightCount: 2 },
-      {
-        ...forward,
-        id: "return-route",
-        flightCount: 1,
-        origin: forward.destination,
-        destination: forward.origin,
-      },
-    ]);
+    const mapData = toSharedMapData([canonical]);
 
     expect(mapData.routes).toHaveLength(1);
-    expect(
-      [
-        mapData.routes[0].forwardFlightCount,
-        mapData.routes[0].reverseFlightCount,
-      ].sort(),
-    ).toEqual([1, 2]);
+    expect(mapData.routes[0]).toMatchObject({
+      id: "route",
+      forwardFlightCount: 2,
+      reverseFlightCount: 1,
+      directionMode: "both",
+    });
     expect(formatRouteDirection(mapData.routes[0])).toBe("LAX ↔ SJD");
   });
 
@@ -200,6 +204,10 @@ describe("SharedMapView", () => {
     expect(airportFilter).toHaveValue(
       "LAX — Los Angeles International Airport, Los Angeles",
     );
+    expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+      "data-focus",
+      airportExactIdentity(sharedMap().map.routes[0]!.origin),
+    );
 
     now.mockReturnValue(131_000);
     act(() => window.dispatchEvent(new Event("focus")));
@@ -280,6 +288,9 @@ describe("SharedMapView", () => {
         id: `route-${index}`,
         kind: "commercial" as const,
         flightCount: 1,
+        forwardFlightCount: 1,
+        reverseFlightCount: 0,
+        directionMode: "one-way" as const,
         origin: airport(
           `A${index}`,
           `Origin ${index}`,
@@ -402,7 +413,7 @@ describe("SharedMapView", () => {
 function sharedMap() {
   return {
     map: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       owner: { displayName: null },
       summary: { flightCount: 3, routeCount: 1 },
       routes: [
@@ -410,6 +421,9 @@ function sharedMap() {
           id: "route",
           kind: "commercial",
           flightCount: 3,
+          forwardFlightCount: 2,
+          reverseFlightCount: 1,
+          directionMode: "both",
           origin: airport(
             "LAX",
             "Los Angeles International Airport",
@@ -435,7 +449,7 @@ function sharedMap() {
           role: "passenger",
           aircraft: ["Boeing 737"],
           registration: "N12345",
-          routeIds: ["route"],
+          routeLegs: [{ routeId: "route", direction: "forward" }],
         },
         {
           date: "2026-02-15",
@@ -443,7 +457,7 @@ function sharedMap() {
           role: "pilot",
           aircraft: ["Boeing 777"],
           registration: "N777AA",
-          routeIds: ["route"],
+          routeLegs: [{ routeId: "route", direction: "reverse" }],
         },
         {
           date: "2026-03-20",
@@ -451,7 +465,7 @@ function sharedMap() {
           role: "pilot",
           aircraft: ["Airbus A320"],
           registration: "N320BB",
-          routeIds: ["route"],
+          routeLegs: [{ routeId: "route", direction: "forward" }],
         },
       ],
     },

@@ -1,5 +1,5 @@
 import type { Airport, MapRoute } from "./flight-data";
-import { airportGeometryIdentity } from "./route-aggregation";
+import { airportIdentity } from "./route-aggregation";
 
 export type MapFrameScope = "global" | "continental" | "regional" | "local";
 
@@ -288,7 +288,7 @@ function mapSafeAirport(airport: Airport): boolean {
 }
 
 function airportKey(airport: Airport): string {
-  return airportGeometryIdentity(airport);
+  return airportIdentity(airport);
 }
 
 function normalizeLongitude(longitude: number): number {

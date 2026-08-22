@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  airportExactIdentity,
   airports,
+  airportsForRoutes,
   mapRoutes,
   mergeFlightCollections,
   mergeRouteCollections,
@@ -69,5 +71,22 @@ describe("map route collection merging", () => {
       importedCommercial,
     ]);
     expect(merged.some((flight) => flight.kind === "private")).toBe(true);
+  });
+
+  it("keeps distinct persisted airports that share a display code", () => {
+    const first = { ...airports.SEA, identity: "airport-one", code: "DUP" };
+    const second = { ...airports.PAE, identity: "airport-two", code: "DUP" };
+    const collected = airportsForRoutes([
+      {
+        id: "same-code",
+        origin: first,
+        destination: second,
+        kind: "private",
+        flightCount: 1,
+      },
+    ]);
+
+    expect(collected).toHaveLength(2);
+    expect(new Set(collected.map(airportExactIdentity)).size).toBe(2);
   });
 });

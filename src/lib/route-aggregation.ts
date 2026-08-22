@@ -1,5 +1,8 @@
 import {
+  airportExactIdentity,
+  deriveRouteDirectionMode,
   flightLegs,
+  type AggregatedMapRoute,
   type Airport,
   type Flight,
   type MapRoute,
@@ -24,11 +27,8 @@ export function normalizeAirportCode(code: string): string {
   return code.trim().toUpperCase();
 }
 
-export function airportGeometryIdentity(airport: Airport): string {
-  if (Number.isFinite(airport.lat) && Number.isFinite(airport.lon)) {
-    return `geo:${airport.lat.toFixed(5)},${airport.lon.toFixed(5)}`;
-  }
-  return `code:${normalizeAirportCode(airport.code)}`;
+export function airportIdentity(airport: Airport): string {
+  return airportExactIdentity(airport);
 }
 
 export function unorderedRouteKey(
@@ -36,25 +36,27 @@ export function unorderedRouteKey(
   first: Airport,
   second: Airport,
 ): string {
-  return [airportGeometryIdentity(first), airportGeometryIdentity(second)]
-    .sort()
-    .concat(kind)
-    .join("|");
+  const identities = [airportIdentity(first), airportIdentity(second)].sort();
+  return JSON.stringify([kind, identities[0], identities[1]]);
 }
 
 export function aggregateRoutesFromFlights(
   flights: readonly RouteFlight[],
-): MapRoute[] {
+): AggregatedMapRoute[] {
   const routes = new Map<string, RouteAccumulator>();
   for (const flight of flights) {
     for (const leg of flightLegs(flight)) {
-      const originIdentity = airportGeometryIdentity(leg.origin);
-      const destinationIdentity = airportGeometryIdentity(leg.destination);
+      const originIdentity = airportIdentity(leg.origin);
+      const destinationIdentity = airportIdentity(leg.destination);
       const [firstIdentity, secondIdentity] = [
         originIdentity,
         destinationIdentity,
       ].sort();
-      const key = `${flight.kind}|${firstIdentity}|${secondIdentity}`;
+      const key = JSON.stringify([
+        flight.kind,
+        firstIdentity,
+        secondIdentity,
+      ]);
       const existing = routes.get(key);
       if (existing) {
         existing.firstAirport = preferredAirport(
@@ -83,15 +85,29 @@ export function aggregateRoutesFromFlights(
     }
   }
 
-  return [...routes.values()].map((route) => ({
-    id: `flight-route-${route.kind}-${stableIdentityToken(route.firstIdentity)}-${stableIdentityToken(route.secondIdentity)}`,
-    origin: withNormalizedCode(route.firstAirport),
-    destination: withNormalizedCode(route.secondAirport),
-    kind: route.kind,
-    flightCount: route.forwardFlightCount + route.reverseFlightCount,
-    forwardFlightCount: route.forwardFlightCount,
-    reverseFlightCount: route.reverseFlightCount,
-  }));
+  return [...routes.values()].map((route) => {
+    const sameAirport = route.firstIdentity === route.secondIdentity;
+    return {
+      id: `flight-route-${encodeURIComponent(
+        JSON.stringify([
+          route.kind,
+          route.firstIdentity,
+          route.secondIdentity,
+        ]),
+      )}`,
+      origin: withNormalizedCode(route.firstAirport),
+      destination: withNormalizedCode(route.secondAirport),
+      kind: route.kind,
+      flightCount: route.forwardFlightCount + route.reverseFlightCount,
+      forwardFlightCount: route.forwardFlightCount,
+      reverseFlightCount: route.reverseFlightCount,
+      directionMode: deriveRouteDirectionMode(
+        route.forwardFlightCount,
+        route.reverseFlightCount,
+        sameAirport,
+      ),
+    };
+  });
 }
 
 function preferredAirport(current: Airport, candidate: Airport): Airport {
@@ -109,13 +125,4 @@ function preferredAirport(current: Airport, candidate: Airport): Airport {
 function withNormalizedCode(airport: Airport): Airport {
   const code = normalizeAirportCode(airport.code);
   return code === airport.code ? airport : { ...airport, code };
-}
-
-function stableIdentityToken(identity: string): string {
-  let hash = 2166136261;
-  for (const character of identity) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
 }

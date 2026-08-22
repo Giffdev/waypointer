@@ -41,7 +41,7 @@ describe("route direction", () => {
     expect(formatRouteDirection(route)).toBe("SEA ➤ PAE");
   });
 
-  it("uses a symmetric cue and reports both counts for reciprocal routes", () => {
+  it("uses a symmetric cue and reports both counts for routes flown both ways", () => {
     const route = {
       ...baseRoute,
       flightCount: 5,
@@ -49,7 +49,7 @@ describe("route direction", () => {
       reverseFlightCount: 2,
     };
 
-    expect(routeDirection(route).mode).toBe("reciprocal");
+    expect(routeDirection(route).mode).toBe("both");
     expect(formatRouteDirection(route)).toBe("PAE ↔ SEA");
     expect(routeDirectionDetail(route)).toBe("3 PAE ➤ SEA · 2 SEA ➤ PAE");
   });

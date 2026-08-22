@@ -5,7 +5,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Airport } from "@/lib/flight-data";
+import { airportExactIdentity, type Airport } from "@/lib/flight-data";
 import { AirportFocusCombobox } from "./airport-focus-combobox";
 
 const airports: Airport[] = [
@@ -40,12 +40,18 @@ const airports: Airport[] = [
 
 afterEach(cleanup);
 
-function Harness({ onChange = vi.fn() }: { onChange?: (code: string) => void }) {
+function Harness({
+  onChange = vi.fn(),
+  airportOptions = airports,
+}: {
+  onChange?: (identity: string) => void;
+  airportOptions?: Airport[];
+}) {
   const [value, setValue] = useState("");
   return (
     <AirportFocusCombobox
-      airports={airports}
-      activeAirportCodes={new Set(["SEA"])}
+      airports={airportOptions}
+      activeAirportCodes={new Set([airportExactIdentity(airportOptions[0]!)])}
       value={value}
       onChange={(code) => {
         setValue(code);
@@ -80,7 +86,7 @@ describe("AirportFocusCombobox", () => {
     ).not.toBeInTheDocument();
 
     await user.keyboard("{Enter}");
-    expect(onChange).toHaveBeenCalledWith("SEA");
+    expect(onChange).toHaveBeenCalledWith(airportExactIdentity(airports[0]!));
     expect(input).toHaveValue(
       "SEA — Seattle-Tacoma International, Seattle · active",
     );
@@ -97,7 +103,7 @@ describe("AirportFocusCombobox", () => {
 
     await user.click(input);
     await user.keyboard("{ArrowDown}{Enter}");
-    expect(onChange).toHaveBeenCalledWith("SEA");
+    expect(onChange).toHaveBeenCalledWith(airportExactIdentity(airports[0]!));
 
     await user.click(
       screen.getByRole("button", { name: "Clear airport focus filter" }),
@@ -119,6 +125,40 @@ describe("AirportFocusCombobox", () => {
 
     expect(screen.getByRole("status")).toHaveTextContent(
       "No options match “not-a-real-airport”",
+    );
+  });
+
+  it("selects same-code airports by exact identity", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const duplicate = {
+      ...airports[0]!,
+      identity: "distinct-sea",
+      name: "Distinct SEA Airport",
+      lat: airports[0]!.lat + 0.5,
+    };
+    render(
+      <Harness
+        onChange={onChange}
+        airportOptions={[airports[0]!, duplicate]}
+      />,
+    );
+    const input = screen.getByRole("combobox", {
+      name: "Focus airport on map",
+    });
+
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, "Distinct");
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenLastCalledWith(airportExactIdentity(duplicate));
+
+    await user.click(input);
+    await user.clear(input);
+    await user.type(input, "Tacoma");
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenLastCalledWith(
+      airportExactIdentity(airports[0]!),
     );
   });
 });

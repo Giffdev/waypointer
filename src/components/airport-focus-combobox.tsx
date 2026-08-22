@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, type RefObject } from "react";
-import type { Airport } from "@/lib/flight-data";
+import { airportExactIdentity, type Airport } from "@/lib/flight-data";
 import {
   FilterCombobox,
   type FilterComboboxOption,
@@ -18,7 +18,7 @@ export function AirportFocusCombobox({
   airports: Airport[];
   activeAirportCodes: ReadonlySet<string>;
   value: string;
-  onChange: (code: string) => void;
+  onChange: (identity: string) => void;
   inputRef?: RefObject<HTMLInputElement | null>;
   describedBy?: string;
 }) {
@@ -27,14 +27,16 @@ export function AirportFocusCombobox({
       airports
         .toSorted(
           (left, right) =>
-            Number(activeAirportCodes.has(right.code)) -
-              Number(activeAirportCodes.has(left.code)) ||
+            Number(activeAirportCodes.has(airportExactIdentity(right))) -
+              Number(activeAirportCodes.has(airportExactIdentity(left))) ||
             left.code.localeCompare(right.code),
         )
         .map((airport) => ({
-          value: airport.code,
+          value: airportExactIdentity(airport),
           label: `${airport.code} — ${airport.name}, ${airport.city}${
-            activeAirportCodes.has(airport.code) ? " · active" : ""
+            activeAirportCodes.has(airportExactIdentity(airport))
+              ? " · active"
+              : ""
           }`,
           searchText: `${airport.code} ${airport.name} ${airport.city} ${airport.country}`,
           available: true,

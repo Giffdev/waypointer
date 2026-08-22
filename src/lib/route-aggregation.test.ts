@@ -38,7 +38,8 @@ describe("unordered route aggregation", () => {
     ).toEqual([1, 2]);
     expect(feature.properties.laneOffset).toBe(0);
     expect(feature.properties.bidirectional).toBe(true);
-    expect(feature.properties.directionMode).toBe("reciprocal");
+    expect(routes[0].directionMode).toBe("both");
+    expect(feature.properties.directionMode).toBe("both");
     expect(feature.properties.directionCue).toBe("↔");
     expect(feature.properties.routeLabel).toContain("LAX");
     expect(feature.properties.routeLabel).toContain("LAP");
@@ -63,10 +64,15 @@ describe("unordered route aggregation", () => {
       .toBe("➤");
   });
 
-  it("normalizes code case and coordinate-identical aliases without merging distinct airports", () => {
-    const lowerLax = { ...lax, code: "lax" };
-    const aliasLax = { ...lax, code: "KLAX" };
-    const otherLax = { ...lax, lat: lax.lat + 0.5, name: "Different airport" };
+  it("uses persisted airport identity for aliases without merging distinct airports", () => {
+    const lowerLax = { ...lax, identity: "airport-lax", code: "lax" };
+    const aliasLax = { ...lax, identity: "airport-lax", code: "KLAX" };
+    const otherLax = {
+      ...lax,
+      identity: "airport-other",
+      lat: lax.lat + 0.5,
+      name: "Different airport",
+    };
     const routes = aggregateRoutesFromFlights([
       routeFlight("lower", lowerLax, lap),
       routeFlight("alias", lap, aliasLax),
@@ -81,6 +87,47 @@ describe("unordered route aggregation", () => {
         .flatMap(({ origin, destination }) => [origin.code, destination.code])
         .some((code) => code === "lax"),
     ).toBe(false);
+  });
+
+  it("does not merge distinct airports whose coordinates differ below five decimal places", () => {
+    const closeLax = { ...lax, lat: lax.lat + 0.000001 };
+    const routes = aggregateRoutesFromFlights([
+      routeFlight("lax", lax, lap),
+      routeFlight("close", closeLax, lap),
+    ]);
+
+    expect(routes).toHaveLength(2);
+    expect(routes.map(({ flightCount }) => flightCount)).toEqual([1, 1]);
+  });
+
+  it("keeps identity tuples distinct when metadata contains separators", () => {
+    const first = { ...lax, code: "DUP", name: "Alpha|Beta", city: "Gamma" };
+    const second = { ...lax, code: "DUP", name: "Alpha", city: "Beta|Gamma" };
+    const routes = aggregateRoutesFromFlights([
+      routeFlight("first", first, lap),
+      routeFlight("second", second, lap),
+    ]);
+
+    expect(routes).toHaveLength(2);
+  });
+
+  it("keeps route ids distinct when legacy 32-bit identity tokens collide", () => {
+    const first = {
+      ...lax,
+      identity: "e0a8945c-4d11-4f78-aec4-dfa8f940cca0",
+    };
+    const second = {
+      ...lax,
+      identity: "7cf35a11-688a-4b82-9c33-33e51fbac0d7",
+      name: "Distinct airport",
+    };
+    const routes = aggregateRoutesFromFlights([
+      routeFlight("first", first, lap),
+      routeFlight("second", second, lap),
+    ]);
+
+    expect(routes).toHaveLength(2);
+    expect(new Set(routes.map(({ id }) => id)).size).toBe(2);
   });
 
   it("uses the same stable geometry key regardless of direction or input order", () => {

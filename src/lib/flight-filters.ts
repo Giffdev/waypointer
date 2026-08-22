@@ -1,9 +1,10 @@
-import type {
-  Airport,
-  Flight,
-  FlightKind,
-  FlightSource,
-  MapRoute,
+import {
+  airportExactIdentity,
+  type Airport,
+  type Flight,
+  type FlightKind,
+  type FlightSource,
+  type MapRoute,
 } from "./flight-data";
 import { aggregateRoutesFromFlights } from "./route-aggregation";
 import {
@@ -111,7 +112,7 @@ export function airportsForFilteredRoutes(routes: MapRoute[]): Airport[] {
     new Map(
       routes
         .flatMap((route) => [route.origin, route.destination])
-        .map((airport) => [airport.code, airport]),
+        .map((airport) => [airportExactIdentity(airport), airport]),
     ).values(),
   );
 }

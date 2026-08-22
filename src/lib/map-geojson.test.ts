@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { airports, mapRoutes } from "./flight-data";
+import { airportExactIdentity, airports, mapRoutes } from "./flight-data";
 import { createAirportFeatureCollection, createRouteFeatureCollection } from "./map-geojson";
 
 describe("MapLibre map data", () => {
@@ -70,7 +70,7 @@ describe("MapLibre map data", () => {
     expect(collection.features[0].properties.forwardFlightCount).toBe(3);
     expect(collection.features[0].properties.reverseFlightCount).toBe(2);
     expect(collection.features[0].properties.bidirectional).toBe(true);
-    expect(collection.features[0].properties.directionMode).toBe("reciprocal");
+    expect(collection.features[0].properties.directionMode).toBe("both");
     expect(collection.features[0].properties.directionCue).toBe("↔");
     expect(collection.features[0].properties.routeTitle).toBe("PAE ↔ SEA");
     expect(collection.features[0].properties.routeLabel).toContain("flights");
@@ -183,14 +183,22 @@ describe("MapLibre map data", () => {
     );
     expect(activeFeatures).toHaveLength(2);
     expect(
+      new Set(
+        airportCollection.features.map(({ properties }) => properties.identity),
+      ).size,
+    ).toBe(3);
+    expect(
       airportCollection.features.find(
         ({ geometry }) => geometry.coordinates[0] === inactive.lon,
       )?.properties,
     ).toMatchObject({ traffic: 0, isActive: false });
 
-    expect(
-      createRouteFeatureCollection([route]).features[0]?.properties
-        .directionMode,
-    ).toBe("one-way");
+    const routeProperties =
+      createRouteFeatureCollection([route]).features[0]!.properties;
+    expect(routeProperties).toMatchObject({
+      directionMode: "one-way",
+      originIdentity: airportExactIdentity(active),
+      destinationIdentity: airportExactIdentity(destination),
+    });
   });
 });

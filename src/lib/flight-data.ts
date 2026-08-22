@@ -1,6 +1,7 @@
 export type AirportFacility = "commercial" | "general-aviation" | "airstrip";
 
 export type Airport = {
+  identity?: string;
   code: string;
   name: string;
   city: string;
@@ -12,6 +13,7 @@ export type Airport = {
 
 export type FlightKind = "commercial" | "private";
 export type FlightRole = "passenger" | "pilot";
+export type RouteDirectionMode = "one-way" | "both" | "none";
 export type FlightSource =
   | "ForeFlight"
   | "CSV"
@@ -46,7 +48,53 @@ export type MapRoute = {
   flightCount: number;
   forwardFlightCount?: number;
   reverseFlightCount?: number;
+  directionMode?: RouteDirectionMode;
 };
+
+export type AggregatedMapRoute = MapRoute & {
+  forwardFlightCount: number;
+  reverseFlightCount: number;
+  directionMode: RouteDirectionMode;
+};
+
+export function airportExactIdentity(
+  airport: Pick<
+    Airport,
+    | "identity"
+    | "code"
+    | "name"
+    | "city"
+    | "country"
+    | "lat"
+    | "lon"
+    | "facility"
+  >,
+): string {
+  if (airport.identity) return JSON.stringify(["id", airport.identity]);
+  return JSON.stringify([
+    "airport",
+    airport.code.trim().toUpperCase(),
+    airport.name.trim(),
+    airport.city.trim(),
+    airport.country.trim(),
+    Number.isFinite(airport.lat) ? normalizeIdentityZero(airport.lat) : null,
+    Number.isFinite(airport.lon) ? normalizeIdentityZero(airport.lon) : null,
+    airport.facility,
+  ]);
+}
+
+export function deriveRouteDirectionMode(
+  forwardFlightCount: number,
+  reverseFlightCount: number,
+  sameAirport = false,
+): RouteDirectionMode {
+  if (sameAirport || (forwardFlightCount === 0 && reverseFlightCount === 0)) {
+    return "none";
+  }
+  return forwardFlightCount > 0 && reverseFlightCount > 0
+    ? "both"
+    : "one-way";
+}
 
 export type FlightLeg = {
   index: number;
@@ -151,9 +199,13 @@ export function airportsForRoutes(routes: MapRoute[]): Airport[] {
     new Map(
       routes
         .flatMap((route) => [route.origin, route.destination])
-        .map((airport) => [airport.code, airport]),
+        .map((airport) => [airportExactIdentity(airport), airport]),
     ).values(),
   );
+}
+
+function normalizeIdentityZero(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
 }
 
 function routeKey(route: MapRoute): string {
