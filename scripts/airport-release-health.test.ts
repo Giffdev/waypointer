@@ -4,6 +4,7 @@ import { releaseRuntimeClaimsFromEnvironment } from "../src/lib/release-attestat
 import {
   RELEASE_DEPLOYMENT_TRUST,
   verifyApplicationHealth,
+  verifyHistoricalFlightBaseline,
 } from "./airport-release-health";
 import {
   providerReleaseExpectationSha256,
@@ -16,6 +17,21 @@ type FetchImplementation = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+type FlightSnapshotRow = {
+  id: string;
+  user_id: string;
+  origin_airport_id: string;
+  destination_airport_id: string;
+  fingerprint: string;
+  date: string;
+};
+
+function flightSnapshotHash(rows: FlightSnapshotRow[]) {
+  const hash = createHash("sha256");
+  for (const row of rows) hash.update(`${JSON.stringify(row)}\n`);
+  return hash.digest("hex");
+}
+
 const challenge = "h".repeat(43);
 const expectedCodes: Record<string, string> = {
   "00A": "00A",
@@ -25,6 +41,10 @@ const expectedCodes: Record<string, string> = {
   OMK: "OMK",
   KOMK: "OMK",
   S18: "S18",
+  DMK: "DMK",
+  REP: "REP",
+  VDSR: "REP",
+  VDSA: "SAI",
   UIL: "UIL",
   KUIL: "UIL",
 };
@@ -186,8 +206,16 @@ describe("airport deployed application health", () => {
         return Response.json({
           airports: [{ code: expectedCodes[query], name: query }],
         });
+
       }
-      return new Response("ok", { status: 200 });
+      if (
+        ["/map", "/flights", "/import", "/settings"].includes(
+          url.pathname,
+        )
+      ) {
+        return new Response("ok", { status: 200 });
+      }
+      return new Response("unexpected route", { status: 405 });
     });
     await expect(
       verifyApplicationHealth(
@@ -218,7 +246,7 @@ describe("airport deployed application health", () => {
     ).resolves.toMatchObject({
       deploymentId: expectation.deploymentId,
       routesChecked: 5,
-      airportQueriesChecked: 9,
+      airportQueriesChecked: 8,
       defaultTransactionReadOnly: "on",
     });
     for (const [input] of applicationFetch.mock.calls) {
@@ -226,5 +254,122 @@ describe("airport deployed application health", () => {
         `https://${expectation.productionAlias}`,
       );
     }
+    const observedPaths = applicationFetch.mock.calls.map(([input]) =>
+      new URL(String(input)).pathname
+    );
+    expect(observedPaths).toContain("/settings");
+    expect(observedPaths).toContain("/import");
+    expect(observedPaths).not.toContain("/");
+    expect(observedPaths).not.toContain("/api/flights");
+    const airportQueries = applicationFetch.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter((url) => url.pathname === "/api/import/airports")
+      .map((url) => url.searchParams.get("query"));
+    expect(airportQueries).toEqual([
+      "00A",
+      "W01",
+      "OMK",
+      "S18",
+      "DMK",
+      "REP",
+      "VDSR",
+      "VDSA",
+    ]);
+    expect(airportQueries).not.toContain("KOMK");
+    expect(airportQueries).not.toContain("KUIL");
+  });
+});
+
+describe("post-release historical flight health", () => {
+  const baselineRows: FlightSnapshotRow[] = [
+    {
+      id: "00000000-0000-4000-8000-000000000001",
+      user_id: "00000000-0000-4000-8000-000000000010",
+      origin_airport_id: "00000000-0000-4000-8000-000000000020",
+      destination_airport_id:
+        "00000000-0000-4000-8000-000000000021",
+      fingerprint: "existing-one",
+      date: "2018-01-01",
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000002",
+      user_id: "00000000-0000-4000-8000-000000000010",
+      origin_airport_id: "00000000-0000-4000-8000-000000000022",
+      destination_airport_id:
+        "00000000-0000-4000-8000-000000000023",
+      fingerprint: "existing-two",
+      date: "2018-01-02",
+    },
+  ];
+  const reconciledRows: FlightSnapshotRow[] = [
+    {
+      ...baselineRows[0]!,
+      id: "00000000-0000-4000-8000-000000000003",
+      fingerprint: "dmk-rep",
+      date: "2018-10-23",
+    },
+    {
+      ...baselineRows[0]!,
+      id: "00000000-0000-4000-8000-000000000004",
+      fingerprint: "rep-sin",
+      date: "2018-10-26",
+    },
+  ];
+  const before = {
+    count: baselineRows.length,
+    sha256: flightSnapshotHash(baselineRows),
+    ids: [],
+  };
+  const reconciliation = {
+    resolved: 2,
+    completed: 1,
+    conflicts: 0,
+    ambiguous: 0,
+    unknown: 0,
+  };
+
+  it("accepts only the exact reconciled REP imports while preserving the prior baseline", async () => {
+    const unsafe = vi.fn(async (query: string) => {
+      if (query.includes("to_regclass")) return [{ present: true }];
+      if (query.includes("flights.source_type = 'FlightRadar24'")) {
+        return reconciledRows.map(({ id }) => ({ id }));
+      }
+      if (query.includes("id <> all")) return baselineRows;
+      return [...baselineRows, ...reconciledRows].sort((left, right) =>
+        left.id.localeCompare(right.id)
+      );
+    });
+
+    await expect(
+      verifyHistoricalFlightBaseline({ unsafe }, before, reconciliation),
+    ).resolves.toMatchObject({
+      count: 4,
+      sha256: flightSnapshotHash([
+        ...baselineRows,
+        ...reconciledRows,
+      ]),
+    });
+    expect(unsafe).toHaveBeenCalledTimes(5);
+  });
+
+  it("rejects appended rows that do not reproduce the released baseline", async () => {
+    const mutatedBaseline = [
+      { ...baselineRows[0]!, fingerprint: "changed" },
+      baselineRows[1]!,
+    ];
+    const unsafe = vi.fn(async (query: string) => {
+      if (query.includes("to_regclass")) return [{ present: true }];
+      if (query.includes("flights.source_type = 'FlightRadar24'")) {
+        return reconciledRows.map(({ id }) => ({ id }));
+      }
+      if (query.includes("id <> all")) return mutatedBaseline;
+      return [...mutatedBaseline, ...reconciledRows].sort(
+        (left, right) => left.id.localeCompare(right.id),
+      );
+    });
+
+    await expect(
+      verifyHistoricalFlightBaseline({ unsafe }, before, reconciliation),
+    ).rejects.toMatchObject({ diagnosticCode: "health-check-failed" });
   });
 });

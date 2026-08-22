@@ -240,6 +240,7 @@ function hasExactStopConditions(
 function parseApproval(
   approvalPath: string,
   approvalSha256: string,
+  now: number,
 ): AirportReleaseTargetApproval {
   let contents: Buffer;
   let approval: AirportReleaseTargetApproval;
@@ -257,7 +258,6 @@ function parseApproval(
   } catch {
     throw new AirportCatalogSafetyError("target-approval-invalid");
   }
-  const now = Date.now();
   const approvedAt = validDate(approval.approvedAt);
   const expiresAt = validDate(approval.expiresAt);
   const importsPausedAt = validDate(
@@ -349,6 +349,7 @@ function parseProductionPreflight(
   environment: NodeJS.ProcessEnv,
   approval: AirportReleaseTargetApproval,
   approvalTarget: ParsedDatabaseTarget,
+  now: number,
 ): {
   approvedAirportCandidateSha256: string;
   preflight: AirportProductionPreflightEvidence;
@@ -381,7 +382,6 @@ function parseProductionPreflight(
   } catch {
     throw new AirportCatalogSafetyError("target-approval-invalid");
   }
-  const now = Date.now();
   const approvedAt = validDate(approval.approvedAt);
   const generatedAt = validDate(preflight.generatedAt);
   const expiresAt = validDate(preflight.expiresAt);
@@ -511,6 +511,7 @@ function parseProductionPreflight(
 
 export function requireAirportReleaseTarget(
   environment: NodeJS.ProcessEnv = process.env,
+  validationTime = Date.now(),
 ): AirportReleaseTarget {
   const migrationDatabaseUrl = environment.MIGRATION_DATABASE_URL?.trim();
   const migrationTarget = parseDatabaseTarget(migrationDatabaseUrl);
@@ -524,7 +525,11 @@ export function requireAirportReleaseTarget(
   );
   const approvalSha256 =
     environment.AIRPORT_RELEASE_TARGET_APPROVAL_SHA256?.trim() ?? "";
-  const approval = parseApproval(approvalPath, approvalSha256);
+  const approval = parseApproval(
+    approvalPath,
+    approvalSha256,
+    validationTime,
+  );
   const candidateManifestPath = requireRepositoryPath(
     environment.AIRPORT_RELEASE_CANDIDATE_MANIFEST_PATH,
     path.join("artifacts", "release-evidence", "airport-catalog"),
@@ -551,6 +556,7 @@ export function requireAirportReleaseTarget(
           environment,
           approval,
           migrationTarget,
+          validationTime,
         )
       : undefined;
   return {
