@@ -53,6 +53,22 @@ describe("SharedMapView", () => {
       "SJD Los Cabos International Airport",
     );
     expect(screen.getByTestId("shared-globe")).not.toHaveTextContent(/\bR\d+\b/);
+    expect(
+      screen.getByRole("combobox", {
+        name: "Filter shared flights by airport",
+      }),
+    ).toHaveValue("All shared airports");
+    const busiestRoute = screen.getByText(/Busiest route:/).parentElement;
+    expect(busiestRoute).toHaveTextContent(
+      "LAX — Los Angeles International Airport",
+    );
+    expect(busiestRoute).toHaveTextContent(
+      "SJD — Los Cabos International Airport",
+    );
+    expect(
+      screen.getByText(/route details use published airport codes and names/i),
+    ).toBeVisible();
+    expect(document.body).not.toHaveTextContent(/Approximate region/i);
     expect(screen.getByText("Map legend")).toBeVisible();
     expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Flat map" }));
@@ -109,6 +125,83 @@ describe("SharedMapView", () => {
     expect(
       screen.queryByText("No shared flights match these filters"),
     ).not.toBeInTheDocument();
+  });
+
+  it("clears a selected airport when republishing removes that identity", async () => {
+    const user = userEvent.setup();
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    let completeRevalidation!: (response: Response) => void;
+    const revalidation = new Promise<Response>((resolve) => {
+      completeRevalidation = resolve;
+    });
+    const republished = sharedMap();
+    republished.map.routes[0]!.origin = airport(
+      "SEA",
+      "Seattle-Tacoma International Airport",
+      "Seattle",
+      "US",
+      47.44898,
+      -122.30931,
+    );
+    republished.map.routes[0]!.destination = airport(
+      "JFK",
+      "John F Kennedy International Airport",
+      "New York",
+      "US",
+      40.63993,
+      -73.77869,
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockReturnValueOnce(revalidation);
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView handle="public-handle" />);
+    const airportFilter = await screen.findByRole("combobox", {
+      name: "Filter shared flights by airport",
+    });
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Filter shared flights by role",
+      }),
+      "pilot",
+    );
+    await user.clear(airportFilter);
+    await user.type(airportFilter, "LAX");
+    await user.keyboard("{Enter}");
+    expect(airportFilter).toHaveValue(
+      "LAX — Los Angeles International Airport, Los Angeles",
+    );
+
+    now.mockReturnValue(131_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(
+      screen.getByRole("combobox", {
+        name: "Filter shared flights by role",
+      }),
+    ).toHaveValue("pilot");
+    expect(airportFilter).toHaveValue(
+      "LAX — Los Angeles International Airport, Los Angeles",
+    );
+    await act(async () => completeRevalidation(json(republished)));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", {
+          name: "Filter shared flights by airport",
+        }),
+      ).toHaveValue("All shared airports"),
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "Filter shared flights by role",
+      }),
+    ).toHaveValue("pilot");
+    expect(screen.getByTestId("shared-globe")).toHaveTextContent(
+      "SEA Seattle-Tacoma International Airport",
+    );
   });
 
   it("never fabricates airports for a malformed current snapshot", async () => {

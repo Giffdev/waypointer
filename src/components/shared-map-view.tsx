@@ -13,6 +13,7 @@ import {
   DEFAULT_PUBLIC_MAP_FILTERS,
   derivePublicMapSlice,
   hasActivePublicMapFilters,
+  publicMapFilterOptions,
   publicMapFilterOptionsForFilters,
   type PublicMapFilters,
 } from "@/lib/sharing/public-map-filtering";
@@ -49,7 +50,7 @@ export function SharedMapView({ handle }: { handle: string }) {
       activeController = controller;
       nextRequestAtRef.current =
         Date.now() + PUBLIC_MAP_REVALIDATE_INTERVAL_MS;
-      setState("loading");
+      setState((current) => (current === "ready" ? current : "loading"));
 
       void fetch(`/api/shared/${encodeURIComponent(handle)}`, {
         signal: controller.signal,
@@ -183,19 +184,61 @@ export function SharedMapProjectionView({
   const [filters, setFilters] = useState<PublicMapFilters>(
     DEFAULT_PUBLIC_MAP_FILTERS,
   );
+  const projectionAirportOptions = useMemo(
+    () => publicMapFilterOptions(projection).airports,
+    [projection],
+  );
+  const resolvedFilters = useMemo(
+    () =>
+      filters.airport === "all" ||
+      projectionAirportOptions.some(({ value }) => value === filters.airport)
+        ? filters
+        : { ...filters, airport: "all" },
+    [filters, projectionAirportOptions],
+  );
+  useEffect(() => {
+    const validAirportValues = new Set(
+      projectionAirportOptions.map(({ value }) => value),
+    );
+    const timeout = window.setTimeout(() => {
+      setFilters((current) =>
+        current.airport === "all" ||
+        validAirportValues.has(current.airport)
+          ? current
+          : { ...current, airport: "all" },
+      );
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [projectionAirportOptions]);
   const slice = useMemo(
-    () => derivePublicMapSlice(projection, filters),
-    [filters, projection],
+    () => derivePublicMapSlice(projection, resolvedFilters),
+    [projection, resolvedFilters],
   );
   const filterOptions = useMemo(
-    () => publicMapFilterOptionsForFilters(projection, filters),
-    [filters, projection],
+    () => publicMapFilterOptionsForFilters(projection, resolvedFilters),
+    [projection, resolvedFilters],
   );
   const mapData = useMemo(
     () => toSharedMapData(slice.routes),
     [slice.routes],
   );
-  const activeFilters = hasActivePublicMapFilters(filters);
+  const focusedAirportCode = useMemo(
+    () =>
+      mapData.airports.find(
+        (airport) => publicAirportKey(airport) === resolvedFilters.airport,
+      )?.code ?? "",
+    [mapData.airports, resolvedFilters.airport],
+  );
+  const busiestRoute = useMemo(
+    () =>
+      slice.routes.toSorted(
+        (left, right) =>
+          right.flightCount - left.flightCount ||
+          left.id.localeCompare(right.id),
+      )[0] ?? null,
+    [slice.routes],
+  );
+  const activeFilters = hasActivePublicMapFilters(resolvedFilters);
   return (
     <main className="shared-map-page" id="main-content">
       <header className="shared-map-header">
@@ -233,7 +276,7 @@ export function SharedMapProjectionView({
               <span>Role</span>
               <select
                 aria-label="Filter shared flights by role"
-                value={filters.role}
+                value={resolvedFilters.role}
                 onChange={(event) =>
                   setFilters((current) => ({
                     ...current,
@@ -251,8 +294,8 @@ export function SharedMapProjectionView({
               <input
                 aria-label="Filter shared flights from date"
                 type="date"
-                value={filters.startDate}
-                max={filters.endDate || undefined}
+                value={resolvedFilters.startDate}
+                max={resolvedFilters.endDate || undefined}
                 onChange={(event) =>
                   setFilters((current) => ({
                     ...current,
@@ -266,8 +309,8 @@ export function SharedMapProjectionView({
               <input
                 aria-label="Filter shared flights through date"
                 type="date"
-                value={filters.endDate}
-                min={filters.startDate || undefined}
+                value={resolvedFilters.endDate}
+                min={resolvedFilters.startDate || undefined}
                 onChange={(event) =>
                   setFilters((current) => ({
                     ...current,
@@ -281,7 +324,7 @@ export function SharedMapProjectionView({
               ariaLabel="Filter shared flights by aircraft"
               searchLabel="shared aircraft search"
               allLabel="All shared aircraft"
-              value={filters.aircraft}
+              value={resolvedFilters.aircraft}
               options={filterOptions.aircraft}
               onChange={(aircraft) =>
                 setFilters((current) => ({ ...current, aircraft }))
@@ -292,10 +335,22 @@ export function SharedMapProjectionView({
               ariaLabel="Filter shared flights by tail number or registration"
               searchLabel="shared registration search"
               allLabel="All shared registrations"
-              value={filters.registration}
+              value={resolvedFilters.registration}
               options={filterOptions.registrations}
               onChange={(registration) =>
                 setFilters((current) => ({ ...current, registration }))
+              }
+            />
+            <FilterCombobox
+              label="Airport"
+              ariaLabel="Filter shared flights by airport"
+              searchLabel="shared airport search"
+              allLabel="All shared airports"
+              value={resolvedFilters.airport}
+              options={filterOptions.airports}
+              sortOptions={false}
+              onChange={(airport) =>
+                setFilters((current) => ({ ...current, airport }))
               }
             />
           </div>
@@ -331,6 +386,15 @@ export function SharedMapProjectionView({
             value={slice.summary.countryCount}
           />
         </div>
+        {busiestRoute && (
+          <p className="shared-map-route-detail">
+            <strong>Busiest route:</strong>{" "}
+            {formatPublicAirport(busiestRoute.origin)} →{" "}
+            {formatPublicAirport(busiestRoute.destination)} ·{" "}
+            {busiestRoute.flightCount.toLocaleString()}{" "}
+            {busiestRoute.flightCount === 1 ? "flight" : "flights"}
+          </p>
+        )}
       </section>
       <section className="shared-map-canvas" aria-label="Shared Waypointer map">
         <GlobePanel
@@ -339,7 +403,7 @@ export function SharedMapProjectionView({
           visibleKind="all"
           zoom={mapData.homeFrame.zoom}
           zoomCommandToken={0}
-          focusAirportCode=""
+          focusAirportCode={focusedAirportCode}
           selectedRouteId=""
           resetToken={0}
           homeFrame={mapData.homeFrame}
@@ -354,6 +418,10 @@ export function SharedMapProjectionView({
           routes={mapData.routes}
           selectedRouteId=""
         />
+        <p className="shared-map-airport-label-note">
+          Airport labels and route details use published airport codes and
+          names.
+        </p>
       </section>
       <p className="shared-map-privacy">
         Airport names, codes, and public map locations are shared. This public
@@ -376,6 +444,12 @@ function SharedStatistic({
       <strong>{value.toLocaleString()}</strong>
     </article>
   );
+}
+
+function formatPublicAirport(
+  airport: PublicMapProjection["routes"][number]["origin"],
+): string {
+  return `${airport.code} — ${airport.name}`;
 }
 
 const MAX_PUBLIC_FRAME_ROUTES = 128;

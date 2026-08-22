@@ -1024,7 +1024,7 @@ h1 span {
 .shared-map-controls-heading { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .shared-map-controls-heading h2, .shared-map-statistics h2 { font-size: 17px; margin: 2px 0 0; }
 .shared-map-controls-heading .eyebrow { margin: 0; }
-.shared-map-filter-grid { display: grid; gap: 12px; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.shared-map-filter-grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .shared-map-filter-grid label { display: grid; gap: 6px; }
 .shared-map-filter-grid label > span { color: #9bb2b7; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .shared-map-filter-grid > label > input, .shared-map-filter-grid > label > select { background: #071924; border: 1px solid rgba(137,204,208,.22); border-radius: 8px; color: #dce9eb; min-width: 0; padding: 9px; }
@@ -1036,6 +1036,9 @@ h1 span {
 .shared-map-stat-grid article { background: rgba(255,255,255,.025); border: 1px solid rgba(137,204,208,.15); border-radius: 10px; display: grid; gap: 4px; padding: 12px; }
 .shared-map-stat-grid span { color: #8ba3a8; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 .shared-map-stat-grid strong { font-family: var(--font-geist-mono); font-size: 22px; }
+.shared-map-route-detail, .shared-map-airport-label-note { color: #9bb2b7; font-size: 12px; margin: 0; }
+.shared-map-route-detail strong, .shared-map-airport-label-note strong { color: #dce9eb; }
+.shared-map-airport-label-note { margin-top: 10px; }
 .shared-map-canvas { margin: 0 auto; max-width: 1180px; }
 .shared-map-canvas .globe-shell { border: 1px solid rgba(137,204,208,.18); border-radius: 18px; height: min(70svh, 760px); min-height: 440px; overflow: hidden; }
 .shared-map-canvas .map-legend { margin-top: 12px; }

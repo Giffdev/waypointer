@@ -99,6 +99,7 @@ describe("public map viewer filtering", () => {
 
   it("combines role, inclusive dates, aircraft, and registration locally", () => {
     const slice = derivePublicMapSlice(projection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
       role: "pilot",
       startDate: "2026-02-15",
       endDate: "2026-02-15",
@@ -172,7 +173,37 @@ describe("public map viewer filtering", () => {
         value,
         available: true,
       })),
+      airports: [
+        projection.routes[0]!.destination,
+        projection.routes[1]!.destination,
+        projection.routes[2]!.destination,
+        projection.routes[0]!.origin,
+      ].map((value) => ({
+        value: airportKey(value),
+        label: `${value.code} — ${value.name}, ${value.city}`,
+        searchText: `${value.code} ${value.name} ${value.city} ${value.country}`,
+        available: true,
+      })),
     });
+  });
+
+  it("filters by a real airport identity without mutating the projection", () => {
+    const before = structuredClone(projection);
+    const slice = derivePublicMapSlice(projection, {
+      ...DEFAULT_PUBLIC_MAP_FILTERS,
+      airport: airportKey(projection.routes[1]!.destination),
+    });
+    expect(slice.summary).toEqual({
+      flightCount: 1,
+      routeCount: 2,
+      airportCount: 3,
+      countryCount: 2,
+    });
+    expect(slice.routes.map(({ id }) => id)).toEqual([
+      "sea-jfk-commercial",
+      "jfk-lhr-commercial",
+    ]);
+    expect(projection).toEqual(before);
   });
 
   it("marks options unavailable when they conflict with active filters", () => {
@@ -191,7 +222,21 @@ describe("public map viewer filtering", () => {
       { value: "N777AA", available: false },
       { value: "N12345", available: true },
     ]);
+    expect(
+      options.airports.map(({ label, available }) => ({ label, available })),
+    ).toEqual([
+      { label: "JFK — John F Kennedy, New York", available: true },
+      { label: "LHR — London Heathrow, London", available: false },
+      { label: "PDX — Portland International, Portland", available: false },
+      { label: "SEA — Seattle, Seattle", available: true },
+    ]);
   });
+
+  function airportKey(
+    value: PublicMapProjection["routes"][number]["origin"],
+  ): string {
+    return `${value.code}|${value.country}|${value.lat}|${value.lon}`;
+  }
 
   it("processes a large uncapped projection in linear time", () => {
     const flightCount = 25_000;
