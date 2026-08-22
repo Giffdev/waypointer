@@ -4,7 +4,7 @@ import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
 const projection = {
   schemaVersion: 2,
   owner: { displayName: null },
-  summary: { flightCount: 3, routeCount: 1 },
+  summary: { flightCount: 4, routeCount: 2 },
   routes: [
     {
       id: "public-route",
@@ -29,6 +29,29 @@ const projection = {
         facility: "commercial",
       },
     },
+    {
+      id: "unrelated-route",
+      kind: "private",
+      flightCount: 1,
+      origin: {
+        code: "DEN",
+        name: "Denver International Airport",
+        city: "Denver",
+        lat: 39.8561,
+        lon: -104.6737,
+        country: "US",
+        facility: "commercial",
+      },
+      destination: {
+        code: "LHR",
+        name: "London Heathrow Airport",
+        city: "London",
+        lat: 51.47,
+        lon: -0.4543,
+        country: "GB",
+        facility: "commercial",
+      },
+    },
   ],
   flights: [
     {
@@ -38,6 +61,14 @@ const projection = {
       aircraft: ["Boeing 737"],
       registration: "N100AA",
       routeIds: ["public-route"],
+    },
+    {
+      date: "2024-12-01",
+      kind: "private",
+      role: "passenger",
+      aircraft: ["Piper PA-28"],
+      registration: "N400DD",
+      routeIds: ["unrelated-route"],
     },
     {
       date: "2026-02-20",
@@ -143,6 +174,18 @@ test("opens a public username route with no key or token", async ({ page }) => {
   await expect(
     page.getByRole("region", { name: "Shared Waypointer map" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Filter shared flights by airport" }),
+  ).toHaveValue("All shared airports");
+  const busiestRoute = page.getByText(/Busiest route:/).locator("..");
+  await expect(busiestRoute).toContainText(
+    "SEA — Seattle-Tacoma International Airport",
+  );
+  await expect(busiestRoute).toContainText(
+    "JFK — John F Kennedy International Airport",
+  );
+  await expect(page.locator("body")).not.toContainText(/\bR\d+\b/);
+  await expect(page.locator("body")).not.toContainText(/Approximate region/i);
   expect(requests).toEqual([{ method: "GET", body: null }]);
 });
 
@@ -160,7 +203,7 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
 
   await page.goto("/readable-pilot");
   await expect(page.getByRole("status")).toContainText(
-    "Showing 3 of 3 shared flights",
+    "Showing 4 of 4 shared flights",
   );
   await expect(page.getByText("Map legend")).toBeVisible();
   await expect(
@@ -171,13 +214,13 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
     .getByLabel("Filter shared flights by role")
     .selectOption("pilot");
   await expect(page.getByRole("status")).toContainText(
-    "Showing 1 of 3 shared flights",
+    "Showing 1 of 4 shared flights",
   );
   await page.getByRole("button", { name: "Clear filters" }).click();
 
   await page.getByLabel("Filter shared flights from date").fill("2026-01-01");
   await expect(page.getByRole("status")).toContainText(
-    "Showing 2 of 3 shared flights",
+    "Showing 2 of 4 shared flights",
   );
   await page.getByRole("button", { name: "Clear filters" }).click();
 
@@ -187,7 +230,7 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
   await aircraft.fill("Cessna 172");
   await aircraft.press("Enter");
   await expect(page.getByRole("status")).toContainText(
-    "Showing 1 of 3 shared flights",
+    "Showing 1 of 4 shared flights",
   );
   await page.getByRole("button", { name: "Clear filters" }).click();
 
@@ -197,8 +240,27 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
   await registration.fill("N300CC");
   await registration.press("Enter");
   await expect(page.getByRole("status")).toContainText(
-    "Showing 1 of 3 shared flights",
+    "Showing 1 of 4 shared flights",
   );
+  await page.getByRole("button", { name: "Clear filters" }).click();
+
+  const airport = page.getByRole("combobox", {
+    name: "Filter shared flights by airport",
+  });
+  await airport.fill("SEA");
+  await airport.press("Enter");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 3 of 4 shared flights",
+  );
+  const statistics = page.getByRole("region", {
+    name: "Statistics for this view",
+  });
+  await expect(statistics.getByText("Routes").locator("..")).toContainText("1");
+  await expect(statistics.getByText("Airports").locator("..")).toContainText("2");
+  await expect(statistics).toContainText(
+    "SEA — Seattle-Tacoma International Airport",
+  );
+  await expect(statistics).not.toContainText(/\bR\d+\b|Approximate region/i);
 
   expect(apiWrites).toEqual([]);
   expect(

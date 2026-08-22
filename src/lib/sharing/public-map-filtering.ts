@@ -6,6 +6,7 @@ export type PublicMapFilters = {
   endDate: string;
   aircraft: string;
   registration: string;
+  airport: string;
 };
 
 export const DEFAULT_PUBLIC_MAP_FILTERS: PublicMapFilters = {
@@ -14,6 +15,14 @@ export const DEFAULT_PUBLIC_MAP_FILTERS: PublicMapFilters = {
   endDate: "",
   aircraft: "all",
   registration: "all",
+  airport: "all",
+};
+
+export type PublicAirportFilterOption = {
+  value: string;
+  label: string;
+  searchText: string;
+  available: boolean;
 };
 
 export type PublicMapSlice = {
@@ -30,6 +39,7 @@ export type PublicMapSlice = {
 export function publicMapFilterOptions(projection: PublicMapProjection): {
   aircraft: Array<{ value: string; available: boolean }>;
   registrations: Array<{ value: string; available: boolean }>;
+  airports: PublicAirportFilterOption[];
 } {
   return {
     aircraft: sortedUnique(
@@ -40,6 +50,10 @@ export function publicMapFilterOptions(projection: PublicMapProjection): {
         flight.registration ? [flight.registration] : [],
       ),
     ).map((value) => ({ value, available: true })),
+    airports: publicAirportOptions(projection).map((option) => ({
+      ...option,
+      available: true,
+    })),
   };
 }
 
@@ -49,23 +63,34 @@ export function publicMapFilterOptionsForFilters(
 ): {
   aircraft: Array<{ value: string; available: boolean }>;
   registrations: Array<{ value: string; available: boolean }>;
+  airports: PublicAirportFilterOption[];
 } {
   const options = publicMapFilterOptions(projection);
+  const routeAirportKeys = routeAirportKeysById(projection);
   const aircraftFilters = { ...filters, aircraft: "all" };
   const registrationFilters = { ...filters, registration: "all" };
+  const airportFilters = { ...filters, airport: "all" };
   const availableAircraft = new Set<string>();
   const availableRegistrations = new Set<string>();
+  const availableAirports = new Set<string>();
   for (const flight of projection.flights) {
-    if (matchesFilters(flight, aircraftFilters)) {
+    if (matchesFilters(flight, aircraftFilters, routeAirportKeys)) {
       for (const value of flight.aircraft) {
         availableAircraft.add(fold(value));
       }
     }
     if (
       flight.registration &&
-      matchesFilters(flight, registrationFilters)
+      matchesFilters(flight, registrationFilters, routeAirportKeys)
     ) {
       availableRegistrations.add(fold(flight.registration));
+    }
+    if (matchesFilters(flight, airportFilters, routeAirportKeys)) {
+      for (const routeId of flight.routeIds) {
+        for (const airportKey of routeAirportKeys.get(routeId) ?? []) {
+          availableAirports.add(airportKey);
+        }
+      }
     }
   }
   return {
@@ -77,6 +102,10 @@ export function publicMapFilterOptionsForFilters(
       value,
       available: availableRegistrations.has(fold(value)),
     })),
+    airports: options.airports.map((option) => ({
+      ...option,
+      available: availableAirports.has(option.value),
+    })),
   };
 }
 
@@ -84,10 +113,11 @@ export function derivePublicMapSlice(
   projection: PublicMapProjection,
   filters: PublicMapFilters,
 ): PublicMapSlice {
+  const routeAirportKeys = routeAirportKeysById(projection);
   const routeCounts = new Map<string, number>();
   let flightCount = 0;
   for (const flight of projection.flights) {
-    if (!matchesFilters(flight, filters)) continue;
+    if (!matchesFilters(flight, filters, routeAirportKeys)) continue;
     flightCount += 1;
     for (const routeId of flight.routeIds) {
       routeCounts.set(routeId, (routeCounts.get(routeId) ?? 0) + 1);
@@ -114,13 +144,15 @@ export function hasActivePublicMapFilters(
     Boolean(filters.startDate) ||
     Boolean(filters.endDate) ||
     filters.aircraft !== "all" ||
-    filters.registration !== "all"
+    filters.registration !== "all" ||
+    filters.airport !== "all"
   );
 }
 
 function matchesFilters(
   flight: PublicMapProjection["flights"][number],
   filters: PublicMapFilters,
+  routeAirportKeys: ReadonlyMap<string, readonly string[]>,
 ): boolean {
   return (
     (filters.role === "all" || flight.role === filters.role) &&
@@ -132,7 +164,49 @@ function matchesFilters(
       )) &&
     (filters.registration === "all" ||
       (flight.registration !== null &&
-        fold(flight.registration) === fold(filters.registration)))
+        fold(flight.registration) === fold(filters.registration))) &&
+    (filters.airport === "all" ||
+      flight.routeIds.some((routeId) =>
+        routeAirportKeys.get(routeId)?.includes(filters.airport),
+      ))
+  );
+}
+
+function publicAirportOptions(
+  projection: PublicMapProjection,
+): Omit<PublicAirportFilterOption, "available">[] {
+  const options = new Map<
+    string,
+    Omit<PublicAirportFilterOption, "available">
+  >();
+  for (const route of projection.routes) {
+    for (const airport of [route.origin, route.destination]) {
+      const value = publicAirportKey(airport);
+      if (!options.has(value)) {
+        options.set(value, {
+          value,
+          label: `${airport.code} — ${airport.name}, ${airport.city}`,
+          searchText: `${airport.code} ${airport.name} ${airport.city} ${airport.country}`,
+        });
+      }
+    }
+  }
+  return [...options.values()].toSorted((left, right) =>
+    left.label.localeCompare(right.label, "en-US", {
+      sensitivity: "base",
+      numeric: true,
+    }),
+  );
+}
+
+function routeAirportKeysById(
+  projection: PublicMapProjection,
+): Map<string, readonly string[]> {
+  return new Map(
+    projection.routes.map((route) => [
+      route.id,
+      [publicAirportKey(route.origin), publicAirportKey(route.destination)],
+    ]),
   );
 }
 

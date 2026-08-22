@@ -8,6 +8,7 @@ import {
 const ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
+const LEGACY_APPROXIMATE_REGION_PATTERN = /^approximate region(?:\s+in)?(?:\s|$)/i;
 
 export class PublicMapProjectionValidationError extends Error {
   constructor() {
@@ -196,6 +197,8 @@ function parsePublicAirport(
     !isPublicAirportCode(place.code) ||
     !isPublicMetadata(place.name) ||
     !isPublicMetadata(place.city) ||
+    LEGACY_APPROXIMATE_REGION_PATTERN.test(place.name) ||
+    LEGACY_APPROXIMATE_REGION_PATTERN.test(place.city) ||
     typeof place.country !== "string" ||
     place.country !== place.country.trim() ||
     !COUNTRY_PATTERN.test(place.country) ||

@@ -148,6 +148,47 @@ describe("public map projection parser", () => {
     ).toThrow(PublicMapProjectionValidationError);
   });
 
+  it("rejects legacy approximate-region identities without rejecting a real R-number airport", () => {
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        routes: [
+          {
+            ...projection.routes[0],
+            origin: airport(
+              "R1",
+              "Approximate region in US",
+              "US",
+              "US",
+              47.4,
+              -122.3,
+              "general-aviation",
+            ),
+          },
+        ],
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
+    expect(
+      parsePublicMapProjection({
+        ...projection,
+        routes: [
+          {
+            ...projection.routes[0],
+            origin: airport(
+              "R47",
+              "Central Airport",
+              "Central",
+              "US",
+              47.4,
+              -122.3,
+              "general-aviation",
+            ),
+          },
+        ],
+      }).routes[0]?.origin.name,
+    ).toBe("Central Airport");
+  });
+
   it("rejects private flight fields and inconsistent route references", () => {
     expect(() =>
       parsePublicMapProjection({
