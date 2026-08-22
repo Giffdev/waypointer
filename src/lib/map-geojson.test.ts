@@ -70,9 +70,11 @@ describe("MapLibre map data", () => {
     expect(collection.features[0].properties.forwardFlightCount).toBe(3);
     expect(collection.features[0].properties.reverseFlightCount).toBe(2);
     expect(collection.features[0].properties.bidirectional).toBe(true);
+    expect(collection.features[0].properties.directionMode).toBe("reciprocal");
+    expect(collection.features[0].properties.directionCue).toBe("↔");
+    expect(collection.features[0].properties.routeTitle).toBe("PAE ↔ SEA");
     expect(collection.features[0].properties.routeLabel).toContain("flights");
     expect(collection.features[0].properties).not.toHaveProperty("aircraft");
-    expect(collection.features.every(({ properties }) => !properties.showDirection)).toBe(true);
   });
 
   it("shows one direction cue for each clear leg in an A-B-C-A trip", () => {
@@ -89,11 +91,11 @@ describe("MapLibre map data", () => {
     const collection = createRouteFeatureCollection(trip);
 
     expect(
-      collection.features.map(({ properties }) => properties.showDirection),
-    ).toEqual([true, true, true]);
+      collection.features.map(({ properties }) => properties.directionCue),
+    ).toEqual(["➤", "➤", "➤"]);
   });
 
-  it("keeps a single cue for modest repeats and suppresses dense routes", () => {
+  it("keeps truthful cues on modest and dense routes for collision handling", () => {
     const route = mapRoutes.find(({ id }) => id === "route-pae-sea")!;
     const collection = createRouteFeatureCollection([
       { ...route, id: "repeated", flightCount: 3 },
@@ -108,12 +110,44 @@ describe("MapLibre map data", () => {
 
     expect(
       collection.features.find(({ properties }) => properties.id === "repeated")
-        ?.properties.showDirection,
-    ).toBe(true);
+        ?.properties.directionMode,
+    ).toBe("one-way");
     expect(
       collection.features.find(({ properties }) => properties.id === "dense")
-        ?.properties.showDirection,
-    ).toBe(false);
+        ?.properties.directionMode,
+    ).toBe("one-way");
+  });
+
+  it("normalizes reverse-only geometry and labels to actual flown direction", () => {
+    const route = mapRoutes.find(({ id }) => id === "route-pae-sea")!;
+    const collection = createRouteFeatureCollection([{
+      ...route,
+      forwardFlightCount: 0,
+      reverseFlightCount: 4,
+      flightCount: 4,
+    }]);
+
+    expect(collection.features[0].properties.routeTitle).toBe("SEA ➤ PAE");
+    expect(collection.features[0].properties.directionCue).toBe("➤");
+    const coordinates =
+      collection.features[0].geometry.coordinates.flat();
+    expect(coordinates[0][0]).toBeCloseTo(airports.SEA.lon);
+    expect(coordinates[0][1]).toBeCloseTo(airports.SEA.lat);
+    expect(coordinates.at(-1)?.[0]).toBeCloseTo(airports.PAE.lon);
+    expect(coordinates.at(-1)?.[1]).toBeCloseTo(airports.PAE.lat);
+  });
+
+  it("does not invent a cue when directional counts contain no evidence", () => {
+    const route = mapRoutes.find(({ id }) => id === "route-pae-sea")!;
+    const collection = createRouteFeatureCollection([{
+      ...route,
+      forwardFlightCount: 0,
+      reverseFlightCount: 0,
+    }]);
+
+    expect(collection.features[0].properties.directionMode).toBe("none");
+    expect(collection.features[0].properties.directionCue).toBe("");
+    expect(collection.features[0].properties.routeTitle).toBe("PAE — SEA");
   });
 
   it("keeps traffic, activity, and direction separate for duplicate display codes", () => {
@@ -156,7 +190,7 @@ describe("MapLibre map data", () => {
 
     expect(
       createRouteFeatureCollection([route]).features[0]?.properties
-        .showDirection,
-    ).toBe(true);
+        .directionMode,
+    ).toBe("one-way");
   });
 });

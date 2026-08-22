@@ -204,7 +204,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             latest.visibleKind,
             latest.focusAirportCode,
           );
-          applySelectedRoutePresentation(map, selectedRouteIdRef.current);
+          applySelectedRoutePresentation(
+            map,
+            selectedRouteIdRef.current,
+            latest.visibleKind,
+            latest.focusAirportCode,
+          );
           setMapReady(true);
         } catch (error) {
           loadedRef.current = false;
@@ -233,7 +238,13 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           layers: AIRPORT_CIRCLE_LAYERS.filter((layerId) => Boolean(map.getLayer(layerId))),
         })[0];
         if (feature) {
-          clearSelectedRoute(map, selectedRouteIdRef);
+          const latest = dataReadinessRef.current.currentIfReady();
+          clearSelectedRoute(
+            map,
+            selectedRouteIdRef,
+            latest?.visibleKind ?? "all",
+            latest?.focusAirportCode ?? "",
+          );
           showAirportPopup(map, feature);
           const code = String(feature.properties?.code ?? "");
           if (code) onSelectAirportRef.current(code);
@@ -244,7 +255,13 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           layers: map.getLayer(ROUTE_LAYER_IDS.hitbox) ? [ROUTE_LAYER_IDS.hitbox] : [],
         })[0];
         if (!route) {
-          clearSelectedRoute(map, selectedRouteIdRef);
+          const latest = dataReadinessRef.current.currentIfReady();
+          clearSelectedRoute(
+            map,
+            selectedRouteIdRef,
+            latest?.visibleKind ?? "all",
+            latest?.focusAirportCode ?? "",
+          );
           onSelectRouteRef.current("");
           return;
         }
@@ -252,7 +269,13 @@ export default function FlightGlobe(props: FlightGlobeProps) {
         if (!routeId) return;
         selectedRouteIdRef.current = routeId;
         onSelectRouteRef.current(routeId);
-        applySelectedRoutePresentation(map, routeId);
+        const latest = dataReadinessRef.current.currentIfReady();
+        applySelectedRoutePresentation(
+          map,
+          routeId,
+          latest?.visibleKind ?? "all",
+          latest?.focusAirportCode ?? "",
+        );
         showRoutePopup(map, route, event.lngLat);
       });
       map.on("mousemove", (event) => {
@@ -315,7 +338,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !loadedRef.current) return;
-    clearSelectedRoute(map, selectedRouteIdRef);
+    clearSelectedRoute(
+      map,
+      selectedRouteIdRef,
+      props.visibleKind,
+      props.focusAirportCode,
+    );
     applyRoutePresentation(map, props.visibleKind, props.focusAirportCode);
   }, [props.focusAirportCode, props.visibleKind]);
 
@@ -323,7 +351,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     const map = mapRef.current;
     if (!map || !loadedRef.current) return;
     selectedRouteIdRef.current = props.selectedRouteId;
-    applySelectedRoutePresentation(map, props.selectedRouteId);
+    applySelectedRoutePresentation(
+      map,
+      props.selectedRouteId,
+      props.visibleKind,
+      props.focusAirportCode,
+    );
     if (!props.selectedRouteId) return;
 
     const route = props.routes.find(({ id }) => id === props.selectedRouteId);
@@ -348,7 +381,13 @@ export default function FlightGlobe(props: FlightGlobeProps) {
         duration: prefersReducedMotion ? 0 : 700,
       },
     );
-  }, [prefersReducedMotion, props.routes, props.selectedRouteId]);
+  }, [
+    prefersReducedMotion,
+    props.focusAirportCode,
+    props.routes,
+    props.selectedRouteId,
+    props.visibleKind,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -713,8 +752,9 @@ function routeInspectionFilter(
 function routeDirectionFilter(
   visibleKind: FlightGlobeProps["visibleKind"],
   focusAirportCode: string,
+  selectedRouteId = "",
 ) {
-  const filters: unknown[] = [["==", ["get", "showDirection"], true]];
+  const filters: unknown[] = [["!=", ["get", "directionMode"], "none"]];
   if (visibleKind !== "all") {
     filters.push(["==", ["get", "kind"], visibleKind]);
   }
@@ -725,19 +765,29 @@ function routeDirectionFilter(
       ["==", ["get", "destinationCode"], focusAirportCode],
     ]);
   }
+  if (selectedRouteId) {
+    filters.push(["!=", ["get", "id"], selectedRouteId]);
+  }
   return filters.length === 1 ? filters[0] : ["all", ...filters];
 }
 
 function clearSelectedRoute(
   map: MapLibreMap,
   selectedRouteIdRef: { current: string },
+  visibleKind: FlightGlobeProps["visibleKind"],
+  focusAirportCode: string,
 ) {
   if (!selectedRouteIdRef.current || !map.getLayer(ROUTE_LAYER_IDS.selected)) return;
   selectedRouteIdRef.current = "";
-  applySelectedRoutePresentation(map, "");
+  applySelectedRoutePresentation(map, "", visibleKind, focusAirportCode);
 }
 
-function applySelectedRoutePresentation(map: MapLibreMap, routeId: string) {
+function applySelectedRoutePresentation(
+  map: MapLibreMap,
+  routeId: string,
+  visibleKind: FlightGlobeProps["visibleKind"],
+  focusAirportCode: string,
+) {
   const selectedFilter = [
     "==",
     ["get", "id"],
@@ -746,11 +796,19 @@ function applySelectedRoutePresentation(map: MapLibreMap, routeId: string) {
   map.setFilter(ROUTE_LAYER_IDS.selected, selectedFilter);
   map.setFilter(ROUTE_LAYER_IDS.labels, selectedFilter);
   map.setFilter(
+    ROUTE_LAYER_IDS.direction,
+    routeDirectionFilter(
+      visibleKind,
+      focusAirportCode,
+      routeId,
+    ) as never,
+  );
+  map.setFilter(
     ROUTE_LAYER_IDS.selectedDirection,
     [
       "all",
       selectedFilter,
-      ["==", ["get", "showDirection"], false],
+      ["!=", ["get", "directionMode"], "none"],
     ] as never,
   );
   map.setPaintProperty(
@@ -792,8 +850,8 @@ function showRoutePopup(
   const title = document.createElement("strong");
   const detail = document.createElement("span");
   const flightCount = Number(feature.properties?.flightCount ?? 0);
-  title.textContent = `${String(feature.properties?.originCode ?? "")} → ${String(feature.properties?.destinationCode ?? "")}`;
-  detail.textContent = `${flightCount.toLocaleString()} ${flightCount === 1 ? "flight" : "flights"} · ${feature.properties?.kind === "private" ? "Personal logbook" : "Commercial"}`;
+  title.textContent = String(feature.properties?.routeTitle ?? "");
+  detail.textContent = `${flightCount.toLocaleString()} ${flightCount === 1 ? "flight" : "flights"} · ${feature.properties?.kind === "private" ? "Personal logbook" : "Commercial"} · ${String(feature.properties?.directionDetail ?? "Direction unavailable")}`;
   content.className = "airport-popup";
   content.append(title, detail);
   new Popup({ closeButton: true, closeOnClick: true, offset: 10 })

@@ -163,8 +163,9 @@ describe("imported Australian map routes", () => {
         flightCount: 3,
         kind: "private",
         bidirectional: true,
+        directionMode: "reciprocal",
+        directionCue: "↔",
         laneOffset: 0,
-        showDirection: false,
       },
       geometry: { type: "MultiLineString" },
     });

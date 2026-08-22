@@ -14,6 +14,8 @@ const commercialRoute = {
   destination: airports.HNL,
   kind: "commercial" as const,
   flightCount: 4,
+  forwardFlightCount: 2,
+  reverseFlightCount: 2,
 };
 const privateRoute = {
   id: "private",
@@ -46,7 +48,8 @@ describe("MapLegend", () => {
     expect(screen.getByText("Personal route")).toBeTruthy();
     expect(screen.getByText("More flights")).toBeTruthy();
     expect(screen.getByText("Selected route")).toBeTruthy();
-    expect(screen.getByText("Flight direction")).toBeTruthy();
+    expect(screen.getByText("One-way route")).toBeTruthy();
+    expect(screen.getByText("Reciprocal route")).toBeTruthy();
     expect(screen.getByText("Flown airport")).toBeTruthy();
     expect(screen.getByText("Context airport")).toBeTruthy();
   });
@@ -73,7 +76,26 @@ describe("MapLegend", () => {
     expect(screen.queryByText("Selected route")).toBeNull();
     expect(screen.queryByText("Context airport")).toBeNull();
     expect(screen.getByText("Personal route")).toBeTruthy();
-    expect(screen.getByText("Flight direction")).toBeTruthy();
+    expect(screen.getByText("One-way route")).toBeTruthy();
+    expect(screen.queryByText("Reciprocal route")).toBeNull();
     expect(screen.getByText("Flown airport")).toBeTruthy();
+  });
+
+  it("does not invent direction for a selected route without evidence", () => {
+    render(
+      <MapLegend
+        airports={[airports.PAE, airports.SEA]}
+        routes={[{
+          ...privateRoute,
+          forwardFlightCount: 0,
+          reverseFlightCount: 0,
+        }]}
+        selectedRouteId="private"
+      />,
+    );
+
+    expect(screen.getByText("Selected route")).toBeTruthy();
+    expect(screen.queryByText("One-way route")).toBeNull();
+    expect(screen.queryByText("Reciprocal route")).toBeNull();
   });
 });

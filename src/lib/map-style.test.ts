@@ -86,7 +86,7 @@ describe("cartographic map style", () => {
     );
   });
 
-  it("builds subtle midpoint direction layers with selected-route fallback", () => {
+  it("builds truthful midpoint direction layers with selected-route priority", () => {
     const layers = buildRouteDirectionLayers("routes");
     const style: StyleSpecification = {
       version: 8,
@@ -107,11 +107,17 @@ describe("cartographic map style", () => {
     expect(layers[0].layout?.["symbol-placement"]).toBe("line-center");
     expect(layers[0].layout?.["text-rotation-alignment"]).toBe("map");
     expect(layers[0].filter).toEqual([
-      "==",
-      ["get", "showDirection"],
-      true,
+      "!=",
+      ["get", "directionMode"],
+      "none",
     ]);
-    expect(JSON.stringify(layers[1].filter)).toContain("showDirection");
+    expect(layers[0].layout?.["text-field"]).toEqual([
+      "get",
+      "directionCue",
+    ]);
+    expect(JSON.stringify(layers[1].filter)).toContain("directionMode");
+    expect(layers[1].layout?.["text-allow-overlap"]).toBe(true);
+    expect(layers[1].layout?.["text-ignore-placement"]).toBe(true);
   });
 
   it("rebuilds direction layers deterministically for style reloads", () => {

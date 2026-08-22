@@ -1,6 +1,12 @@
 import type { Airport, MapRoute } from "./flight-data";
 import { routeFrequencyStrength } from "./map-visualization";
 import { airportGeometryIdentity } from "./route-aggregation";
+import {
+  formatRouteDirection,
+  routeDirection,
+  routeDirectionDetail,
+  type RouteDirectionMode,
+} from "./route-direction";
 
 type Position = [number, number];
 
@@ -15,6 +21,10 @@ export type RouteFeatureCollection = {
       forwardFlightCount: number;
       reverseFlightCount: number;
       bidirectional: boolean;
+      directionMode: RouteDirectionMode;
+      directionCue: "➤" | "↔" | "";
+      directionDetail: string;
+      routeTitle: string;
       strength: number;
       originCode: string;
       originName: string;
@@ -22,7 +32,6 @@ export type RouteFeatureCollection = {
       destinationName: string;
       routeLabel: string;
       laneOffset: number;
-      showDirection: boolean;
     };
     geometry: {
       type: "MultiLineString";
@@ -54,93 +63,49 @@ export type AirportFeatureCollection = {
 export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCollection {
   const maximumRouteCount = Math.max(1, ...routes.map((route) => route.flightCount));
   const pointCount = routes.length >= 150 ? 28 : routes.length >= 60 ? 36 : 48;
-  const directionVisibility = routeDirectionVisibility(routes);
 
   return {
     type: "FeatureCollection",
     features: routes.map((route) => {
-      const forwardFlightCount =
-        route.forwardFlightCount ?? route.flightCount;
-      const reverseFlightCount = route.reverseFlightCount ?? 0;
-      const reverseGeometry =
-        forwardFlightCount === 0 && reverseFlightCount > 0;
-      const geometryOrigin = reverseGeometry ? route.destination : route.origin;
-      const geometryDestination = reverseGeometry
-        ? route.origin
-        : route.destination;
-      const bidirectional =
-        forwardFlightCount > 0 && reverseFlightCount > 0;
-      const directionSummary = bidirectional
-        ? ` (${route.origin.code} → ${route.destination.code} ${forwardFlightCount} · ${route.destination.code} → ${route.origin.code} ${reverseFlightCount})`
-        : "";
+      const direction = routeDirection(route);
+      const routeTitle = formatRouteDirection(route);
+      const directionDetail = routeDirectionDetail(route);
+      const directionSummary =
+        direction.mode === "reciprocal" ? ` (${directionDetail})` : "";
       return {
         type: "Feature",
         properties: {
           id: route.id,
           kind: route.kind,
           flightCount: route.flightCount,
-          forwardFlightCount,
-          reverseFlightCount,
-          bidirectional,
+          forwardFlightCount: direction.forwardFlightCount,
+          reverseFlightCount: direction.reverseFlightCount,
+          bidirectional: direction.mode === "reciprocal",
+          directionMode: direction.mode,
+          directionCue: direction.cue,
+          directionDetail,
+          routeTitle,
           strength: routeFrequencyStrength(route.flightCount, maximumRouteCount),
           originCode: route.origin.code,
           originName: route.origin.name,
           destinationCode: route.destination.code,
           destinationName: route.destination.name,
-          routeLabel: `${reverseGeometry ? route.destination.code : route.origin.code}${bidirectional ? " ↔ " : " → "}${reverseGeometry ? route.origin.code : route.destination.code} · ${route.flightCount} ${route.flightCount === 1 ? "flight" : "flights"}${directionSummary}`,
+          routeLabel: `${routeTitle} · ${route.flightCount} ${route.flightCount === 1 ? "flight" : "flights"}${directionSummary}`,
           laneOffset: 0,
-          showDirection: directionVisibility.get(route.id) ?? false,
         },
         geometry: {
           type: "MultiLineString",
           coordinates: splitAtAntimeridian(
-            greatCircleCoordinates(geometryOrigin, geometryDestination, pointCount),
+            greatCircleCoordinates(
+              direction.origin,
+              direction.destination,
+              pointCount,
+            ),
           ),
         },
       };
     }),
   };
-}
-
-export function routeDirectionVisibility(routes: MapRoute[]): Map<string, boolean> {
-  const groups = new Map<string, MapRoute[]>();
-  for (const route of routes) {
-    const endpoints = [
-      airportGeometryIdentity(route.origin),
-      airportGeometryIdentity(route.destination),
-    ].sort();
-    const key = `${route.kind}:${endpoints[0]}:${endpoints[1]}`;
-    const group = groups.get(key) ?? [];
-    group.push(route);
-    groups.set(key, group);
-  }
-
-  const visibility = new Map<string, boolean>();
-  for (const group of groups.values()) {
-    const bidirectional = new Set(
-      group.map(
-        ({ origin, destination }) =>
-          `${airportGeometryIdentity(origin)}:${airportGeometryIdentity(destination)}`,
-      ),
-    ).size > 1;
-    for (const route of group) {
-      const hasDirectionCounts =
-        route.forwardFlightCount !== undefined ||
-        route.reverseFlightCount !== undefined;
-      const routeBidirectional = hasDirectionCounts
-        ? (route.forwardFlightCount ?? 0) > 0 &&
-          (route.reverseFlightCount ?? 0) > 0
-        : bidirectional;
-      visibility.set(
-        route.id,
-        !routeBidirectional &&
-          airportGeometryIdentity(route.origin) !==
-            airportGeometryIdentity(route.destination) &&
-          route.flightCount <= 3,
-      );
-    }
-  }
-  return visibility;
 }
 
 export function createAirportFeatureCollection(

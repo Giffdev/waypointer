@@ -18,6 +18,7 @@ import {
   type PublicMapFilters,
 } from "@/lib/sharing/public-map-filtering";
 import type { PublicMapProjection } from "@/lib/sharing/service";
+import { formatRouteDirection } from "@/lib/route-direction";
 
 const PUBLIC_MAP_REVALIDATE_INTERVAL_MS = 30_000;
 
@@ -231,12 +232,12 @@ export function SharedMapProjectionView({
   );
   const busiestRoute = useMemo(
     () =>
-      slice.routes.toSorted(
+      mapData.routes.toSorted(
         (left, right) =>
           right.flightCount - left.flightCount ||
           left.id.localeCompare(right.id),
       )[0] ?? null,
-    [slice.routes],
+    [mapData.routes],
   );
   const activeFilters = hasActivePublicMapFilters(resolvedFilters);
   return (
@@ -389,8 +390,7 @@ export function SharedMapProjectionView({
         {busiestRoute && (
           <p className="shared-map-route-detail">
             <strong>Busiest route:</strong>{" "}
-            {formatPublicAirport(busiestRoute.origin)} →{" "}
-            {formatPublicAirport(busiestRoute.destination)} ·{" "}
+            {formatRouteDirection(busiestRoute, formatPublicAirport)} ·{" "}
             {busiestRoute.flightCount.toLocaleString()}{" "}
             {busiestRoute.flightCount === 1 ? "flight" : "flights"}
           </p>
@@ -447,7 +447,7 @@ function SharedStatistic({
 }
 
 function formatPublicAirport(
-  airport: PublicMapProjection["routes"][number]["origin"],
+  airport: Airport,
 ): string {
   return `${airport.code} — ${airport.name}`;
 }

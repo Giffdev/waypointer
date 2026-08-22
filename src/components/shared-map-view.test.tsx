@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatRouteDirection } from "@/lib/route-direction";
 import { SharedMapView, toSharedMapData } from "./shared-map-view";
 
 vi.mock("@/components/globe-panel", () => ({
@@ -81,6 +82,32 @@ describe("SharedMapView", () => {
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("key");
+  });
+
+  it("aggregates public return legs into one truthful reciprocal route", () => {
+    const forward = {
+      ...sharedMap().map.routes[0],
+      kind: "commercial" as const,
+    };
+    const mapData = toSharedMapData([
+      { ...forward, flightCount: 2 },
+      {
+        ...forward,
+        id: "return-route",
+        flightCount: 1,
+        origin: forward.destination,
+        destination: forward.origin,
+      },
+    ]);
+
+    expect(mapData.routes).toHaveLength(1);
+    expect(
+      [
+        mapData.routes[0].forwardFlightCount,
+        mapData.routes[0].reverseFlightCount,
+      ].sort(),
+    ).toEqual([1, 2]);
+    expect(formatRouteDirection(mapData.routes[0])).toBe("LAX ↔ SJD");
   });
 
   it("filters locally and updates current-view routes and statistics", async () => {
