@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getRedirectResult } from "firebase/auth";
+import { getRedirectResult, signOut } from "firebase/auth";
 import { getFirebaseAuth } from "@/lib/auth/firebase-client";
 
 const REDIRECT_STATE_KEY = "flight-map.firebase.redirect-state";
@@ -41,11 +41,13 @@ export function FirebaseSessionCompletion({
         await auth.authStateReady();
         const user = result?.user ?? auth.currentUser;
         if (!user) throw new Error("redirect user unavailable");
+        const token = await user.getIdToken();
+        await signOut(auth);
         const response = await fetch("/api/auth/firebase", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            token: await user.getIdToken(true),
+            token,
           }),
         });
         if (!response.ok) throw new Error("exchange rejected");
@@ -65,4 +67,3 @@ export function FirebaseSessionCompletion({
 
   return null;
 }
-

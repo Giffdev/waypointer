@@ -34,7 +34,9 @@ export function FirebaseRedirectHandler() {
         const state = sessionStorage.getItem(REDIRECT_STATE_KEY);
         if (state === "start") {
           sessionStorage.setItem(REDIRECT_STATE_KEY, "initiated");
-          await signInWithRedirect(auth, new GoogleAuthProvider());
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: "select_account" });
+          await signInWithRedirect(auth, provider);
           return;
         }
         if (state !== "initiated") {

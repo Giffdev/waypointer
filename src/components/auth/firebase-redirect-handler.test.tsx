@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getFirebaseAuth: vi.fn(() => ({ name: "firebase-auth" })),
+  provider: {
+    setCustomParameters: vi.fn(),
+  },
   signInWithRedirect: vi.fn(),
 }));
 
@@ -13,7 +16,9 @@ vi.mock("@/lib/auth/firebase-client", () => ({
   getFirebaseAuth: mocks.getFirebaseAuth,
 }));
 vi.mock("firebase/auth", () => ({
-  GoogleAuthProvider: vi.fn(),
+  GoogleAuthProvider: vi.fn(function GoogleAuthProvider() {
+    return mocks.provider;
+  }),
   signInWithRedirect: mocks.signInWithRedirect,
 }));
 
@@ -22,6 +27,7 @@ import { FirebaseRedirectHandler } from "./firebase-redirect-handler";
 describe("Firebase redirect callback", () => {
   beforeEach(() => {
     sessionStorage.clear();
+    mocks.provider.setCustomParameters.mockReset();
     mocks.signInWithRedirect.mockReset().mockResolvedValue(undefined);
   });
 
@@ -40,6 +46,13 @@ describe("Firebase redirect callback", () => {
     );
     expect(sessionStorage.getItem("flight-map.firebase.redirect-state")).toBe(
       "initiated",
+    );
+    expect(mocks.provider.setCustomParameters).toHaveBeenCalledWith({
+      prompt: "select_account",
+    });
+    expect(mocks.signInWithRedirect).toHaveBeenCalledWith(
+      { name: "firebase-auth" },
+      mocks.provider,
     );
   });
 
