@@ -41,11 +41,12 @@ export function FirebaseSessionCompletion({
         await auth.authStateReady();
         const user = result?.user ?? auth.currentUser;
         if (!user) throw new Error("redirect user unavailable");
+        const token = await user.getIdToken();
         const response = await fetch("/api/auth/firebase", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            token: await user.getIdToken(true),
+            token,
           }),
         });
         if (!response.ok) throw new Error("exchange rejected");
@@ -65,4 +66,3 @@ export function FirebaseSessionCompletion({
 
   return null;
 }
-

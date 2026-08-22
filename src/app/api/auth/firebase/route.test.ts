@@ -69,6 +69,10 @@ describe("Firebase session exchange", () => {
     expect(mocks.resolveFirebaseAccount).toHaveBeenCalledWith(claims);
     expect(mocks.createDatabaseSession).toHaveBeenCalledWith("local-user");
     expect(response.status).toBe(200);
+    expect(response.headers.get("server-timing")).toMatch(
+      /rate-limit;dur=.*token-verification;dur=.*account-mapping;dur=.*session-issuance;dur=.*total;dur=/,
+    );
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("returns the same generic rejection for invalid or inactive identities", async () => {

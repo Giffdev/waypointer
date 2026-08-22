@@ -59,7 +59,31 @@ describe("global Firebase session completion", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: "firebase-id-token" }),
     });
+    expect(mocks.getIdToken).toHaveBeenCalledOnce();
+    expect(mocks.getIdToken).toHaveBeenCalledWith();
     expect(sessionStorage.getItem("flight-map.firebase.redirect-state")).toBeNull();
+  });
+
+  it("does not retry a rejected exchange or force a redundant token refresh", async () => {
+    sessionStorage.setItem("flight-map.firebase.redirect-state", "initiated");
+    mocks.getRedirectResult.mockResolvedValue({
+      user: { getIdToken: mocks.getIdToken },
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ ok: false }), { status: 503 }),
+    );
+    const navigate = vi.fn();
+
+    render(<FirebaseSessionCompletion navigate={navigate} />);
+
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(
+        "/auth/sign-in?error=firebase-sign-in-incomplete",
+      ),
+    );
+    expect(mocks.getIdToken).toHaveBeenCalledOnce();
+    expect(mocks.getIdToken).toHaveBeenCalledWith();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("surfaces a safe error instead of silently ignoring a null result and user", async () => {
