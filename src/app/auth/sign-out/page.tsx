@@ -1,17 +1,14 @@
-import { signOut } from "@/lib/auth";
+import { signOutToHomepage } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default function SignOutPage() {
   return (
-    <main className="app-shell" id="main-content">
+    <main className="app-shell" id="main-content" tabIndex={-1}>
       <section className="content-section route-page">
         <h1>Sign out of Waypointer?</h1>
         <form
-          action={async () => {
-            "use server";
-            await signOut({ redirectTo: "/auth/sign-in" });
-          }}
+          action={signOutToHomepage}
         >
           <button type="submit">Sign out</button>
         </form>

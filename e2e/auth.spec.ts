@@ -167,3 +167,37 @@ test("configured credentials sign-in reaches the private map", async ({
     }),
   ).toBeVisible();
 });
+
+test("profile sign-out returns home and clears protected access", async ({
+  page,
+  context,
+}) => {
+  test.skip(
+    !persistedCredentialsEnabled,
+    "Persisted E2E credentials are not configured.",
+  );
+
+  await page.goto("/auth/sign-in");
+  await page
+    .getByLabel("Email address", { exact: true })
+    .fill(persistedEmail!);
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill(persistedPassword!);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/map$/);
+
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "Sign out" }).last().click();
+
+  await expect(page).toHaveURL(/^https?:\/\/[^/]+\/$/);
+  expect(
+    (await context.cookies()).some((cookie) =>
+      cookie.name.endsWith("authjs.session-token"),
+    ),
+  ).toBe(false);
+  await page.goto("/settings");
+  await expect(page).toHaveURL(
+    /\/auth\/sign-in\?callbackUrl=%2Fsettings$/,
+  );
+});
