@@ -423,7 +423,7 @@ function parseProductionPreflight(
     preflight.releaseControlPlane.aliasDeploymentId !==
       preflight.releaseControlPlane.deploymentId ||
     preflight.releaseControlPlane.productionAlias !==
-      "flight-map-one.vercel.app" ||
+      "waypointer-app.vercel.app" ||
     preflight.releaseControlPlane.projectId !==
       "prj_1XEu7EWNl1Eekl3TKQ6FnKnGznv8" ||
     preflight.releaseControlPlane.orgId !==

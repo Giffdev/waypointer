@@ -102,6 +102,12 @@ the exact Auth.js callback URLs `/api/auth/callback/google` and
 `/api/auth/callback/microsoft-entra-id`. Local placeholders and filesystem
 storage are rejected outside the explicit loopback development path.
 
+The canonical Production origin is `https://waypointer-app.vercel.app`.
+Production `AUTH_URL`, `NEXTAUTH_URL`, the Firebase auth proxy domain, Google
+OAuth JavaScript origin, and Google OAuth redirect URI must all agree with that
+origin. `https://flight-map-one.vercel.app` remains a legacy entry point and
+redirects to the canonical origin.
+
 Runtime database connections use `DATABASE_URL` and a bounded pool. Production
 defaults to one connection for serverless/Vercel processes; `DB_POOL_MAX`
 overrides it explicitly (a future dedicated worker is expected to use about

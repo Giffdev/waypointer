@@ -8,7 +8,7 @@ const expectation = {
   orgId: "team_qymLK9gugmE5lSs2mxC5XqRY",
   deploymentId: "dpl_candidate123",
   deploymentUrl: "https://flight-map-candidate.vercel.app",
-  productionAlias: "flight-map-one.vercel.app",
+  productionAlias: "waypointer-app.vercel.app",
   priorAliasDeploymentId: "dpl_previous123",
   sourceCommit: { commitSha: "a".repeat(40) },
   candidateManifestSha256: "b".repeat(64),
@@ -26,7 +26,7 @@ function immutableEvidence() {
 
 function aliasEvidence() {
   return {
-    origin: "https://flight-map-one.vercel.app",
+    origin: "https://waypointer-app.vercel.app",
     aliasDeploymentId: expectation.deploymentId,
   } as never;
 }

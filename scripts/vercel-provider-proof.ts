@@ -28,7 +28,7 @@ export const RELEASE_DEPLOYMENT_TRUST = {
   teamSlug: "giffdevs-projects",
   projectName: "flight-map",
   environment: "production",
-  productionAlias: "flight-map-one.vercel.app",
+  productionAlias: "waypointer-app.vercel.app",
   gitProvider: "github",
   gitRepoOwner: "giffdev",
   gitRepoName: "waypointer",

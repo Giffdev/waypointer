@@ -6,5 +6,9 @@
   "flight-map-one.vercel.app": {
     "authorizedJavaScriptOrigin": "https://flight-map-one.vercel.app",
     "authorizedRedirectUri": "https://flight-map-one.vercel.app/__/auth/handler"
+  },
+  "waypointer-app.vercel.app": {
+    "authorizedJavaScriptOrigin": "https://waypointer-app.vercel.app",
+    "authorizedRedirectUri": "https://waypointer-app.vercel.app/__/auth/handler"
   }
 }
