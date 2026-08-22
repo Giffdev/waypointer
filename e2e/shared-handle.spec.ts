@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
+import { installOpenMapAttributionFixture } from "./map-style-fixture";
 
 const projection = {
   schemaVersion: 2,
@@ -188,14 +189,24 @@ test("opens a public username route with no key or token", async ({ page }) => {
     });
     await route.fulfill({ json: { map: projection } });
   });
+  await installOpenMapAttributionFixture(page);
 
   await page.goto("/readable-pilot");
 
+  await expect(page.getByText("MVP production", { exact: true })).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Shared Waypointer map" }),
   ).toBeVisible();
   await expect(
     page.getByRole("region", { name: "Shared Waypointer map" }),
+  ).toBeVisible();
+  const attribution = page.locator(".maplibregl-ctrl-attrib");
+  await expect(attribution).toBeVisible();
+  await expect(attribution).toContainText("OpenMapTiles");
+  await expect(attribution).toContainText("OpenStreetMap");
+  await expect(page.locator(".maplibregl-ctrl-attrib-button")).toBeHidden();
+  await expect(
+    page.getByText("Terrain data credits", { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Filter shared flights by airport" }),

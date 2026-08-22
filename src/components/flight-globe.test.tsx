@@ -1,18 +1,24 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Airport, MapRoute } from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 
 const mapMocks = vi.hoisted(() => {
   const instances: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
-  return { instances };
+  const attributionOptions: Array<Record<string, unknown>> = [];
+  const mapOptions: Array<Record<string, unknown>> = [];
+  return { attributionOptions, instances, mapOptions };
 });
 
 vi.mock("maplibre-gl", () => ({
-  AttributionControl: class {},
+  AttributionControl: class {
+    constructor(options: Record<string, unknown>) {
+      mapMocks.attributionOptions.push(options);
+    }
+  },
   ScaleControl: class {},
   Popup: class {
     setLngLat() { return this; }
@@ -21,7 +27,8 @@ vi.mock("maplibre-gl", () => ({
   },
   setWorkerUrl: vi.fn(),
   Map: class {
-    constructor() {
+    constructor(options: Record<string, unknown>) {
+      mapMocks.mapOptions.push(options);
       const methods: Record<string, ReturnType<typeof vi.fn>> = {
         addControl: vi.fn(),
         addLayer: vi.fn(),
@@ -101,10 +108,21 @@ const homeFrame: MapFrame = {
 };
 
 beforeEach(() => {
+  mapMocks.attributionOptions.length = 0;
   mapMocks.instances.length = 0;
+  mapMocks.mapOptions.length = 0;
   vi.stubGlobal("fetch", vi.fn(async () => ({
     ok: true,
-    json: async () => ({ version: 8, sources: {}, layers: [] }),
+    json: async () => ({
+      version: 8,
+      sources: {
+        openmaptiles: {
+          type: "vector",
+          url: "https://tiles.openfreemap.org/planet",
+        },
+      },
+      layers: [],
+    }),
   })));
 });
 
@@ -114,6 +132,41 @@ afterEach(() => {
 });
 
 describe("FlightGlobe reduced motion", () => {
+  it("keeps required map attribution visible and exposes complete terrain credits", async () => {
+    installMatchMedia(false);
+
+    render(<FlightGlobe {...defaultProps()} />);
+    await readyMap();
+
+    expect(mapMocks.attributionOptions).toEqual([
+      {
+        compact: false,
+        customAttribution: expect.stringContaining("OpenStreetMap"),
+      },
+    ]);
+    expect(mapMocks.mapOptions[0]).toMatchObject({
+      style: {
+        sources: {
+          openmaptiles: {
+            attribution: expect.stringContaining("OpenStreetMap"),
+          },
+        },
+      },
+    });
+    expect(
+      screen.getByText("Terrain data credits", { exact: true }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/ArcticDEM terrain from DigitalGlobe imagery/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Terrain licence details" }),
+    ).toHaveAttribute(
+      "href",
+      "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
+    );
+  });
+
   it("uses immediate camera updates while preserving every final state", async () => {
     installMatchMedia(true);
     const props = defaultProps();
