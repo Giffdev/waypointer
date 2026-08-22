@@ -5,8 +5,16 @@ import GlobePanel from "@/components/globe-panel";
 import type { Airport, MapRoute } from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
+import { MapLegend } from "@/components/map-legend";
 import type { MapViewMode } from "@/lib/map-view-mode";
 import { parsePublicMapProjection } from "@/lib/sharing/client-projection";
+import {
+  DEFAULT_PUBLIC_MAP_FILTERS,
+  derivePublicMapSlice,
+  hasActivePublicMapFilters,
+  publicMapFilterOptions,
+  type PublicMapFilters,
+} from "@/lib/sharing/public-map-filtering";
 import type { PublicMapProjection } from "@/lib/sharing/service";
 
 export function SharedMapView({ handle }: { handle: string }) {
@@ -105,10 +113,22 @@ export function SharedMapProjectionView({
   projection: PublicMapProjection;
 }) {
   const [viewMode, setViewMode] = useState<MapViewMode>("globe");
-  const mapData = useMemo(
-    () => toSharedMapData(projection.routes),
-    [projection.routes],
+  const [filters, setFilters] = useState<PublicMapFilters>(
+    DEFAULT_PUBLIC_MAP_FILTERS,
   );
+  const slice = useMemo(
+    () => derivePublicMapSlice(projection, filters),
+    [filters, projection],
+  );
+  const filterOptions = useMemo(
+    () => publicMapFilterOptions(projection),
+    [projection],
+  );
+  const mapData = useMemo(
+    () => toSharedMapData(slice.routes),
+    [slice.routes],
+  );
+  const activeFilters = hasActivePublicMapFilters(filters);
   return (
     <main className="shared-map-page" id="main-content">
       <header className="shared-map-header">
@@ -119,10 +139,151 @@ export function SharedMapProjectionView({
             : "Shared Waypointer map"}
         </h1>
         <p>
-          Approximate aggregated routes · {projection.summary.flightCount.toLocaleString()} flights · {mapData.routes.length.toLocaleString()} routes
+          Approximate aggregated routes · {slice.summary.flightCount.toLocaleString()} flights · {slice.summary.routeCount.toLocaleString()} routes
         </p>
         <MapViewToggle value={viewMode} onChange={setViewMode} />
       </header>
+      {slice.filteringAvailable ? (
+        <section
+          className="shared-map-controls panel-surface"
+          aria-labelledby="shared-map-filters-title"
+        >
+          <div className="shared-map-controls-heading">
+            <div>
+              <p className="eyebrow">Viewer controls</p>
+              <h2 id="shared-map-filters-title">Filter shared flights</h2>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!activeFilters}
+              onClick={() => setFilters(DEFAULT_PUBLIC_MAP_FILTERS)}
+            >
+              Clear filters
+            </button>
+          </div>
+          <div className="shared-map-filter-grid">
+            <label>
+              <span>Role</span>
+              <select
+                aria-label="Filter shared flights by role"
+                value={filters.role}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    role: event.target.value as PublicMapFilters["role"],
+                  }))
+                }
+              >
+                <option value="all">All roles</option>
+                <option value="pilot">Pilot</option>
+                <option value="passenger">Passenger</option>
+              </select>
+            </label>
+            <label>
+              <span>From date</span>
+              <input
+                aria-label="Filter shared flights from date"
+                type="date"
+                value={filters.startDate}
+                max={filters.endDate || undefined}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    startDate: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label>
+              <span>Through date</span>
+              <input
+                aria-label="Filter shared flights through date"
+                type="date"
+                value={filters.endDate}
+                min={filters.startDate || undefined}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    endDate: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label>
+              <span>Aircraft</span>
+              <select
+                aria-label="Filter shared flights by aircraft"
+                value={filters.aircraft}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    aircraft: event.target.value,
+                  }))
+                }
+              >
+                <option value="all">All aircraft</option>
+                {filterOptions.aircraft.map((aircraft) => (
+                  <option value={aircraft} key={aircraft}>
+                    {aircraft}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Tail number</span>
+              <select
+                aria-label="Filter shared flights by tail number"
+                value={filters.registration}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    registration: event.target.value,
+                  }))
+                }
+              >
+                <option value="all">All tail numbers</option>
+                {filterOptions.registrations.map((registration) => (
+                  <option value={registration} key={registration}>
+                    {registration}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="shared-map-filter-status" role="status" aria-live="polite">
+            Showing {slice.summary.flightCount.toLocaleString()} of{" "}
+            {projection.summary.flightCount.toLocaleString()} shared flights.
+            Filters apply only in this browser.
+          </p>
+        </section>
+      ) : (
+        <p className="shared-map-legacy-notice" role="status">
+          This existing share shows every published flight. The owner can
+          republish it to enable viewer filters.
+        </p>
+      )}
+      <section
+        className="shared-map-statistics"
+        aria-labelledby="shared-map-statistics-title"
+      >
+        <h2 id="shared-map-statistics-title">Statistics for this view</h2>
+        <div className="shared-map-stat-grid">
+          <SharedStatistic
+            label="Flights"
+            value={slice.summary.flightCount}
+          />
+          <SharedStatistic label="Routes" value={slice.summary.routeCount} />
+          <SharedStatistic
+            label="Regions"
+            value={slice.summary.regionCount}
+          />
+          <SharedStatistic
+            label="Countries"
+            value={slice.summary.countryCount}
+          />
+        </div>
+      </section>
       <section className="shared-map-canvas" aria-label="Shared Waypointer map">
         <GlobePanel
           airports={mapData.airports}
@@ -140,6 +301,11 @@ export function SharedMapProjectionView({
           onSelectRoute={() => {}}
           onZoomChange={() => {}}
         />
+        <MapLegend
+          airports={mapData.airports}
+          routes={mapData.routes}
+          selectedRouteId=""
+        />
       </section>
       <p className="shared-map-privacy">
         Locations are intentionally approximate. This public view cannot edit
@@ -149,7 +315,26 @@ export function SharedMapProjectionView({
   );
 }
 
-function toSharedMapData(publicRoutes: PublicMapProjection["routes"]) {
+function SharedStatistic({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <article>
+      <span>{label}</span>
+      <strong>{value.toLocaleString()}</strong>
+    </article>
+  );
+}
+
+const MAX_PUBLIC_FRAME_ROUTES = 128;
+
+export function toSharedMapData(
+  publicRoutes: PublicMapProjection["routes"],
+) {
   const airportByKey = new Map<string, Airport>();
   const routes = new Map<string, MapRoute>();
   const airportFor = (point: PublicMapProjection["routes"][number]["origin"]) => {
@@ -171,16 +356,14 @@ function toSharedMapData(publicRoutes: PublicMapProjection["routes"]) {
   for (const route of publicRoutes) {
     const origin = airportFor(route.origin);
     const destination = airportFor(route.destination);
-    const endpoints = [
-      `${route.origin.lat.toFixed(1)}|${route.origin.lon.toFixed(1)}`,
-      `${route.destination.lat.toFixed(1)}|${route.destination.lon.toFixed(1)}`,
-    ].sort();
+    const originKey = publicRegionKey(route.origin);
+    const destinationKey = publicRegionKey(route.destination);
+    const endpoints = [originKey, destinationKey].sort();
     const key = `${route.kind}|${endpoints.join("|")}`;
     const existing = routes.get(key);
     if (existing) {
       existing.flightCount += route.flightCount;
-      const incomingForward =
-        endpoints[0] === `${route.origin.lat.toFixed(1)}|${route.origin.lon.toFixed(1)}`;
+      const incomingForward = endpoints[0] === originKey;
       if (incomingForward) {
         existing.forwardFlightCount =
           (existing.forwardFlightCount ?? 0) + route.flightCount;
@@ -190,8 +373,7 @@ function toSharedMapData(publicRoutes: PublicMapProjection["routes"]) {
       }
       continue;
     }
-    const canonical =
-      endpoints[0] === `${route.origin.lat.toFixed(1)}|${route.origin.lon.toFixed(1)}`;
+    const canonical = endpoints[0] === originKey;
     routes.set(key, {
       id: `shared-route-${routes.size + 1}`,
       origin: canonical ? origin : destination,
@@ -203,11 +385,27 @@ function toSharedMapData(publicRoutes: PublicMapProjection["routes"]) {
     });
   }
   const aggregatedRoutes = [...routes.values()];
+  const frameStride = Math.max(
+    1,
+    Math.ceil(aggregatedRoutes.length / MAX_PUBLIC_FRAME_ROUTES),
+  );
+  const frameRoutes =
+    frameStride === 1
+      ? aggregatedRoutes
+      : aggregatedRoutes
+          .filter((_, index) => index % frameStride === 0)
+          .slice(0, MAX_PUBLIC_FRAME_ROUTES);
   return {
     airports: [...airportByKey.values()],
     routes: aggregatedRoutes,
-    homeFrame: deriveInitialMapFrame(aggregatedRoutes),
+    homeFrame: deriveInitialMapFrame(frameRoutes),
   };
+}
+
+function publicRegionKey(
+  point: PublicMapProjection["routes"][number]["origin"],
+): string {
+  return `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

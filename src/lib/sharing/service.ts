@@ -11,6 +11,10 @@ import {
 } from "@/lib/db/schema";
 import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
 
+const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const PUBLIC_COUNTRY_PATTERN =
+  /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
+
 export type OwnerShareStatus = {
   enabled: boolean;
   publicHandle: string | null;
@@ -30,6 +34,14 @@ export type PublicMapProjection = {
     origin: { lat: number; lon: number; country: string };
     destination: { lat: number; lon: number; country: string };
   }>;
+  flights: Array<{
+    date: string;
+    kind: "commercial" | "private";
+    role: "passenger" | "pilot";
+    aircraft: string[];
+    registration: string | null;
+    routeIds: string[];
+  }> | null;
 };
 
 export class ShareNotFoundError extends Error {}
@@ -172,27 +184,24 @@ export async function getPublicMapProjection(
   }>(sql`select public_map_projection_by_handle(${handle}) as projection`);
   const projection = result[0]?.projection;
   if (!projection) throw new ShareNotFoundError();
+  const publicRoutes = sanitizeStoredPublicRoutes(projection.routes);
+  const publicFlights = sanitizeStoredPublicFlights(
+    projection.flights,
+    new Map(
+      publicRoutes.map(({ id, kind, flightCount }) => [
+        id,
+        { kind, flightCount },
+      ]),
+    ),
+  );
   return {
     owner: { displayName: projection.owner.displayName },
     summary: {
       flightCount: projection.summary.flightCount,
       routeCount: projection.summary.routeCount,
     },
-    routes: projection.routes.map((route) => ({
-      id: route.id,
-      kind: route.kind,
-      flightCount: route.flightCount,
-      origin: {
-        lat: route.origin.lat,
-        lon: route.origin.lon,
-        country: route.origin.country,
-      },
-      destination: {
-        lat: route.destination.lat,
-        lon: route.destination.lon,
-        country: route.destination.country,
-      },
-    })),
+    routes: publicRoutes,
+    flights: publicFlights,
   };
 }
 
@@ -207,7 +216,12 @@ async function createSnapshot(
   const selectedFlights = await tx
     .select({
       id: flights.id,
+      date: flights.date,
       kind: flights.kind,
+      role: flights.role,
+      aircraft: flights.aircraft,
+      aircraftType: flights.aircraftType,
+      registration: flights.registration,
       originAirportId: flights.originAirportId,
       destinationAirportId: flights.destinationAirportId,
     })
@@ -264,7 +278,15 @@ async function createSnapshot(
     string,
     PublicMapProjection["routes"][number]
   >();
+  const publicFlights: NonNullable<PublicMapProjection["flights"]> = [];
   for (const flight of selectedFlights) {
+    if (
+      (flight.kind !== "commercial" && flight.kind !== "private") ||
+      (flight.role !== "passenger" && flight.role !== "pilot") ||
+      !isPublicDate(flight.date)
+    ) {
+      throw new ShareValidationError();
+    }
     const stopIds =
       stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
         flight.originAirportId,
@@ -274,7 +296,7 @@ async function createSnapshot(
     if (sequence.length < 2 || sequence.some((airport) => !airport)) {
       throw new ShareValidationError();
     }
-    sequence.slice(0, -1).forEach((origin, index) => {
+    const routeIds = sequence.slice(0, -1).map((origin, index) => {
       const destination = sequence[index + 1]!;
       const coarseOrigin = {
         lat: coarse(origin!.latitude),
@@ -296,14 +318,27 @@ async function createSnapshot(
       const existing = routeCounts.get(routeKey);
       if (existing) existing.flightCount += 1;
       else {
+        const id = createHash("md5").update(routeKey).digest("hex");
         routeCounts.set(routeKey, {
-          id: createHash("md5").update(routeKey).digest("hex"),
+          id,
           kind: flight.kind as "commercial" | "private",
           flightCount: 1,
           origin: coarseOrigin,
           destination: coarseDestination,
         });
       }
+      return routeCounts.get(routeKey)!.id;
+    });
+    publicFlights.push({
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: normalizePublicAircraft([
+        flight.aircraftType,
+        flight.aircraft,
+      ]),
+      registration: normalizePublicMetadata(flight.registration),
+      routeIds,
     });
   }
   const projection: PublicMapProjection = {
@@ -315,6 +350,7 @@ async function createSnapshot(
     routes: [...routeCounts.values()].toSorted((left, right) =>
       left.id.localeCompare(right.id),
     ),
+    flights: publicFlights,
   };
   return {
     flightIds,
@@ -333,4 +369,187 @@ async function lockOwnerShare(
 
 function coarse(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function normalizePublicAircraft(
+  values: Array<string | null>,
+): string[] {
+  const unique = new Map<string, string>();
+  for (const value of values) {
+    const normalized = normalizePublicMetadata(value);
+    if (normalized) {
+      unique.set(normalized.toLocaleLowerCase("en-US"), normalized);
+    }
+  }
+  return [...unique.values()];
+}
+
+function normalizePublicMetadata(value: string | null): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized &&
+    normalized.length <= 100 &&
+    !/[\u0000-\u001f\u007f]/.test(normalized)
+    ? normalized
+    : null;
+}
+
+function isPublicDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.getUTCFullYear() === Number(match[1]) &&
+    date.getUTCMonth() + 1 === Number(match[2]) &&
+    date.getUTCDate() === Number(match[3])
+  );
+}
+
+function sanitizeStoredPublicFlights(
+  value: unknown,
+  routeById: ReadonlyMap<
+    string,
+    { kind: "commercial" | "private"; flightCount: number }
+  >,
+): PublicMapProjection["flights"] {
+  if (!Array.isArray(value)) return null;
+  const publicFlights: NonNullable<PublicMapProjection["flights"]> = [];
+  const referencesByRouteId = new Map<string, number>();
+  for (const candidate of value) {
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      !isPublicDate(Reflect.get(candidate, "date")) ||
+      (Reflect.get(candidate, "kind") !== "commercial" &&
+        Reflect.get(candidate, "kind") !== "private") ||
+      (Reflect.get(candidate, "role") !== "passenger" &&
+        Reflect.get(candidate, "role") !== "pilot")
+    ) {
+      return null;
+    }
+    const date = Reflect.get(candidate, "date") as string;
+    const kind = Reflect.get(candidate, "kind") as
+      | "commercial"
+      | "private";
+    const role = Reflect.get(candidate, "role") as "passenger" | "pilot";
+    const aircraft = Reflect.get(candidate, "aircraft");
+    const registration = Reflect.get(candidate, "registration");
+    const routeIds = Reflect.get(candidate, "routeIds");
+    if (
+      !Array.isArray(aircraft) ||
+      aircraft.some(
+        (item) =>
+          typeof item !== "string" ||
+          normalizePublicMetadata(item) !== item,
+      ) ||
+      (registration !== null &&
+        (typeof registration !== "string" ||
+          normalizePublicMetadata(registration) !== registration)) ||
+      !Array.isArray(routeIds) ||
+      routeIds.length === 0 ||
+      routeIds.some(
+        (routeId) =>
+          typeof routeId !== "string" ||
+          routeById.get(routeId)?.kind !== kind,
+      )
+    ) {
+      return null;
+    }
+    publicFlights.push({
+      date,
+      kind,
+      role,
+      aircraft: [...aircraft],
+      registration,
+      routeIds: [...routeIds],
+    });
+    for (const routeId of routeIds) {
+      referencesByRouteId.set(
+        routeId,
+        (referencesByRouteId.get(routeId) ?? 0) + 1,
+      );
+    }
+  }
+  if (
+    [...routeById].some(
+      ([routeId, route]) =>
+        (referencesByRouteId.get(routeId) ?? 0) !== route.flightCount,
+    )
+  ) {
+    return null;
+  }
+  return publicFlights;
+}
+
+function sanitizeStoredPublicRoutes(
+  value: unknown,
+): PublicMapProjection["routes"] {
+  if (!Array.isArray(value)) throw new ShareValidationError();
+  const routeIds = new Set<string>();
+  return value.map((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      throw new ShareValidationError();
+    }
+    const id = Reflect.get(candidate, "id");
+    const kind = Reflect.get(candidate, "kind");
+    const flightCount = Reflect.get(candidate, "flightCount");
+    const origin = Reflect.get(candidate, "origin");
+    const destination = Reflect.get(candidate, "destination");
+    if (
+      typeof id !== "string" ||
+      !PUBLIC_ROUTE_ID_PATTERN.test(id) ||
+      routeIds.has(id) ||
+      (kind !== "commercial" && kind !== "private") ||
+      typeof flightCount !== "number" ||
+      !Number.isSafeInteger(flightCount) ||
+      flightCount < 1
+    ) {
+      throw new ShareValidationError();
+    }
+    routeIds.add(id);
+    return {
+      id,
+      kind,
+      flightCount,
+      origin: sanitizeStoredPublicPlace(origin),
+      destination: sanitizeStoredPublicPlace(destination),
+    };
+  });
+}
+
+function sanitizeStoredPublicPlace(
+  value: unknown,
+): PublicMapProjection["routes"][number]["origin"] {
+  if (!value || typeof value !== "object") {
+    throw new ShareValidationError();
+  }
+  const lat = Reflect.get(value, "lat");
+  const lon = Reflect.get(value, "lon");
+  const country = Reflect.get(value, "country");
+  if (
+    typeof lat !== "number" ||
+    !Number.isFinite(lat) ||
+    lat < -90 ||
+    lat > 90 ||
+    typeof lon !== "number" ||
+    !Number.isFinite(lon) ||
+    lon < -180 ||
+    lon > 180 ||
+    typeof country !== "string" ||
+    country !== country.trim() ||
+    !PUBLIC_COUNTRY_PATTERN.test(country)
+  ) {
+    throw new ShareValidationError();
+  }
+  return {
+    lat: normalizePublicZero(coarse(lat)),
+    lon: normalizePublicZero(coarse(lon)),
+    country,
+  };
+}
+
+function normalizePublicZero(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
 }

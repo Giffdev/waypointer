@@ -93,9 +93,21 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     expect(projection).toMatchObject({
       owner: { displayName: null },
       summary: { flightCount: 2, routeCount: 2 },
+      flights: [
+        expect.objectContaining({
+          date: "2026-08-14",
+          role: "pilot",
+          registration: "N12345",
+        }),
+        expect.objectContaining({
+          date: "2026-08-14",
+          role: "pilot",
+          registration: "N12345",
+        }),
+      ],
     });
     expect(JSON.stringify(projection)).not.toMatch(
-      /@example|secret note|registration|flightId|ownerId/i,
+      /@example|secret note|flightId|ownerId|fingerprint|notes/i,
     );
   });
 
@@ -130,6 +142,12 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
     await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject({
       summary: { flightCount: 501 },
+      flights: expect.arrayContaining([
+        expect.objectContaining({
+          date: "2026-08-14",
+          role: "pilot",
+        }),
+      ]),
     });
   });
 

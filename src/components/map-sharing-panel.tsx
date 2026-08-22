@@ -146,7 +146,10 @@ export function MapSharingPanel() {
       </p>
       <small>
         Individual flights cannot be selected or hidden, and Waypointer does
-        not cap or truncate the published map.
+        not cap or truncate the published map. Viewers receive approximate
+        route regions plus flight dates, roles, aircraft, and tail numbers so
+        they can filter their view. Notes, airport codes, account details, and
+        exact locations stay private.
       </small>
 
       {status?.enabled && (
