@@ -23,7 +23,7 @@ import {
   getInitialFilters,
   serializeFiltersForHref,
 } from "./dashboard-shared";
-import { signOutToHomepage } from "@/app/auth/sign-out/actions";
+import { SessionSignOutButton } from "./auth/session-sign-out-button";
 
 const routes = [
   { path: "/map", label: "Map", icon: MapIcon, sharesFilters: true },
@@ -203,16 +203,10 @@ export default function AppNavigation({
                   <Settings size={16} aria-hidden="true" />
                   Settings
                 </Link>
-                <form action={signOutToHomepage}>
-                  <button
-                    type="submit"
-                    role="menuitem"
-                    onClick={() => closeAccountMenu()}
-                  >
-                    <LogOut size={16} aria-hidden="true" />
-                    Sign out
-                  </button>
-                </form>
+                <SessionSignOutButton role="menuitem">
+                  <LogOut size={16} aria-hidden="true" />
+                  Sign out
+                </SessionSignOutButton>
               </div>
             ) : null}
           </div>

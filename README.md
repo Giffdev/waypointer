@@ -166,6 +166,24 @@ Do not use the airport control-plane `npm run deploy:production` script for
 this recovery because it injects the paused value. Verify one clean-browser
 Google sign-in reaches `/map` after the new deployment is Ready.
 
+Before approving an auth deployment, run the production Google reauthentication
+hard gate with an ignored Playwright storage-state file that contains the
+approved test account's Waypointer and Google sessions:
+
+```powershell
+$env:FLIGHT_MAP_E2E_BASE_URL = "https://waypointer-app.vercel.app"
+$env:FLIGHT_MAP_E2E_GOOGLE_REAUTH = "true"
+$env:FLIGHT_MAP_E2E_GOOGLE_EMAIL = "<approved-test-account>"
+$env:FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE = ".playwright-mcp/google-reauth.json"
+npx playwright test e2e/auth.spec.ts --grep "production hard gate" --project=desktop-chrome
+```
+
+Capture the fixture with Playwright's `storageState({ indexedDB: true })`; the
+gate rejects a fixture that does not contain a persisted Firebase identity.
+It signs out cleanly, immediately signs back in through Google, and
+requires `/map` within 15 seconds. Override
+`FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS` only for an explicitly approved threshold.
+
 Run launch-schema checks with `npm run test:schema`. To also exercise clean and
 upgrade migration paths, use a PostgreSQL role allowed to create temporary
 databases and set `FLIGHT_MAP_RUN_POSTGRES_SCHEMA_TESTS=true`.
