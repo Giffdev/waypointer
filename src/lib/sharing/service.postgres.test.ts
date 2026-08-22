@@ -192,6 +192,26 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
   });
 
+  it("omits placeholder aircraft metadata from the public snapshot", async () => {
+    const owner = await createOwner("Metadata Pilot");
+    const [originId, destinationId] = await createAirports();
+    await createFlight(owner.id, originId, destinationId, {
+      aircraft: "N/A",
+      aircraftType: "-",
+      registration: "unknown",
+    });
+
+    await enableMapSharing(owner.id);
+    await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject({
+      flights: [
+        expect.objectContaining({
+          aircraft: [],
+          registration: null,
+        }),
+      ],
+    });
+  });
+
   it("allows an existing generated username to be the public path", async () => {
     const owner = await createOwner("Generated Pilot", true);
     const [originId, destinationId] = await createAirports();
@@ -320,6 +340,11 @@ async function createFlight(
   userId: string,
   originAirportId: string,
   destinationAirportId: string,
+  metadata: {
+    aircraft?: string;
+    aircraftType?: string;
+    registration?: string;
+  } = {},
 ): Promise<string> {
   return withUserDb(userId, async (tx) => {
     const [flight] = await tx
@@ -332,7 +357,9 @@ async function createFlight(
         destinationAirportId,
         kind: "private",
         role: "pilot",
-        registration: "N12345",
+        aircraft: metadata.aircraft,
+        aircraftType: metadata.aircraftType,
+        registration: metadata.registration ?? "N12345",
         notes: "secret note",
       })
       .returning({ id: flights.id });

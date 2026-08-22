@@ -185,6 +185,59 @@ describe("public map sharing contracts", () => {
     );
   });
 
+  it("drops placeholder metadata and bounds stored aircraft values", async () => {
+    mocks.getDb.mockReturnValue({
+      execute: vi.fn().mockResolvedValue([
+        {
+          projection: {
+            schemaVersion: 2,
+            owner: { displayName: null },
+            summary: { flightCount: 1, routeCount: 1 },
+            routes: [
+              {
+                id: "route-1",
+                kind: "private",
+                flightCount: 1,
+                origin: airport("SEA", "Seattle", "Seattle", "US", 47.4, -122.3),
+                destination: airport("JFK", "New York", "New York", "US", 40.6, -73.8),
+              },
+            ],
+            flights: [
+              {
+                date: "2026-08-01",
+                kind: "private",
+                role: "pilot",
+                aircraft: [
+                  "N/A",
+                  "A1",
+                  "A2",
+                  "A3",
+                  "A4",
+                  "A5",
+                  "A6",
+                  "A7",
+                  "A8",
+                  "A9",
+                ],
+                registration: "-",
+                routeIds: ["route-1"],
+              },
+            ],
+          },
+        },
+      ]),
+    });
+
+    await expect(getPublicMapProjection("devsin")).resolves.toMatchObject({
+      flights: [
+        expect.objectContaining({
+          aircraft: ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8"],
+          registration: null,
+        }),
+      ],
+    });
+  });
+
   it("rejects inconsistent stored flight dimensions", async () => {
     const route = (id: string, flightCount: number) => ({
       id,

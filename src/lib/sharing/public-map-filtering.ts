@@ -28,18 +28,55 @@ export type PublicMapSlice = {
 };
 
 export function publicMapFilterOptions(projection: PublicMapProjection): {
-  aircraft: string[];
-  registrations: string[];
+  aircraft: Array<{ value: string; available: boolean }>;
+  registrations: Array<{ value: string; available: boolean }>;
 } {
   return {
     aircraft: sortedUnique(
       projection.flights.flatMap((flight) => flight.aircraft),
-    ),
+    ).map((value) => ({ value, available: true })),
     registrations: sortedUnique(
       projection.flights.flatMap((flight) =>
         flight.registration ? [flight.registration] : [],
       ),
-    ),
+    ).map((value) => ({ value, available: true })),
+  };
+}
+
+export function publicMapFilterOptionsForFilters(
+  projection: PublicMapProjection,
+  filters: PublicMapFilters,
+): {
+  aircraft: Array<{ value: string; available: boolean }>;
+  registrations: Array<{ value: string; available: boolean }>;
+} {
+  const options = publicMapFilterOptions(projection);
+  const aircraftFilters = { ...filters, aircraft: "all" };
+  const registrationFilters = { ...filters, registration: "all" };
+  const availableAircraft = new Set<string>();
+  const availableRegistrations = new Set<string>();
+  for (const flight of projection.flights) {
+    if (matchesFilters(flight, aircraftFilters)) {
+      for (const value of flight.aircraft) {
+        availableAircraft.add(fold(value));
+      }
+    }
+    if (
+      flight.registration &&
+      matchesFilters(flight, registrationFilters)
+    ) {
+      availableRegistrations.add(fold(flight.registration));
+    }
+  }
+  return {
+    aircraft: options.aircraft.map(({ value }) => ({
+      value,
+      available: availableAircraft.has(fold(value)),
+    })),
+    registrations: options.registrations.map(({ value }) => ({
+      value,
+      available: availableRegistrations.has(fold(value)),
+    })),
   };
 }
 

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SharedMapView, toSharedMapData } from "./shared-map-view";
@@ -26,6 +32,7 @@ vi.mock("@/components/globe-panel", () => ({
 describe("SharedMapView", () => {
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -76,20 +83,32 @@ describe("SharedMapView", () => {
       }),
       "pilot",
     );
-    await user.selectOptions(
-      screen.getByRole("combobox", {
-        name: "Filter shared flights by tail number",
-      }),
-      "N777AA",
-    );
+    const registration = screen.getByRole("combobox", {
+      name: "Filter shared flights by tail number or registration",
+    });
+    await user.clear(registration);
+    await user.type(registration, "N777AA");
+    await user.keyboard("{Enter}");
 
     expect(screen.getByText(/Showing 1 of 3 shared flights/)).toBeVisible();
     expect(screen.getByTestId("shared-globe")).toHaveTextContent("1 routes");
     expect(screen.getByText("Flights").parentElement).toHaveTextContent("1");
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
+    await user.type(
+      screen.getByLabelText("Filter shared flights from date"),
+      "2027-01-01",
+    );
+    expect(
+      screen.getByText("No shared flights match these filters"),
+    ).toBeVisible();
+    expect(screen.getByTestId("shared-globe")).toHaveTextContent("0 routes");
+
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
+    expect(
+      screen.queryByText("No shared flights match these filters"),
+    ).not.toBeInTheDocument();
   });
 
   it("never fabricates airports for a malformed current snapshot", async () => {
@@ -189,7 +208,48 @@ describe("SharedMapView", () => {
     expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
 
+  it("honors retry-after and throttles lifecycle retries after a 429", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(json({}, 429, { "Retry-After": "60" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView handle="busy-handle" />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Shared map temporarily busy",
+      }),
+    ).toBeVisible();
+    now.mockReturnValue(131_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(161_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("suppresses successful lifecycle revalidation inside the response budget", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    const fetchMock = vi.fn().mockResolvedValue(json(sharedMap()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView handle="public-handle" />);
+    expect(await screen.findByTestId("shared-globe")).toBeVisible();
+
+    now.mockReturnValue(110_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(131_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
   it("clears a loaded map when focus revalidation reports it disabled", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(json(sharedMap()))
@@ -209,6 +269,7 @@ describe("SharedMapView", () => {
     render(<SharedMapView handle="public-handle" />);
     expect(await screen.findByTestId("shared-globe")).toBeVisible();
 
+    now.mockReturnValue(131_000);
     act(() => window.dispatchEvent(new Event("focus")));
 
     expect(
@@ -296,9 +357,13 @@ function airport(
   };
 }
 
-function json(body: unknown, status = 200) {
+function json(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
