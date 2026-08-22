@@ -183,6 +183,13 @@ gate rejects a fixture that does not contain a persisted Firebase identity.
 It signs out cleanly, immediately signs back in through Google, and
 requires `/map` within 15 seconds. Override
 `FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS` only for an explicitly approved threshold.
+When explicitly enabled, the gate fails closed and names any missing required
+variables. Clear the session-persistent opt-in after the run so unrelated E2E
+commands are not treated as production reauthentication attempts:
+
+```powershell
+Remove-Item Env:FLIGHT_MAP_E2E_GOOGLE_REAUTH
+```
 
 Run launch-schema checks with `npm run test:schema`. To also exercise clean and
 upgrade migration paths, use a PostgreSQL role allowed to create temporary

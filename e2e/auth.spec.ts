@@ -1,46 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
-
-const canonicalProductionOrigin = "https://waypointer-app.vercel.app";
+import {
+  CANONICAL_PRODUCTION_ORIGIN,
+  isProductionGoogleReauthRequested,
+  requireProductionGoogleReauthConfig,
+} from "../scripts/production-reauth-gate";
 
 const persistedEmail = process.env.FLIGHT_MAP_E2E_EMAIL;
 const persistedPassword = process.env.FLIGHT_MAP_E2E_PASSWORD;
 const persistedCredentialsEnabled =
   process.env.FLIGHT_MAP_E2E_PERSISTED === "true" &&
   Boolean(persistedEmail && persistedPassword);
-const googleReauthEmail = process.env.FLIGHT_MAP_E2E_GOOGLE_EMAIL;
-const googleReauthEnabled =
-  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true";
-const googleReauthMaxMs = Number(
-  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS ?? "15000",
-);
-
-if (googleReauthEnabled) {
-  const missingVariables = [
-    ["FLIGHT_MAP_E2E_BASE_URL", process.env.FLIGHT_MAP_E2E_BASE_URL],
-    [
-      "FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE",
-      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE,
-    ],
-    ["FLIGHT_MAP_E2E_GOOGLE_EMAIL", googleReauthEmail],
-  ]
-    .filter(([, value]) => !value)
-    .map(([name]) => name);
-
-  if (missingVariables.length > 0) {
-    throw new Error(
-      `Production Google reauthentication requires ${missingVariables.join(", ")}.`,
-    );
-  }
-}
-
-if (
-  googleReauthEnabled &&
-  process.env.FLIGHT_MAP_E2E_BASE_URL !== canonicalProductionOrigin
-) {
-  throw new Error(
-    `Production Google reauthentication must target ${canonicalProductionOrigin}.`,
-  );
-}
+const googleReauthRequested =
+  isProductionGoogleReauthRequested(process.env);
 
 async function hasPersistedFirebaseIdentity(page: Page) {
   return page.evaluate(
@@ -274,11 +245,11 @@ test("profile sign-out returns home and clears protected access", async ({
 
 test.describe("production Google reauthentication", () => {
   test.skip(
-    !googleReauthEnabled,
+    !googleReauthRequested,
     "Production Google reauthentication state is not configured.",
   );
   test.use({
-    storageState: googleReauthEnabled
+    storageState: googleReauthRequested
       ? process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE
       : undefined,
   });
@@ -287,6 +258,8 @@ test.describe("production Google reauthentication", () => {
     page,
   }) => {
     test.setTimeout(60_000);
+    const { email, maxMs } =
+      requireProductionGoogleReauthConfig(process.env);
 
     await page.goto("/settings");
     await expect(
@@ -294,18 +267,18 @@ test.describe("production Google reauthentication", () => {
     ).toBeVisible();
     expect(await hasPersistedFirebaseIdentity(page)).toBe(true);
     await page.getByRole("button", { name: "Sign out" }).click();
-    await expect(page).toHaveURL(`${canonicalProductionOrigin}/`);
+    await expect(page).toHaveURL(`${CANONICAL_PRODUCTION_ORIGIN}/`);
     expect(await hasPersistedFirebaseIdentity(page)).toBe(false);
 
     await page.getByRole("link", { name: "Sign in", exact: true }).click();
     const startedAt = Date.now();
     await page.getByRole("button", { name: "Continue with Google" }).click();
     await page.waitForURL(/accounts\.google\.com/, { timeout: 10_000 });
-    await page.getByText(googleReauthEmail!, { exact: true }).first().click();
+    await page.getByText(email, { exact: true }).first().click();
     await expect(page).toHaveURL(/\/map$/, {
-      timeout: Math.max(1_000, googleReauthMaxMs - 500),
+      timeout: Math.max(1_000, maxMs - 500),
     });
-    expect(Date.now() - startedAt).toBeLessThan(googleReauthMaxMs);
+    expect(Date.now() - startedAt).toBeLessThan(maxMs);
     await expect(
       page.getByRole("region", {
         name: /interactive .* flight routes/i,
