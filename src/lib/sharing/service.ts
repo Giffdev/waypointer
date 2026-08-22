@@ -447,11 +447,14 @@ function normalizePublicAircraft(
 }
 
 function normalizePublicMetadata(value: string | null): string | null {
-  if (typeof value !== "string") return null;
+  if (
+    typeof value !== "string" ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    return null;
+  }
   const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized &&
-    normalized.length <= 100 &&
-    !/[\u0000-\u001f\u007f]/.test(normalized)
+  return normalized && normalized.length <= 100
     ? normalized
     : null;
 }
@@ -652,8 +655,8 @@ function publicAirportFromRow(
   try {
     return sanitizeStoredPublicPlace({
       code: preferredAirportCode(row),
-      name: row.name,
-      city: row.city ?? row.name,
+      name: normalizePublicMetadata(row.name),
+      city: normalizePublicMetadata(row.city ?? row.name),
       country: row.country,
       lat: row.latitude,
       lon: row.longitude,
