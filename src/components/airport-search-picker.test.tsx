@@ -12,6 +12,26 @@ afterEach(() => {
 });
 
 describe("AirportSearchPicker", () => {
+  it("exposes required, invalid, and error-description semantics", () => {
+    render(
+      <>
+        <AirportSearchPicker
+          describedBy="departure-error"
+          invalid
+          label="Departure airport"
+          onSelect={vi.fn()}
+          required
+        />
+        <p id="departure-error">Select a departure airport.</p>
+      </>,
+    );
+
+    const input = screen.getByRole("combobox", { name: "Departure airport" });
+    expect(input).toHaveAttribute("aria-describedby", "departure-error");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAttribute("aria-required", "true");
+  });
+
   it.each([
     ["W01", "W01", "Tonasket Municipal Airport"],
     ["KOMK", "OMK", "Omak Airport"],

@@ -22,6 +22,45 @@ export function ManualFlightDialog({
   const [destination, setDestination] = useState<AirportSearchResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageError, setMessageError] = useState(false);
+  const [durationInvalid, setDurationInvalid] = useState(false);
+  const [validationAttempted, setValidationAttempted] = useState(false);
+
+  const sameAirport = Boolean(
+    origin && destination && origin.airportId === destination.airportId,
+  );
+  const classificationInvalid = validationAttempted && !classification;
+  const dateInvalid = validationAttempted && !date;
+  const originInvalid = validationAttempted && (!origin || sameAirport);
+  const destinationInvalid =
+    validationAttempted && (!destination || sameAirport);
+  const validationMessage = validationAttempted
+    ? !classification || !date || !origin || !destination
+      ? "Choose Personal or Commercial, a date, and both airports."
+      : sameAirport
+        ? "Departure and arrival must be different airports."
+        : ""
+    : "";
+  const displayedMessage = validationMessage || message;
+  const messageIsError =
+    Boolean(validationMessage) || messageError;
+
+  function clearMessage(force = false) {
+    if (durationInvalid && !force) return;
+    setMessage("");
+    setMessageError(false);
+  }
+
+  function editOptionalField(event: FormEvent<HTMLDivElement>) {
+    const editedDuration =
+      (event.target as HTMLInputElement).name === "durationHours";
+    if (editedDuration) {
+      setDurationInvalid(false);
+      clearMessage(true);
+      return;
+    }
+    clearMessage();
+  }
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -54,21 +93,40 @@ export function ManualFlightDialog({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setValidationAttempted(true);
     if (!classification || !date || !origin || !destination) {
-      setMessage("Choose Personal or Commercial, a date, and both airports.");
       return;
     }
     if (origin.airportId === destination.airportId) {
-      setMessage("Departure and arrival must be different airports.");
       return;
     }
+    setValidationAttempted(false);
     const form = new FormData(event.currentTarget);
     const optionalText = (name: string) => String(form.get(name) ?? "").trim() || undefined;
     const optionalNumber = (name: string) => {
       const raw = String(form.get(name) ?? "").trim();
       return raw ? Number(raw) : undefined;
     };
+    const durationHours = optionalNumber("durationHours");
+    if (
+      durationHours !== undefined &&
+      (
+        !Number.isFinite(durationHours) ||
+        durationHours < 0 ||
+        durationHours > 10_000 ||
+        Math.abs(durationHours * 10 - Math.round(durationHours * 10)) > 1e-9
+      )
+    ) {
+      setDurationInvalid(true);
+      setMessageError(true);
+      setMessage(
+        "Duration in hours must be between 0 and 10,000 in 0.1-hour increments.",
+      );
+      return;
+    }
+    setDurationInvalid(false);
     setSaving(true);
+    setMessageError(false);
     setMessage("Saving flight…");
     try {
       const response = await fetch("/api/flights", {
@@ -80,7 +138,7 @@ export function ManualFlightDialog({
           originAirportId: origin.airportId,
           destinationAirportId: destination.airportId,
           departureTime: optionalText("departureTime"),
-          durationHours: optionalNumber("durationHours"),
+          durationHours,
           aircraft: optionalText("aircraft"),
           aircraftType: optionalText("aircraftType"),
           aircraftModel: optionalText("aircraftModel"),
@@ -91,6 +149,7 @@ export function ManualFlightDialog({
       });
       const body = await response.json();
       if (!response.ok) {
+        setMessageError(true);
         setMessage(
           body.error?.code === "duplicate-flight"
             ? "An equivalent flight already exists. No duplicate was created."
@@ -98,9 +157,11 @@ export function ManualFlightDialog({
         );
         return;
       }
+      setMessageError(false);
       setMessage("Flight saved. Opening your map…");
       onCreated();
     } catch {
+      setMessageError(true);
       setMessage("The flight could not be saved. Check your connection and try again.");
     } finally {
       setSaving(false);
@@ -124,17 +185,76 @@ export function ManualFlightDialog({
         <p className="eyebrow">Manual log</p>
         <h2 id="manual-flight-title">Add one flight</h2>
         <p>Choose the flight classification explicitly. Optional details can be left blank when they are not known.</p>
-        <form className="manual-flight-form" onSubmit={submit}>
-          <fieldset className="manual-classification">
+        <form className="manual-flight-form" onSubmit={submit} noValidate>
+          <fieldset
+            className="manual-classification manual-form-section"
+            data-invalid={classificationInvalid}
+            aria-describedby={
+              classificationInvalid ? "manual-flight-error" : undefined
+            }
+          >
             <legend>Flight classification (required)</legend>
-            <label><input type="radio" name="classification" value="personal" checked={classification === "personal"} onChange={() => setClassification("personal")} />Personal</label>
-            <label><input type="radio" name="classification" value="commercial" checked={classification === "commercial"} onChange={() => setClassification("commercial")} />Commercial</label>
+            <p className="manual-section-hint">
+              Choose how you experienced this flight.
+            </p>
+            <div className="manual-classification-options">
+              <label><input type="radio" name="classification" value="personal" checked={classification === "personal"} disabled={saving} onChange={() => { setClassification("personal"); clearMessage(); }} />Personal</label>
+              <label><input type="radio" name="classification" value="commercial" checked={classification === "commercial"} disabled={saving} onChange={() => { setClassification("commercial"); clearMessage(); }} />Commercial</label>
+            </div>
           </fieldset>
-          <label>Date (required)<input type="date" value={date} required onChange={(event) => setDate(event.target.value)} /></label>
-          <div className="manual-airport-grid">
-            <AirportSearchPicker label="Departure airport (required)" selected={origin} onSelect={setOrigin} />
-            <AirportSearchPicker label="Arrival airport (required)" selected={destination} onSelect={setDestination} />
-          </div>
+          <fieldset className="manual-required-fields manual-form-section">
+            <legend>Route and date</legend>
+            <p className="manual-section-hint">
+              All fields in this section are required.
+            </p>
+            <label>
+              Date (required)
+              <input
+                type="date"
+                value={date}
+                required
+                disabled={saving}
+                aria-invalid={dateInvalid}
+                aria-describedby={
+                  dateInvalid ? "manual-flight-error" : undefined
+                }
+                onChange={(event) => {
+                  setDate(event.target.value);
+                  clearMessage();
+                }}
+              />
+            </label>
+            <div className="manual-airport-grid">
+              <AirportSearchPicker
+                label="Departure airport (required)"
+                selected={origin}
+                disabled={saving}
+                required
+                invalid={originInvalid}
+                describedBy={
+                  originInvalid ? "manual-flight-error" : undefined
+                }
+                onSelect={(airport) => {
+                  setOrigin(airport);
+                  clearMessage();
+                }}
+              />
+              <AirportSearchPicker
+                label="Arrival airport (required)"
+                selected={destination}
+                disabled={saving}
+                required
+                invalid={destinationInvalid}
+                describedBy={
+                  destinationInvalid ? "manual-flight-error" : undefined
+                }
+                onSelect={(airport) => {
+                  setDestination(airport);
+                  clearMessage();
+                }}
+              />
+            </div>
+          </fieldset>
           {origin && destination && (
             <article className="flight-row manual-flight-preview">
               <div className={`flight-kind ${classification === "commercial" ? "commercial" : "private"}`}><Plane size={17} /></div>
@@ -143,22 +263,57 @@ export function ManualFlightDialog({
           )}
           <details className="manual-optional-fields">
             <summary>Optional flight details</summary>
-            <div className="manual-field-grid">
-              <label>Departure time<input name="departureTime" type="time" /></label>
-              <label>Duration in hours<input name="durationHours" type="number" min="0" max="10000" step="0.1" inputMode="decimal" /></label>
-              <label>Aircraft description<input name="aircraft" maxLength={160} /></label>
-              <label>Aircraft type<input name="aircraftType" maxLength={120} /></label>
-              <label>Aircraft model<input name="aircraftModel" maxLength={160} /></label>
-              <label>Registration / tail number<input name="registration" maxLength={40} /></label>
-              <label>Flight number<input name="flightNumber" maxLength={40} /></label>
-              <label>Airline / operator<input name="airline" maxLength={160} /></label>
+            <p className="manual-section-hint">
+              Add any details you know. These fields can be left blank.
+            </p>
+            <div className="manual-field-grid" onInput={editOptionalField}>
+              <label>Departure time (optional)<input name="departureTime" type="time" disabled={saving} /></label>
+              <label>
+                Duration in hours (optional)
+                <input
+                  name="durationHours"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="0.1"
+                  inputMode="decimal"
+                  disabled={saving}
+                  aria-invalid={durationInvalid}
+                  aria-describedby={
+                    durationInvalid ? "manual-flight-error" : undefined
+                  }
+                />
+              </label>
+              <label>Aircraft description (optional)<input name="aircraft" maxLength={160} disabled={saving} /></label>
+              <label>Aircraft type (optional)<input name="aircraftType" maxLength={120} disabled={saving} /></label>
+              <label>Aircraft model (optional)<input name="aircraftModel" maxLength={160} disabled={saving} /></label>
+              <label>Tail number / registration (optional)<input name="registration" maxLength={40} disabled={saving} /></label>
+              <label>Flight number (optional)<input name="flightNumber" maxLength={40} disabled={saving} /></label>
+              <label>Airline / operator (optional)<input name="airline" maxLength={160} disabled={saving} /></label>
             </div>
           </details>
           <div className="modal-actions">
             <button className="secondary-button" type="button" onClick={close}>Cancel</button>
             <button className="primary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save flight"}</button>
           </div>
-          <p role={message.includes("could not") || message.includes("exists") || message.includes("Choose") ? "alert" : "status"} aria-live="polite">{message}</p>
+          <div className="manual-flight-messages">
+            <p
+              id="manual-flight-error"
+              className="manual-flight-message error"
+              role="alert"
+              aria-live="assertive"
+            >
+              {messageIsError ? displayedMessage : ""}
+            </p>
+            <p
+              id="manual-flight-status"
+              className="manual-flight-message status"
+              role="status"
+              aria-live="polite"
+            >
+              {messageIsError ? "" : displayedMessage}
+            </p>
+          </div>
         </form>
       </section>
     </div>,
