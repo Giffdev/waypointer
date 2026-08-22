@@ -138,6 +138,22 @@ describe("route clients", () => {
     ).toHaveTextContent("No airport focus");
   });
 
+  it("uses concise saved-flight copy without the obsolete private-account sentence", () => {
+    const mapData = buildMapPageContract(getInitialFilters(), null, null);
+
+    render(<MapRouteClient data={{ ...mapData, dataMode: "persisted" }} />);
+
+    expect(
+      screen.getByRole("region", { name: "Your private flight map" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Review your saved routes and flight activity/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Explore flights committed to your private account/),
+    ).not.toBeInTheDocument();
+  });
+
   it("switches projection without losing focus and persists explicit owner preference", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(

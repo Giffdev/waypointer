@@ -40,6 +40,9 @@ import type { MapViewMode } from "@/lib/map-view-mode";
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
 const DEFAULT_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+const OPENFREEMAP_SOURCE_PREFIX = "https://tiles.openfreemap.org/";
+const OPENFREEMAP_ATTRIBUTION =
+  '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 const TERRAIN_SOURCE_ID = "flight-map-terrain";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
@@ -146,13 +149,14 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       setInitializationError("");
       setMapReady(false);
       const styleUrl = process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim() || DEFAULT_STYLE_URL;
-      const style = await loadStyle(
+      const loadedStyle = await loadStyle(
         styleUrl,
         abortController.signal,
         viewModeRef.current,
       );
+      const style = loadedStyle.style;
       if (disposed || !containerRef.current) return;
-      setBasemapMode(style === FALLBACK_STYLE ? "fallback" : "open-map");
+      setBasemapMode(loadedStyle.isFallback ? "fallback" : "open-map");
 
       const map = new MapLibreMap({
         container: containerRef.current,
@@ -175,15 +179,13 @@ export default function FlightGlobe(props: FlightGlobeProps) {
         renderWorldCopies: false,
       });
       mapRef.current = map;
+      const customAttribution = usesOpenFreeMap(style)
+        ? { customAttribution: OPENFREEMAP_ATTRIBUTION }
+        : {};
       map.addControl(
         new AttributionControl({
-          compact: true,
-          customAttribution: [
-            '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>',
-            '<a href="https://openfreemap.org/" target="_blank" rel="noopener">OpenFreeMap</a>',
-            '<a href="https://ourairports.com/data/" target="_blank" rel="noopener">Airport reference: OurAirports (public domain)</a>',
-            '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain data sources & attribution</a>',
-          ],
+          compact: false,
+          ...customAttribution,
         }),
         "bottom-right",
       );
@@ -488,6 +490,34 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             : "Basemap unavailable · routes remain local"}
         </div>
       )}
+      <details className="terrain-attribution">
+        <summary>Terrain data credits</summary>
+        <div className="terrain-attribution-content">
+          <p>
+            Elevation data sources used by the global terrain layer:
+          </p>
+          <ul>
+            <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
+            <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
+            <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
+            <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
+            <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
+            <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
+            <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
+            <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
+            <li>Norway terrain © Kartverket.</li>
+            <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
+            <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
+          </ul>
+          <a
+            href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+            rel="noopener"
+            target="_blank"
+          >
+            Terrain licence details
+          </a>
+        </div>
+      </details>
       <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
@@ -550,7 +580,7 @@ async function loadStyle(
   url: string,
   signal: AbortSignal,
   viewMode: MapViewMode,
-): Promise<StyleSpecification> {
+): Promise<{ isFallback: boolean; style: StyleSpecification }> {
   const requestController = new AbortController();
   const abortRequest = () => requestController.abort(signal.reason);
   signal.addEventListener("abort", abortRequest, { once: true });
@@ -559,14 +589,51 @@ async function loadStyle(
     const response = await fetch(url, { signal: requestController.signal });
     if (!response.ok) throw new Error(`Map style returned ${response.status}`);
     const style = (await response.json()) as StyleSpecification;
-    return withMapProjection(style, viewMode);
+    return {
+      isFallback: false,
+      style: withMapProjection(withOpenFreeMapAttribution(style), viewMode),
+    };
   } catch (error) {
     if (signal.aborted) throw error;
-    return withMapProjection(FALLBACK_STYLE, viewMode);
+    return {
+      isFallback: true,
+      style: withMapProjection(FALLBACK_STYLE, viewMode),
+    };
   } finally {
     window.clearTimeout(timeout);
     signal.removeEventListener("abort", abortRequest);
   }
+}
+
+function usesOpenFreeMap(style: StyleSpecification): boolean {
+  return Object.values(style.sources).some(
+    (source) =>
+      "url" in source &&
+      typeof source.url === "string" &&
+      source.url.startsWith(OPENFREEMAP_SOURCE_PREFIX),
+  );
+}
+
+function withOpenFreeMapAttribution(
+  style: StyleSpecification,
+): StyleSpecification {
+  return {
+    ...style,
+    sources: Object.fromEntries(
+      Object.entries(style.sources).map(([id, source]) => {
+        const sourceUrl =
+          "url" in source && typeof source.url === "string"
+            ? source.url
+            : "";
+        return [
+          id,
+          sourceUrl.startsWith(OPENFREEMAP_SOURCE_PREFIX)
+            ? { ...source, attribution: OPENFREEMAP_ATTRIBUTION }
+            : source,
+        ];
+      }),
+    ),
+  };
 }
 
 function addShadedRelief(map: MapLibreMap) {

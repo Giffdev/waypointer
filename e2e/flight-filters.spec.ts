@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { installOpenMapAttributionFixture } from "./map-style-fixture";
 
 function shownCount(status: string): number {
   const match = /^([\d,]+) of/.exec(status);
@@ -15,6 +16,7 @@ test("interactive globe initializes, loads data, and survives filter updates", a
   });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
 
+  await installOpenMapAttributionFixture(page);
   await page.goto("/map");
   const globe = page.getByRole("region", {
     name: /interactive .* flight routes/i,
@@ -29,6 +31,10 @@ test("interactive globe initializes, loads data, and survives filter updates", a
   await expect(globe.locator("canvas")).toBeVisible();
   await expect(page.getByRole("button", { name: "Zoom in" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Fit my flights" })).toBeVisible();
+  const attribution = page.locator(".maplibregl-ctrl-attrib");
+  await expect(attribution).toBeInViewport({ ratio: 1 });
+  await expect(attribution).toContainText("OpenMapTiles");
+  await expect(attribution).toContainText("OpenStreetMap");
 
   const initialRoutes = Number(await globe.getAttribute("data-route-count"));
   const airports = Number(await globe.getAttribute("data-airport-count"));
@@ -45,6 +51,56 @@ test("interactive globe initializes, loads data, and survives filter updates", a
     .not.toBe(initialRoutes);
   expect(Number(await globe.getAttribute("data-route-count"))).toBeGreaterThan(0);
   expect(consoleErrors).toEqual([]);
+});
+
+test("mobile map removes promotional spacing and exposes filters in the first viewport", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "mobile-chrome",
+    "The mobile project uses the required 390x844 viewport.",
+  );
+
+  await page.route("https://tiles.openfreemap.org/styles/liberty", (route) =>
+    route.abort(),
+  );
+  await page.goto("/map");
+
+  const intro = page.locator(".map-intro");
+  const overlay = page.locator(".map-overlay");
+  const controls = page.locator(".map-control-panel");
+  const filters = page.locator(".flight-filter-panel");
+  const mapStatus = page.locator(".map-layer-status.fallback");
+  const terrainCredits = page.locator(".terrain-attribution");
+
+  await expect(page.getByRole("region", { name: "Your private flight map" })).toBeVisible();
+  await expect(intro).toBeHidden();
+  await expect(mapStatus).toBeVisible();
+  await expect(terrainCredits).toBeVisible();
+  await expect(
+    page.getByText("Explore flights committed to your private account", {
+      exact: false,
+    }),
+  ).toHaveCount(0);
+  await expect(filters).toBeInViewport({ ratio: 0.1 });
+
+  const [overlayBox, controlsBox] = await Promise.all([
+    overlay.boundingBox(),
+    controls.boundingBox(),
+  ]);
+  expect(overlayBox).not.toBeNull();
+  expect(controlsBox).not.toBeNull();
+  expect(controlsBox!.y - overlayBox!.y).toBeLessThanOrEqual(14);
+  const [statusBox, creditsBox] = await Promise.all([
+    mapStatus.boundingBox(),
+    terrainCredits.boundingBox(),
+  ]);
+  expect(statusBox).not.toBeNull();
+  expect(creditsBox).not.toBeNull();
+  expect(creditsBox!.y).toBeGreaterThanOrEqual(statusBox!.y + statusBox!.height);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
 });
 
 test("source filtering updates history, URL, navigation, stats, and map data", async ({

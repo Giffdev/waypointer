@@ -12,10 +12,12 @@ export default async function RoutesLayout({
   return (
     <>
       <AppNavigation user={user} />
-      <div className={`runtime-mode runtime-mode-${mode.kind}`} role="status">
-        <strong>{mode.label}</strong>
-        <span>{mode.detail}</span>
-      </div>
+      {mode.kind !== "mvp-production" && (
+        <div className={`runtime-mode runtime-mode-${mode.kind}`} role="status">
+          <strong>{mode.label}</strong>
+          <span>{mode.detail}</span>
+        </div>
+      )}
       {children}
       <footer>
         <span>Waypointer · private by default</span>
