@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   currentUser: null as null | { getIdToken: ReturnType<typeof vi.fn> },
   getIdToken: vi.fn(),
   getRedirectResult: vi.fn(),
+  signOut: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/firebase-client", () => ({
@@ -20,6 +21,7 @@ vi.mock("@/lib/auth/firebase-client", () => ({
 }));
 vi.mock("firebase/auth", () => ({
   getRedirectResult: mocks.getRedirectResult,
+  signOut: mocks.signOut,
 }));
 
 import { FirebaseSessionCompletion } from "./firebase-session-completion";
@@ -31,6 +33,7 @@ describe("global Firebase session completion", () => {
     mocks.currentUser = null;
     mocks.getIdToken.mockReset().mockResolvedValue("firebase-id-token");
     mocks.getRedirectResult.mockReset();
+    mocks.signOut.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal("fetch", vi.fn());
     vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
@@ -61,6 +64,12 @@ describe("global Firebase session completion", () => {
     });
     expect(mocks.getIdToken).toHaveBeenCalledOnce();
     expect(mocks.getIdToken).toHaveBeenCalledWith();
+    expect(mocks.signOut).toHaveBeenCalledWith(
+      expect.objectContaining({ authStateReady: mocks.authStateReady }),
+    );
+    expect(mocks.signOut.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(fetch).mock.invocationCallOrder[0],
+    );
     expect(sessionStorage.getItem("flight-map.firebase.redirect-state")).toBeNull();
   });
 
@@ -83,6 +92,7 @@ describe("global Firebase session completion", () => {
     );
     expect(mocks.getIdToken).toHaveBeenCalledOnce();
     expect(mocks.getIdToken).toHaveBeenCalledWith();
+    expect(mocks.signOut).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledOnce();
   });
 
