@@ -108,6 +108,35 @@ describe("application navigation", () => {
       .toHaveAttribute("type", "submit");
   });
 
+  it("keeps the sign-out form connected through submission", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppNavigation
+        user={{ name: "Test Pilot", email: "pilot@example.test" }}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Account menu for pilot@example.test",
+      }),
+    );
+    const button = screen.getByRole("menuitem", { name: "Sign out" });
+    const form = button.closest("form");
+    expect(form).not.toBeNull();
+    let connectedDuringSubmit = false;
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      connectedDuringSubmit = form.isConnected;
+    });
+
+    await user.click(button);
+
+    expect(connectedDuringSubmit).toBe(true);
+    expect(
+      screen.getByRole("menu", { name: "Account actions" }),
+    ).toBeInTheDocument();
+  });
+
   it("supports keyboard navigation, Escape focus restoration, and outside dismissal", async () => {
     const user = userEvent.setup();
     render(

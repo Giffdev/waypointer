@@ -1,10 +1,6 @@
 "use client";
 
-import {
-  useState,
-  type MouseEventHandler,
-  type ReactNode,
-} from "react";
+import { useState, type ReactNode } from "react";
 import { signOut as signOutFirebase } from "firebase/auth";
 import { signOutToHomepage } from "@/app/auth/sign-out/actions";
 import { getFirebaseAuth } from "@/lib/auth/firebase-client";
@@ -45,13 +41,11 @@ export function SessionSignOutButton({
   children = "Sign out",
   className,
   formClassName,
-  onClick,
   role,
 }: {
   children?: ReactNode;
   className?: string;
   formClassName?: string;
-  onClick?: MouseEventHandler<HTMLButtonElement>;
   role?: "menuitem";
 }) {
   const [pending, setPending] = useState(false);
@@ -69,7 +63,6 @@ export function SessionSignOutButton({
         aria-busy={pending}
         className={className}
         disabled={pending}
-        onClick={onClick}
         role={role}
         type="submit"
       >
