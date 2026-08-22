@@ -39,18 +39,26 @@ describe("session sign-out button", () => {
   it("clears Firebase redirect and browser identity before server sign-out", async () => {
     sessionStorage.setItem("flight-map.firebase.redirect-state", "initiated");
     sessionStorage.setItem("flight-map.firebase.return-to", "/map");
+    let finishFirebaseSignOut: (() => void) | undefined;
+    mocks.firebaseSignOut.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishFirebaseSignOut = resolve;
+      }),
+    );
     const user = userEvent.setup();
 
     render(<SessionSignOutButton />);
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    const click = user.click(screen.getByRole("button", { name: "Sign out" }));
 
-    await waitFor(() => expect(mocks.serverSignOut).toHaveBeenCalledOnce());
+    await waitFor(() => expect(mocks.firebaseSignOut).toHaveBeenCalledOnce());
     expect(sessionStorage.getItem("flight-map.firebase.redirect-state")).toBeNull();
     expect(sessionStorage.getItem("flight-map.firebase.return-to")).toBeNull();
     expect(mocks.firebaseSignOut).toHaveBeenCalledWith(mocks.firebaseAuth);
-    expect(mocks.firebaseSignOut.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.serverSignOut.mock.invocationCallOrder[0],
-    );
+    expect(mocks.serverSignOut).not.toHaveBeenCalled();
+
+    finishFirebaseSignOut?.();
+    await click;
+    await waitFor(() => expect(mocks.serverSignOut).toHaveBeenCalledOnce());
   });
 
   it("still clears the authoritative server session when Firebase cleanup fails", async () => {

@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+const canonicalProductionOrigin = "https://waypointer-app.vercel.app";
 
 const persistedEmail = process.env.FLIGHT_MAP_E2E_EMAIL;
 const persistedPassword = process.env.FLIGHT_MAP_E2E_PASSWORD;
@@ -16,6 +18,49 @@ const googleReauthEnabled =
 const googleReauthMaxMs = Number(
   process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS ?? "15000",
 );
+
+if (
+  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true" &&
+  process.env.FLIGHT_MAP_E2E_BASE_URL !== canonicalProductionOrigin
+) {
+  throw new Error(
+    `Production Google reauthentication must target ${canonicalProductionOrigin}.`,
+  );
+}
+
+async function hasPersistedFirebaseIdentity(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<boolean>((resolve, reject) => {
+        const request = indexedDB.open("firebaseLocalStorageDb");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains("firebaseLocalStorage")) {
+            database.close();
+            resolve(false);
+            return;
+          }
+          const transaction = database.transaction(
+            "firebaseLocalStorage",
+            "readonly",
+          );
+          const keys = transaction
+            .objectStore("firebaseLocalStorage")
+            .getAllKeys();
+          keys.onerror = () => reject(keys.error);
+          keys.onsuccess = () => {
+            database.close();
+            resolve(
+              keys.result.some((key) =>
+                String(key).startsWith("firebase:authUser:"),
+              ),
+            );
+          };
+        };
+      }),
+  );
+}
 
 async function expectDescription(
   control: ReturnType<Parameters<typeof expect>[0]["getByLabel"]>,
@@ -174,7 +219,7 @@ test("configured credentials sign-in reaches the private map", async ({
   await expect(page).toHaveURL(/\/map$/);
   await expect(
     page.getByRole("region", {
-      name: /interactive cartographic flight map/i,
+      name: /interactive .* flight routes/i,
     }),
   ).toBeVisible();
 });
@@ -226,8 +271,10 @@ test("production hard gate: clean sign-out then Google sign-in completes promptl
   await expect(
     page.getByRole("heading", { name: "Private account settings" }),
   ).toBeVisible();
+  expect(await hasPersistedFirebaseIdentity(page)).toBe(true);
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/^https:\/\/[^/]+\/$/);
+  await expect(page).toHaveURL(`${canonicalProductionOrigin}/`);
+  expect(await hasPersistedFirebaseIdentity(page)).toBe(false);
 
   await page.getByRole("link", { name: "Sign in", exact: true }).click();
   const startedAt = Date.now();
@@ -238,7 +285,7 @@ test("production hard gate: clean sign-out then Google sign-in completes promptl
   expect(Date.now() - startedAt).toBeLessThan(googleReauthMaxMs);
   await expect(
     page.getByRole("region", {
-      name: /interactive cartographic flight map/i,
+      name: /interactive .* flight routes/i,
     }),
   ).toBeVisible();
 });

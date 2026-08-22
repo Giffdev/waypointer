@@ -178,7 +178,9 @@ $env:FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE = ".playwright-mcp/google-reauth.json"
 npx playwright test e2e/auth.spec.ts --grep "production hard gate" --project=desktop-chrome
 ```
 
-The gate signs out cleanly, immediately signs back in through Google, and
+Capture the fixture with Playwright's `storageState({ indexedDB: true })`; the
+gate rejects a fixture that does not contain a persisted Firebase identity.
+It signs out cleanly, immediately signs back in through Google, and
 requires `/map` within 15 seconds. Override
 `FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS` only for an explicitly approved threshold.
 
