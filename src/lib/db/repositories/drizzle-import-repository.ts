@@ -10,6 +10,7 @@ import {
   or,
 } from "drizzle-orm";
 import type { Airport, Flight, FlightSource } from "@/lib/flight-data";
+import { preferredAirportCode } from "@/lib/airport-preferred-code";
 import type {
   ExistingFingerprintCandidate,
 } from "@/lib/import/dedupe";
@@ -1291,7 +1292,9 @@ function adapterSource(
 }
 
 function airportCode(row: AirportRow): string {
-  return row.iata ?? row.localCode ?? row.icao ?? row.id;
+  const code = preferredAirportCode(row);
+  if (!code) throw new Error("Airport has no safe display identifier");
+  return code;
 }
 
 function toAirport(row: AirportRow): Airport {

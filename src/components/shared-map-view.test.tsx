@@ -7,9 +7,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SharedMapView, toSharedMapData } from "./shared-map-view";
 
 vi.mock("@/components/globe-panel", () => ({
-  default: ({ routes, viewMode }: { routes: unknown[]; viewMode: string }) => (
+  default: ({
+    airports,
+    routes,
+    viewMode,
+  }: {
+    airports: Array<{ code: string; name: string }>;
+    routes: unknown[];
+    viewMode: string;
+  }) => (
     <div data-testid="shared-globe" data-view-mode={viewMode}>
-      {routes.length} routes
+      {routes.length} routes ·{" "}
+      {airports.map(({ code, name }) => `${code} ${name}`).join(" · ")}
     </div>
   ),
 }));
@@ -20,7 +29,7 @@ describe("SharedMapView", () => {
     vi.unstubAllGlobals();
   });
 
-  it("loads the public handle without a key and renders the coarse map", async () => {
+  it("loads the public handle with real airport names and codes", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
 
@@ -30,6 +39,13 @@ describe("SharedMapView", () => {
       await screen.findByRole("heading", { name: "Shared Waypointer map" }),
     ).toBeVisible();
     expect(screen.getByTestId("shared-globe")).toHaveTextContent("1 routes");
+    expect(screen.getByTestId("shared-globe")).toHaveTextContent(
+      "LAX Los Angeles International Airport",
+    );
+    expect(screen.getByTestId("shared-globe")).toHaveTextContent(
+      "SJD Los Cabos International Airport",
+    );
+    expect(screen.getByTestId("shared-globe")).not.toHaveTextContent(/\bR\d+\b/);
     expect(screen.getByText("Map legend")).toBeVisible();
     expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Flat map" }));
@@ -76,22 +92,45 @@ describe("SharedMapView", () => {
     expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
   });
 
-  it("keeps legacy snapshots readable and explains how to enable filters", async () => {
-    const legacy = sharedMap();
-    (legacy.map as { flights: unknown }).flights = null;
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(legacy)));
+  it("never fabricates airports for a malformed current snapshot", async () => {
+    const malformed = sharedMap();
+    (malformed.map as { flights: unknown }).flights = null;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(malformed)));
 
     render(<SharedMapView handle="public-handle" />);
 
     expect(
-      await screen.findByText(/owner can republish it to enable viewer filters/i),
+      await screen.findByRole("heading", { name: "Shared map unavailable" }),
     ).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+  });
+
+  it("asks owners to republish snapshots that predate real airports", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(
+          {
+            error: {
+              code: "republish-required",
+              message:
+                "This shared map must be republished to show real airports.",
+            },
+          },
+          409,
+        ),
+      ),
+    );
+
+    render(<SharedMapView handle="legacy-handle" />);
+
     expect(
-      screen.queryByRole("combobox", {
-        name: "Filter shared flights by role",
+      await screen.findByRole("heading", {
+        name: "Shared map needs republishing",
       }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByTestId("shared-globe")).toHaveTextContent("1 routes");
+    ).toBeVisible();
+    expect(screen.getByText(/real airport names and codes/i)).toBeVisible();
+    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
 
   it("bounds framing work for thousands of unique public routes", () => {
@@ -102,8 +141,22 @@ describe("SharedMapView", () => {
         id: `route-${index}`,
         kind: "commercial" as const,
         flightCount: 1,
-        origin: { lat, lon, country: "US" },
-        destination: { lat: lat + 1, lon: lon + 0.1, country: "US" },
+        origin: airport(
+          `A${index}`,
+          `Origin ${index}`,
+          "Origin city",
+          "US",
+          lat,
+          lon,
+        ),
+        destination: airport(
+          `B${index}`,
+          `Destination ${index}`,
+          "Destination city",
+          "US",
+          lat + 1,
+          lon + 0.1,
+        ),
       };
     });
     const startedAt = performance.now();
@@ -168,6 +221,7 @@ describe("SharedMapView", () => {
 function sharedMap() {
   return {
     map: {
+      schemaVersion: 2,
       owner: { displayName: null },
       summary: { flightCount: 3, routeCount: 1 },
       routes: [
@@ -175,8 +229,22 @@ function sharedMap() {
           id: "route",
           kind: "commercial",
           flightCount: 3,
-          origin: { lat: 34, lon: -118.4, country: "US" },
-          destination: { lat: 24.1, lon: -110.4, country: "MX" },
+          origin: airport(
+            "LAX",
+            "Los Angeles International Airport",
+            "Los Angeles",
+            "US",
+            33.9425,
+            -118.4081,
+          ),
+          destination: airport(
+            "SJD",
+            "Los Cabos International Airport",
+            "San José del Cabo",
+            "MX",
+            23.1518,
+            -109.721,
+          ),
         },
       ],
       flights: [
@@ -206,6 +274,25 @@ function sharedMap() {
         },
       ],
     },
+  };
+}
+
+function airport(
+  code: string,
+  name: string,
+  city: string,
+  country: string,
+  lat: number,
+  lon: number,
+) {
+  return {
+    code,
+    name,
+    city,
+    country,
+    lat,
+    lon,
+    facility: "commercial" as const,
   };
 }
 

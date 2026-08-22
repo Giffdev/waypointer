@@ -1,4 +1,5 @@
 import type { PublicMapProjection } from "@/lib/sharing/service";
+import { isPublicAirportCode } from "@/lib/airport-preferred-code";
 
 const ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const COUNTRY_PATTERN =
@@ -19,17 +20,16 @@ export function parsePublicMapProjection(
   const projection = exactRecord(
     value,
     hasFlightsKey
-      ? ["owner", "summary", "routes", "flights"]
-      : ["owner", "summary", "routes"],
+      ? ["schemaVersion", "owner", "summary", "routes", "flights"]
+      : ["schemaVersion", "owner", "summary", "routes"],
   );
-  const hasFlightDimensions =
-    hasFlightsKey && projection.flights !== null;
   const owner = exactRecord(projection.owner, ["displayName"]);
   const summary = exactRecord(projection.summary, [
     "flightCount",
     "routeCount",
   ]);
   if (
+    projection.schemaVersion !== 2 ||
     !isDisplayName(owner.displayName) ||
     !isNonNegativeInteger(summary.flightCount) ||
     !isNonNegativeInteger(summary.routeCount) ||
@@ -39,9 +39,8 @@ export function parsePublicMapProjection(
   }
 
   const routes = projection.routes.map(parsePublicRoute);
-  const flights = hasFlightDimensions
-    ? parsePublicFlights(projection.flights)
-    : null;
+  if (!hasFlightsKey) throw new PublicMapProjectionValidationError();
+  const flights = parsePublicFlights(projection.flights);
   const routeIds = new Set(routes.map(({ id }) => id));
   const routeKindById = new Map(
     routes.map(({ id, kind }) => [id, kind] as const),
@@ -50,13 +49,12 @@ export function parsePublicMapProjection(
     (total, route) => total + route.flightCount,
     0,
   );
-  const referencedLegs =
-    flights?.reduce(
-      (total, flight) => total + flight.routeIds.length,
-      0,
-    ) ?? null;
+  const referencedLegs = flights.reduce(
+    (total, flight) => total + flight.routeIds.length,
+    0,
+  );
   const referencesByRouteId = new Map<string, number>();
-  for (const flight of flights ?? []) {
+  for (const flight of flights) {
     for (const routeId of flight.routeIds) {
       referencesByRouteId.set(
         routeId,
@@ -70,25 +68,25 @@ export function parsePublicMapProjection(
     (summary.flightCount === 0) !== (routes.length === 0) ||
     !Number.isSafeInteger(representedLegs) ||
     summary.flightCount > representedLegs ||
-    (flights !== null &&
-      (flights.length !== summary.flightCount ||
-        referencedLegs !== representedLegs ||
-        routes.some(
-          (route) =>
-            (referencesByRouteId.get(route.id) ?? 0) !== route.flightCount,
-        ) ||
-        flights.some(
-          (flight) =>
-            flight.routeIds.length === 0 ||
-            flight.routeIds.some(
-              (routeId) => routeKindById.get(routeId) !== flight.kind,
-            ),
-        )))
+    (flights.length !== summary.flightCount ||
+      referencedLegs !== representedLegs ||
+      routes.some(
+        (route) =>
+          (referencesByRouteId.get(route.id) ?? 0) !== route.flightCount,
+      ) ||
+      flights.some(
+        (flight) =>
+          flight.routeIds.length === 0 ||
+          flight.routeIds.some(
+            (routeId) => routeKindById.get(routeId) !== flight.kind,
+          ),
+      ))
   ) {
     throw new PublicMapProjectionValidationError();
   }
 
   return {
+    schemaVersion: 2,
     owner: { displayName: owner.displayName },
     summary: {
       flightCount: summary.flightCount,
@@ -165,28 +163,48 @@ function parsePublicRoute(
     id: route.id,
     kind: route.kind,
     flightCount: route.flightCount,
-    origin: parseCoarsePlace(route.origin),
-    destination: parseCoarsePlace(route.destination),
+    origin: parsePublicAirport(route.origin),
+    destination: parsePublicAirport(route.destination),
   };
 }
 
-function parseCoarsePlace(
+function parsePublicAirport(
   value: unknown,
 ): PublicMapProjection["routes"][number]["origin"] {
-  const place = exactRecord(value, ["lat", "lon", "country"]);
+  const place = exactRecord(value, [
+    "code",
+    "name",
+    "city",
+    "country",
+    "lat",
+    "lon",
+    "facility",
+  ]);
   if (
-    !isCoarseCoordinate(place.lat, -90, 90) ||
-    !isCoarseCoordinate(place.lon, -180, 180) ||
+    typeof place.code !== "string" ||
+    place.code !== place.code.trim() ||
+    !isPublicAirportCode(place.code) ||
+    !isPublicMetadata(place.name) ||
+    !isPublicMetadata(place.city) ||
     typeof place.country !== "string" ||
     place.country !== place.country.trim() ||
-    !COUNTRY_PATTERN.test(place.country)
+    !COUNTRY_PATTERN.test(place.country) ||
+    !isCoordinate(place.lat, -90, 90) ||
+    !isCoordinate(place.lon, -180, 180) ||
+    (place.facility !== "commercial" &&
+      place.facility !== "general-aviation" &&
+      place.facility !== "airstrip")
   ) {
     throw new PublicMapProjectionValidationError();
   }
   return {
+    code: place.code,
+    name: place.name,
+    city: place.city,
+    country: place.country,
     lat: normalizeZero(place.lat),
     lon: normalizeZero(place.lon),
-    country: place.country,
+    facility: place.facility,
   };
 }
 
@@ -237,7 +255,7 @@ function isPublicDate(value: string): boolean {
   );
 }
 
-function isCoarseCoordinate(
+function isCoordinate(
   value: unknown,
   minimum: number,
   maximum: number,
@@ -246,8 +264,7 @@ function isCoarseCoordinate(
     typeof value === "number" &&
     Number.isFinite(value) &&
     value >= minimum &&
-    value <= maximum &&
-    value === Math.round(value * 10) / 10
+    value <= maximum
   );
 }
 

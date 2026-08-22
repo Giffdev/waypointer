@@ -43,6 +43,7 @@ describe("MapSharingPanel", () => {
     expect(
       screen.getByText(/flight dates, roles, aircraft, and tail numbers/i),
     ).toBeVisible();
+    expect(screen.getByText(/airport codes,\s*names, cities/i)).toBeVisible();
     expect(screen.getByText(/does not cap or truncate/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Share my map" }));
 
@@ -54,6 +55,28 @@ describe("MapSharingPanel", () => {
       ([, init]) => init?.method === "POST",
     );
     expect(write?.[1]).toEqual({ method: "POST" });
+  });
+
+  it("republishes an enabled snapshot without disabling its public URL", async () => {
+    const user = userEvent.setup();
+    enabled = true;
+    render(<MapSharingPanel />);
+    await screen.findByText("Public sharing is on");
+
+    await user.click(screen.getByRole("button", { name: "Republish map" }));
+
+    expect(
+      await screen.findByText(
+        "Public map republished with the latest flights and airports.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByText("Public sharing is on")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Public map link" })).toHaveValue(
+      "https://waypointer-app.vercel.app/test-pilot",
+    );
+    expect(
+      vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST"),
+    ).toBe(true);
   });
 
   it("links to the full public URL in a safe new tab and disables sharing", async () => {

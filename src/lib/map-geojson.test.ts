@@ -115,4 +115,48 @@ describe("MapLibre map data", () => {
         ?.properties.showDirection,
     ).toBe(false);
   });
+
+  it("keeps traffic, activity, and direction separate for duplicate display codes", () => {
+    const active = { ...airports.SEA, code: "DUP" };
+    const inactive = {
+      ...airports.SEA,
+      code: "DUP",
+      name: "London duplicate",
+      lat: 51.47,
+      lon: -0.45,
+    };
+    const destination = {
+      ...airports.SEA,
+      code: "DUP",
+      name: "Portland duplicate",
+      lat: 45.59,
+      lon: -122.6,
+    };
+    const route = {
+      id: "duplicate-code-route",
+      origin: active,
+      destination,
+      kind: "commercial" as const,
+      flightCount: 2,
+    };
+
+    const airportCollection = createAirportFeatureCollection(
+      [active, inactive, destination],
+      [route],
+    );
+    const activeFeatures = airportCollection.features.filter(
+      ({ properties }) => properties.isActive,
+    );
+    expect(activeFeatures).toHaveLength(2);
+    expect(
+      airportCollection.features.find(
+        ({ geometry }) => geometry.coordinates[0] === inactive.lon,
+      )?.properties,
+    ).toMatchObject({ traffic: 0, isActive: false });
+
+    expect(
+      createRouteFeatureCollection([route]).features[0]?.properties
+        .showDirection,
+    ).toBe(true);
+  });
 });

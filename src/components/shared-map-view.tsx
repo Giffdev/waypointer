@@ -19,7 +19,9 @@ import type { PublicMapProjection } from "@/lib/sharing/service";
 
 export function SharedMapView({ handle }: { handle: string }) {
   const [projection, setProjection] = useState<PublicMapProjection | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "not-found" | "error">("loading");
+  const [state, setState] = useState<
+    "loading" | "ready" | "not-found" | "republish-required" | "error"
+  >("loading");
 
   useEffect(() => {
     let disposed = false;
@@ -41,6 +43,16 @@ export function SharedMapView({ handle }: { handle: string }) {
           if (response.status === 404) {
             setProjection(null);
             setState("not-found");
+            return;
+          }
+          if (
+            response.status === 409 &&
+            isRecord(body) &&
+            isRecord(body.error) &&
+            body.error.code === "republish-required"
+          ) {
+            setProjection(null);
+            setState("republish-required");
             return;
           }
           if (!response.ok) throw new Error();
@@ -95,6 +107,17 @@ export function SharedMapView({ handle }: { handle: string }) {
       </main>
     );
   }
+  if (state === "republish-required") {
+    return (
+      <main className="shared-map-state">
+        <h1>Shared map needs republishing</h1>
+        <p>
+          The owner must republish this map before it can show real airport
+          names and codes.
+        </p>
+      </main>
+    );
+  }
   if (state === "error" || !projection) {
     return (
       <main className="shared-map-state">
@@ -139,15 +162,14 @@ export function SharedMapProjectionView({
             : "Shared Waypointer map"}
         </h1>
         <p>
-          Approximate aggregated routes · {slice.summary.flightCount.toLocaleString()} flights · {slice.summary.routeCount.toLocaleString()} routes
+          Shared airport routes · {slice.summary.flightCount.toLocaleString()} flights · {slice.summary.routeCount.toLocaleString()} routes
         </p>
         <MapViewToggle value={viewMode} onChange={setViewMode} />
       </header>
-      {slice.filteringAvailable ? (
-        <section
-          className="shared-map-controls panel-surface"
-          aria-labelledby="shared-map-filters-title"
-        >
+      <section
+        className="shared-map-controls panel-surface"
+        aria-labelledby="shared-map-filters-title"
+      >
           <div className="shared-map-controls-heading">
             <div>
               <p className="eyebrow">Viewer controls</p>
@@ -256,13 +278,7 @@ export function SharedMapProjectionView({
             {projection.summary.flightCount.toLocaleString()} shared flights.
             Filters apply only in this browser.
           </p>
-        </section>
-      ) : (
-        <p className="shared-map-legacy-notice" role="status">
-          This existing share shows every published flight. The owner can
-          republish it to enable viewer filters.
-        </p>
-      )}
+      </section>
       <section
         className="shared-map-statistics"
         aria-labelledby="shared-map-statistics-title"
@@ -275,8 +291,8 @@ export function SharedMapProjectionView({
           />
           <SharedStatistic label="Routes" value={slice.summary.routeCount} />
           <SharedStatistic
-            label="Regions"
-            value={slice.summary.regionCount}
+            label="Airports"
+            value={slice.summary.airportCount}
           />
           <SharedStatistic
             label="Countries"
@@ -308,8 +324,8 @@ export function SharedMapProjectionView({
         />
       </section>
       <p className="shared-map-privacy">
-        Locations are intentionally approximate. This public view cannot edit
-        flights or access the owner’s account.
+        Airport names, codes, and public map locations are shared. This public
+        view cannot edit flights or access the owner’s account.
       </p>
     </main>
   );
@@ -338,26 +354,18 @@ export function toSharedMapData(
   const airportByKey = new Map<string, Airport>();
   const routes = new Map<string, MapRoute>();
   const airportFor = (point: PublicMapProjection["routes"][number]["origin"]) => {
-    const key = `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`;
+    const key = publicAirportKey(point);
     const existing = airportByKey.get(key);
     if (existing) return existing;
-    const airport: Airport = {
-      code: `R${airportByKey.size + 1}`,
-      name: `Approximate region in ${point.country}`,
-      city: point.country,
-      country: point.country,
-      lat: point.lat,
-      lon: point.lon,
-      facility: "commercial",
-    };
+    const airport: Airport = { ...point };
     airportByKey.set(key, airport);
     return airport;
   };
   for (const route of publicRoutes) {
     const origin = airportFor(route.origin);
     const destination = airportFor(route.destination);
-    const originKey = publicRegionKey(route.origin);
-    const destinationKey = publicRegionKey(route.destination);
+    const originKey = publicAirportKey(route.origin);
+    const destinationKey = publicAirportKey(route.destination);
     const endpoints = [originKey, destinationKey].sort();
     const key = `${route.kind}|${endpoints.join("|")}`;
     const existing = routes.get(key);
@@ -402,10 +410,10 @@ export function toSharedMapData(
   };
 }
 
-function publicRegionKey(
+function publicAirportKey(
   point: PublicMapProjection["routes"][number]["origin"],
 ): string {
-  return `${point.lat.toFixed(1)}|${point.lon.toFixed(1)}|${point.country}`;
+  return `${point.code}|${point.country}|${point.lat}|${point.lon}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

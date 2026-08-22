@@ -1,5 +1,6 @@
 import type { Airport, MapRoute } from "./flight-data";
 import { routeFrequencyStrength } from "./map-visualization";
+import { airportGeometryIdentity } from "./route-aggregation";
 
 type Position = [number, number];
 
@@ -104,7 +105,10 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
 export function routeDirectionVisibility(routes: MapRoute[]): Map<string, boolean> {
   const groups = new Map<string, MapRoute[]>();
   for (const route of routes) {
-    const endpoints = [route.origin.code, route.destination.code].sort();
+    const endpoints = [
+      airportGeometryIdentity(route.origin),
+      airportGeometryIdentity(route.destination),
+    ].sort();
     const key = `${route.kind}:${endpoints[0]}:${endpoints[1]}`;
     const group = groups.get(key) ?? [];
     group.push(route);
@@ -114,7 +118,10 @@ export function routeDirectionVisibility(routes: MapRoute[]): Map<string, boolea
   const visibility = new Map<string, boolean>();
   for (const group of groups.values()) {
     const bidirectional = new Set(
-      group.map(({ origin, destination }) => `${origin.code}:${destination.code}`),
+      group.map(
+        ({ origin, destination }) =>
+          `${airportGeometryIdentity(origin)}:${airportGeometryIdentity(destination)}`,
+      ),
     ).size > 1;
     for (const route of group) {
       const hasDirectionCounts =
@@ -127,7 +134,8 @@ export function routeDirectionVisibility(routes: MapRoute[]): Map<string, boolea
       visibility.set(
         route.id,
         !routeBidirectional &&
-          route.origin.code !== route.destination.code &&
+          airportGeometryIdentity(route.origin) !==
+            airportGeometryIdentity(route.destination) &&
           route.flightCount <= 3,
       );
     }
@@ -141,22 +149,27 @@ export function createAirportFeatureCollection(
 ): AirportFeatureCollection {
   const traffic = new Map<string, number>();
   for (const route of routes) {
-    traffic.set(route.origin.code, (traffic.get(route.origin.code) ?? 0) + route.flightCount);
+    const originIdentity = airportGeometryIdentity(route.origin);
+    const destinationIdentity = airportGeometryIdentity(route.destination);
     traffic.set(
-      route.destination.code,
-      (traffic.get(route.destination.code) ?? 0) + route.flightCount,
+      originIdentity,
+      (traffic.get(originIdentity) ?? 0) + route.flightCount,
+    );
+    traffic.set(
+      destinationIdentity,
+      (traffic.get(destinationIdentity) ?? 0) + route.flightCount,
     );
   }
   const hubs = new Set(
     [...traffic.entries()]
       .sort((left, right) => right[1] - left[1])
       .slice(0, 8)
-      .map(([code]) => code),
+      .map(([identity]) => identity),
   );
   const activeAirports = new Set(
     routes.flatMap((route) => [
-      route.origin.code,
-      route.destination.code,
+      airportGeometryIdentity(route.origin),
+      airportGeometryIdentity(route.destination),
     ]),
   );
 
@@ -169,9 +182,9 @@ export function createAirportFeatureCollection(
         name: airport.name,
         city: airport.city,
         facility: airport.facility,
-        traffic: traffic.get(airport.code) ?? 0,
-        isHub: hubs.has(airport.code),
-        isActive: activeAirports.has(airport.code),
+        traffic: traffic.get(airportGeometryIdentity(airport)) ?? 0,
+        isHub: hubs.has(airportGeometryIdentity(airport)),
+        isActive: activeAirports.has(airportGeometryIdentity(airport)),
       },
       geometry: {
         type: "Point",

@@ -73,21 +73,36 @@ export function MapSharingPanel() {
 
   async function toggleSharing() {
     if (!status) return;
+    await updateSharing(
+      status.enabled ? "DELETE" : "POST",
+      status.enabled
+        ? "Sharing disabled."
+        : "Public map enabled. Copy the link to share it.",
+    );
+  }
+
+  async function republishSharing() {
+    await updateSharing(
+      "POST",
+      "Public map republished with the latest flights and airports.",
+    );
+  }
+
+  async function updateSharing(
+    method: "POST" | "DELETE",
+    successMessage: string,
+  ) {
     setBusy(true);
     setError("");
     setMessage("");
     try {
       const response = await fetch("/api/account/sharing", {
-        method: status.enabled ? "DELETE" : "POST",
+        method,
       });
       const body = await response.json();
       if (!response.ok) throw new Error(apiErrorMessage(body));
       setStatusState({ phase: "loaded", value: body.sharing });
-      setMessage(
-        status.enabled
-          ? "Sharing disabled."
-          : "Public map enabled. Copy the link to share it.",
-      );
+      setMessage(successMessage);
     } catch (requestError) {
       setError(
         requestError instanceof Error && requestError.message
@@ -146,10 +161,10 @@ export function MapSharingPanel() {
       </p>
       <small>
         Individual flights cannot be selected or hidden, and Waypointer does
-        not cap or truncate the published map. Viewers receive approximate
-        route regions plus flight dates, roles, aircraft, and tail numbers so
-        they can filter their view. Notes, airport codes, account details, and
-        exact locations stay private.
+        not cap or truncate the published map. Viewers receive airport codes,
+        names, cities, countries, and public map locations plus flight dates,
+        roles, aircraft, and tail numbers so they can filter their view. Notes,
+        account details, and other private flight metadata stay private.
       </small>
 
       {status?.enabled && (
@@ -159,18 +174,30 @@ export function MapSharingPanel() {
         </p>
       )}
 
-      <button
-        type="button"
-        className={status?.enabled ? "danger-button" : "primary-button"}
-        disabled={busy || statusState.phase !== "loaded"}
-        onClick={toggleSharing}
-      >
-        {busy
-          ? "Updating..."
-          : status?.enabled
-            ? "Disable sharing"
-            : "Share my map"}
-      </button>
+      <div className="sharing-actions">
+        <button
+          type="button"
+          className={status?.enabled ? "danger-button" : "primary-button"}
+          disabled={busy || statusState.phase !== "loaded"}
+          onClick={toggleSharing}
+        >
+          {busy
+            ? "Updating..."
+            : status?.enabled
+              ? "Disable sharing"
+              : "Share my map"}
+        </button>
+        {status?.enabled && (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy}
+            onClick={republishSharing}
+          >
+            Republish map
+          </button>
+        )}
+      </div>
 
       {status?.enabled && shareUrl && (
         <div className="sharing-live-controls">

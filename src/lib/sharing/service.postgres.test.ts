@@ -10,6 +10,7 @@ import {
   it,
 } from "vitest";
 import { withUserDb } from "@/lib/db";
+import { DrizzleImportRepository } from "@/lib/db/repositories/drizzle-import-repository";
 import {
   flights,
   mapShareFlights,
@@ -90,7 +91,10 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       [firstId, secondId].toSorted(),
     );
     const projection = await getPublicMapProjection(owner.username);
+    const originCode = "R47";
+    const destinationCode = "SOURCE-ONLY";
     expect(projection).toMatchObject({
+      schemaVersion: 2,
       owner: { displayName: null },
       summary: { flightCount: 2, routeCount: 2 },
       flights: [
@@ -105,8 +109,45 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
           registration: "N12345",
         }),
       ],
+      routes: expect.arrayContaining([
+        expect.objectContaining({
+          origin: expect.objectContaining({
+            code: originCode,
+            name: "Public origin",
+            city: "Origin",
+            country: "US",
+            lat: 47.449,
+            lon: -122.309,
+            facility: "general-aviation",
+          }),
+          destination: expect.objectContaining({
+            code: destinationCode,
+            name: "Public destination",
+            city: "Destination",
+            country: "US",
+            lat: 40.64,
+            lon: -73.779,
+            facility: "commercial",
+          }),
+        }),
+      ]),
     });
-    expect(JSON.stringify(projection)).not.toMatch(
+    const privateFlights = await new DrizzleImportRepository().listFlights(
+      owner.id,
+    );
+    expect(privateFlights).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          origin: expect.objectContaining({ code: originCode }),
+          destination: expect.objectContaining({ code: destinationCode }),
+        }),
+      ]),
+    );
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain("Approximate region");
+    expect(serialized).not.toContain(originId);
+    expect(serialized).not.toContain(destinationId);
+    expect(serialized).not.toMatch(
       /@example|secret note|flightId|ownerId|fingerprint|notes/i,
     );
   });
@@ -246,12 +287,12 @@ async function createAirports(): Promise<[string, string]> {
   airportIds.push(originId, destinationId);
   await requireFixtureAdmin()`
     insert into airports (
-      id, icao, name, city, country, latitude, longitude, facility, dataset_version
+      id, source_ident, name, city, country, latitude, longitude, facility, dataset_version
     )
     values
       (
         ${originId}::uuid,
-        ${`K${originId.slice(0, 3).toUpperCase()}`},
+        'R47',
         'Public origin',
         'Origin',
         'US',
@@ -262,7 +303,7 @@ async function createAirports(): Promise<[string, string]> {
       ),
       (
         ${destinationId}::uuid,
-        ${`K${destinationId.slice(0, 3).toUpperCase()}`},
+        'SOURCE-ONLY',
         'Public destination',
         'Destination',
         'US',

@@ -14,7 +14,28 @@ import {
   formatHandleSharePath,
   getPublicMapProjection,
   publicHandleRateLimitKey,
+  ShareRepublishRequiredError,
+  ShareValidationError,
 } from "./service";
+
+function airport(
+  code: string,
+  name: string,
+  city: string,
+  country: string,
+  lat: number,
+  lon: number,
+) {
+  return {
+    code,
+    name,
+    city,
+    country,
+    lat,
+    lon,
+    facility: "commercial" as const,
+  };
+}
 
 describe("public map sharing contracts", () => {
   it("formats the canonical public username path without a token", () => {
@@ -26,6 +47,7 @@ describe("public map sharing contracts", () => {
     const execute = vi.fn().mockResolvedValue([
       {
         projection: {
+          schemaVersion: 2,
           owner: { displayName: null, accountId: "private-owner-id" },
           summary: { flightCount: 1, routeCount: 1, importedRows: 2 },
           routes: [
@@ -37,24 +59,43 @@ describe("public map sharing contracts", () => {
                 lat: 47.456,
                 lon: -122.349,
                 country: "US",
-                airportCode: "SEA",
+                code: "SEA",
+                name: "Seattle-Tacoma International Airport",
+                city: "Seattle",
+                facility: "commercial",
+                airportId: "private-origin-id",
               },
               destination: {
                 lat: 40.64,
                 lon: -73.879,
                 country: "US",
-                airportCode: "JFK",
+                code: "JFK",
+                name: "John F Kennedy International Airport",
+                city: "New York",
+                facility: "commercial",
+                airportId: "private-destination-id",
               },
               flightIds: ["private-flight-id"],
             },
           ],
-          flights: [{ id: "private-flight-id" }],
+          flights: [
+            {
+              id: "private-flight-id",
+              date: "2026-08-01",
+              kind: "private",
+              role: "pilot",
+              aircraft: ["Cessna 172"],
+              registration: "N12345",
+              routeIds: ["route-1"],
+            },
+          ],
         },
       },
     ]);
     mocks.getDb.mockReturnValue({ execute });
 
     await expect(getPublicMapProjection("DeVSiN")).resolves.toEqual({
+      schemaVersion: 2,
       owner: { displayName: null },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [
@@ -62,11 +103,34 @@ describe("public map sharing contracts", () => {
           id: "route-1",
           kind: "private",
           flightCount: 1,
-          origin: { lat: 47.5, lon: -122.3, country: "US" },
-          destination: { lat: 40.6, lon: -73.9, country: "US" },
+          origin: airport(
+            "SEA",
+            "Seattle-Tacoma International Airport",
+            "Seattle",
+            "US",
+            47.456,
+            -122.349,
+          ),
+          destination: airport(
+            "JFK",
+            "John F Kennedy International Airport",
+            "New York",
+            "US",
+            40.64,
+            -73.879,
+          ),
         },
       ],
-      flights: null,
+      flights: [
+        {
+          date: "2026-08-01",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routeIds: ["route-1"],
+        },
+      ],
     });
     expect(execute).toHaveBeenCalledOnce();
   });
@@ -76,14 +140,15 @@ describe("public map sharing contracts", () => {
       {
         projection: {
           owner: { displayName: "Devin", email: "private@example.com" },
+          schemaVersion: 2,
           summary: { flightCount: 1, routeCount: 1 },
           routes: [
             {
               id: "route-1",
               kind: "commercial",
               flightCount: 1,
-              origin: { lat: 47.4, lon: -122.3, country: "US" },
-              destination: { lat: 40.6, lon: -73.8, country: "US" },
+              origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
+              destination: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
             },
           ],
           flights: [
@@ -120,13 +185,13 @@ describe("public map sharing contracts", () => {
     );
   });
 
-  it("degrades inconsistent stored flight dimensions to a legacy view", async () => {
+  it("rejects inconsistent stored flight dimensions", async () => {
     const route = (id: string, flightCount: number) => ({
       id,
       kind: "commercial",
       flightCount,
-      origin: { lat: 47.4, lon: -122.3, country: "US" },
-      destination: { lat: 40.6, lon: -73.8, country: "US" },
+      origin: airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309),
+      destination: airport("JFK", "John F Kennedy", "New York", "US", 40.64, -73.779),
     });
     const flight = (routeIds: string[]) => ({
       date: "2026-08-01",
@@ -140,6 +205,7 @@ describe("public map sharing contracts", () => {
       execute: vi.fn().mockResolvedValue([
         {
           projection: {
+            schemaVersion: 2,
             owner: { displayName: null },
             summary: { flightCount: 2, routeCount: 2 },
             routes: [route("route-1", 2), route("route-2", 1)],
@@ -152,8 +218,75 @@ describe("public map sharing contracts", () => {
       ]),
     });
 
+    await expect(
+      getPublicMapProjection("devsin"),
+    ).rejects.toBeInstanceOf(ShareValidationError);
+  });
+
+  it("requires old approximate-region projections to be republished", async () => {
+    mocks.getDb.mockReturnValue({
+      execute: vi.fn().mockResolvedValue([
+        {
+          projection: {
+            owner: { displayName: null },
+            summary: { flightCount: 1, routeCount: 1 },
+            routes: [
+              {
+                id: "route-1",
+                kind: "commercial",
+                flightCount: 1,
+                origin: { lat: 47.4, lon: -122.3, country: "US" },
+                destination: { lat: 40.6, lon: -73.8, country: "US" },
+              },
+            ],
+          },
+        },
+      ]),
+    });
+
+    await expect(
+      getPublicMapProjection("devsin"),
+    ).rejects.toBeInstanceOf(ShareRepublishRequiredError);
+  });
+
+  it("accepts legitimate R-number airport identifiers", async () => {
+    mocks.getDb.mockReturnValue({
+      execute: vi.fn().mockResolvedValue([
+        {
+          projection: {
+            schemaVersion: 2,
+            owner: { displayName: null },
+            summary: { flightCount: 1, routeCount: 1 },
+            routes: [
+              {
+                id: "route-1",
+                kind: "commercial",
+                flightCount: 1,
+                origin: airport("R47", "Central Airport", "Central", "US", 47.4, -122.3),
+                destination: airport("JFK", "John F Kennedy", "New York", "US", 40.6, -73.8),
+              },
+            ],
+            flights: [
+              {
+                date: "2026-08-01",
+                kind: "commercial",
+                role: "pilot",
+                aircraft: [],
+                registration: null,
+                routeIds: ["route-1"],
+              },
+            ],
+          },
+        },
+      ]),
+    });
+
     await expect(getPublicMapProjection("devsin")).resolves.toMatchObject({
-      flights: null,
+      routes: [
+        expect.objectContaining({
+          origin: expect.objectContaining({ code: "R47" }),
+        }),
+      ],
     });
   });
 
