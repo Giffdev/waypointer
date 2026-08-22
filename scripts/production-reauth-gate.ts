@@ -2,6 +2,7 @@ export const CANONICAL_PRODUCTION_ORIGIN =
   "https://waypointer-app.vercel.app";
 
 type ProductionGoogleReauthEnvironment = Readonly<{
+  [key: string]: string | undefined;
   FLIGHT_MAP_E2E_GOOGLE_REAUTH?: string;
   FLIGHT_MAP_E2E_BASE_URL?: string;
   FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE?: string;

@@ -25,6 +25,11 @@ describe("production Google reauthentication gate", () => {
         FLIGHT_MAP_E2E_GOOGLE_REAUTH: "TRUE",
       }),
     ).toBe(true);
+    expect(
+      isProductionGoogleReauthRequested({
+        FLIGHT_MAP_E2E_GOOGLE_REAUTH: "",
+      }),
+    ).toBe(true);
   });
 
   it("accepts a complete canonical configuration", () => {
@@ -58,12 +63,15 @@ describe("production Google reauthentication gate", () => {
     );
   });
 
-  it("rejects an unrecognized opt-in value instead of silently skipping", () => {
-    expect(() =>
-      requireProductionGoogleReauthConfig({
-        ...configuredEnvironment,
-        FLIGHT_MAP_E2E_GOOGLE_REAUTH: "TRUE",
-      }),
-    ).toThrow("must be exactly true or false");
-  });
+  it.each(["TRUE", ""])(
+    "rejects the unrecognized opt-in value %j instead of silently skipping",
+    (value) => {
+      expect(() =>
+        requireProductionGoogleReauthConfig({
+          ...configuredEnvironment,
+          FLIGHT_MAP_E2E_GOOGLE_REAUTH: value,
+        }),
+      ).toThrow("must be exactly true or false");
+    },
+  );
 });
