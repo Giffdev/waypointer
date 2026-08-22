@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Component, type ReactNode } from "react";
+import { Component, useState, type ReactNode } from "react";
 
 const mocks = vi.hoisted(() => ({
   firebaseAuth: { name: "firebase-auth" },
@@ -48,6 +48,17 @@ class SignOutErrorBoundary extends Component<
       this.props.children
     );
   }
+}
+
+function DismissingMenu() {
+  const [open, setOpen] = useState(true);
+  return open ? (
+    <div onClick={() => setOpen(false)}>
+      <SessionSignOutButton role="menuitem" />
+    </div>
+  ) : (
+    <p>Menu closed</p>
+  );
 }
 
 describe("session sign-out button", () => {
@@ -104,6 +115,28 @@ describe("session sign-out button", () => {
       "Firebase authentication failed.",
       { stage: "sign-out", code: "auth/network-request-failed" },
     );
+  });
+
+  it("finishes sign-out after its account menu is removed during the click", async () => {
+    let finishFirebaseSignOut: (() => void) | undefined;
+    mocks.firebaseSignOut.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishFirebaseSignOut = resolve;
+      }),
+    );
+    const user = userEvent.setup();
+
+    render(<DismissingMenu />);
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
+
+    expect(screen.getByText("Menu closed")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: "Sign out" }),
+    ).not.toBeInTheDocument();
+    expect(mocks.serverSignOut).not.toHaveBeenCalled();
+
+    finishFirebaseSignOut?.();
+    await waitFor(() => expect(mocks.serverSignOut).toHaveBeenCalledOnce());
   });
 
   it("does not let stalled Firebase cleanup block the server sign-out", async () => {

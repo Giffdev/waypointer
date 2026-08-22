@@ -57,7 +57,7 @@ describe("private settings UI", () => {
     );
     expect(screen.queryByText(/public profile URL/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" }))
-      .toHaveAttribute("type", "submit");
+      .toHaveAttribute("type", "button");
   });
 
   it("shows a taken username inline without losing the entered value", async () => {
