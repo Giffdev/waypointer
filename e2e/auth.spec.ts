@@ -9,18 +9,32 @@ const persistedCredentialsEnabled =
   Boolean(persistedEmail && persistedPassword);
 const googleReauthEmail = process.env.FLIGHT_MAP_E2E_GOOGLE_EMAIL;
 const googleReauthEnabled =
-  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true" &&
-  Boolean(
-    process.env.FLIGHT_MAP_E2E_BASE_URL &&
-      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE &&
-      googleReauthEmail,
-  );
+  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true";
 const googleReauthMaxMs = Number(
   process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS ?? "15000",
 );
 
+if (googleReauthEnabled) {
+  const missingVariables = [
+    ["FLIGHT_MAP_E2E_BASE_URL", process.env.FLIGHT_MAP_E2E_BASE_URL],
+    [
+      "FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE",
+      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE,
+    ],
+    ["FLIGHT_MAP_E2E_GOOGLE_EMAIL", googleReauthEmail],
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  if (missingVariables.length > 0) {
+    throw new Error(
+      `Production Google reauthentication requires ${missingVariables.join(", ")}.`,
+    );
+  }
+}
+
 if (
-  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true" &&
+  googleReauthEnabled &&
   process.env.FLIGHT_MAP_E2E_BASE_URL !== canonicalProductionOrigin
 ) {
   throw new Error(
