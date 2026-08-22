@@ -35,6 +35,7 @@ export type MapPageContract = RouteFilterContract & {
   homeFrame: MapFrame;
   statsCards: StatsCard[];
   busiestRoute: {
+    id: string;
     originCode: string;
     destinationCode: string;
     flightCount: number;

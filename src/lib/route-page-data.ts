@@ -92,6 +92,7 @@ export function buildMapPageContract(
     statsCards: scoped.statsCards,
     busiestRoute: scoped.busiestRoute
       ? {
+          id: scoped.busiestRoute.id,
           originCode: scoped.busiestRoute.origin.code,
           destinationCode: scoped.busiestRoute.destination.code,
           flightCount: scoped.busiestRoute.flightCount,

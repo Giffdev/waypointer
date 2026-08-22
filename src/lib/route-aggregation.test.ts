@@ -38,7 +38,8 @@ describe("unordered route aggregation", () => {
     ).toEqual([1, 2]);
     expect(feature.properties.laneOffset).toBe(0);
     expect(feature.properties.bidirectional).toBe(true);
-    expect(feature.properties.showDirection).toBe(false);
+    expect(feature.properties.directionMode).toBe("reciprocal");
+    expect(feature.properties.directionCue).toBe("↔");
     expect(feature.properties.routeLabel).toContain("LAX");
     expect(feature.properties.routeLabel).toContain("LAP");
   });
@@ -58,8 +59,8 @@ describe("unordered route aggregation", () => {
         routes[0].reverseFlightCount ?? 0,
       ),
     ).toBe(3);
-    expect(createRouteFeatureCollection(routes).features[0].properties.showDirection)
-      .toBe(true);
+    expect(createRouteFeatureCollection(routes).features[0].properties.directionCue)
+      .toBe("➤");
   });
 
   it("normalizes code case and coordinate-identical aliases without merging distinct airports", () => {

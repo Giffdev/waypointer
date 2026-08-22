@@ -4,12 +4,12 @@ import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
 const projection = {
   schemaVersion: 2,
   owner: { displayName: null },
-  summary: { flightCount: 4, routeCount: 2 },
+  summary: { flightCount: 4, routeCount: 3 },
   routes: [
     {
       id: "public-route",
       kind: "commercial",
-      flightCount: 3,
+      flightCount: 2,
       origin: {
         code: "SEA",
         name: "Seattle-Tacoma International Airport",
@@ -25,6 +25,29 @@ const projection = {
         city: "New York",
         lat: 40.6,
         lon: -73.8,
+        country: "US",
+        facility: "commercial",
+      },
+    },
+    {
+      id: "public-return-route",
+      kind: "commercial",
+      flightCount: 1,
+      origin: {
+        code: "JFK",
+        name: "John F Kennedy International Airport",
+        city: "New York",
+        lat: 40.6,
+        lon: -73.8,
+        country: "US",
+        facility: "commercial",
+      },
+      destination: {
+        code: "SEA",
+        name: "Seattle-Tacoma International Airport",
+        city: "Seattle",
+        lat: 47.4,
+        lon: -122.3,
         country: "US",
         facility: "commercial",
       },
@@ -76,7 +99,7 @@ const projection = {
       role: "passenger",
       aircraft: ["Airbus A320"],
       registration: "N200BB",
-      routeIds: ["public-route"],
+      routeIds: ["public-return-route"],
     },
     {
       date: "2026-03-15",
@@ -189,10 +212,16 @@ test("opens a public username route with no key or token", async ({ page }) => {
   expect(requests).toEqual([{ method: "GET", body: null }]);
 });
 
-test("filters the public map locally on desktop and mobile", async ({ page }) => {
+test("filters locally and renders truthful route modes on desktop and mobile", async ({
+  page,
+}) => {
   const apiWrites: string[] = [];
+  const sharedRequests: string[] = [];
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
+    if (path === "/api/shared/readable-pilot") {
+      sharedRequests.push(`${request.method()} ${path}`);
+    }
     if (path.startsWith("/api/") && request.method() !== "GET") {
       apiWrites.push(`${request.method()} ${path}`);
     }
@@ -206,6 +235,15 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
     "Showing 4 of 4 shared flights",
   );
   await expect(page.getByText("Map legend")).toBeVisible();
+  await expect(page.getByText("One-way route").locator("..")).toContainText(
+    "➤",
+  );
+  await expect(page.getByText("Reciprocal route").locator("..")).toContainText(
+    "↔",
+  );
+  await expect(
+    page.getByText(/JFK — John F Kennedy International Airport ↔ SEA — Seattle-Tacoma International Airport/),
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Statistics for this view" }),
   ).toBeVisible();
@@ -216,6 +254,14 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
   await expect(page.getByRole("status")).toContainText(
     "Showing 1 of 4 shared flights",
   );
+  await expect(page.getByText("Reciprocal route")).toHaveCount(0);
+  await expect(page.getByText("One-way route").locator("..")).toContainText(
+    "➤",
+  );
+  await expect(page.getByText(/Busiest route:/).locator("..")).toContainText(
+    "SEA — Seattle-Tacoma International Airport ➤ JFK — John F Kennedy International Airport",
+  );
+  expect(sharedRequests).toEqual(["GET /api/shared/readable-pilot"]);
   await page.getByRole("button", { name: "Clear filters" }).click();
 
   await page.getByLabel("Filter shared flights from date").fill("2026-01-01");
@@ -263,6 +309,7 @@ test("filters the public map locally on desktop and mobile", async ({ page }) =>
   await expect(statistics).not.toContainText(/\bR\d+\b|Approximate region/i);
 
   expect(apiWrites).toEqual([]);
+  expect(sharedRequests).toEqual(["GET /api/shared/readable-pilot"]);
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth + 1));

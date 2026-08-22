@@ -229,7 +229,7 @@ export function buildRouteDirectionLayers(
 ): SymbolLayerSpecification[] {
   const layout: SymbolLayerSpecification["layout"] = {
     "symbol-placement": "line-center",
-    "text-field": "➤",
+    "text-field": ["get", "directionCue"],
     "text-font": ["Noto Sans Regular"],
     "text-size": ["interpolate", ["linear"], ["zoom"], 1, 9, 7, 13],
     "text-rotation-alignment": "map",
@@ -256,7 +256,7 @@ export function buildRouteDirectionLayers(
       type: "symbol",
       source,
       minzoom: 1,
-      filter: ["==", ["get", "showDirection"], true],
+      filter: ["!=", ["get", "directionMode"], "none"],
       layout,
       paint,
     },
@@ -268,11 +268,15 @@ export function buildRouteDirectionLayers(
       filter: [
         "all",
         ["==", ["get", "id"], "__none__"],
-        ["==", ["get", "showDirection"], false],
+        ["!=", ["get", "directionMode"], "none"],
       ],
       layout: {
         ...layout,
         "text-size": ["interpolate", ["linear"], ["zoom"], 1, 11, 7, 15],
+        "text-offset": [0, -1.2],
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+        "text-optional": false,
       },
       paint: {
         ...paint,

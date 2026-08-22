@@ -173,6 +173,34 @@ describe("FlightGlobe reduced motion", () => {
     });
   });
 
+  it("gives a selected route to only the selected direction layer", async () => {
+    installMatchMedia(true);
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} />);
+    const map = await readyMap();
+
+    view.rerender(<FlightGlobe {...props} selectedRouteId="route" />);
+
+    await waitFor(() =>
+      expect(map.setFilter).toHaveBeenCalledWith(
+        "flight-route-direction",
+        [
+          "all",
+          ["!=", ["get", "directionMode"], "none"],
+          ["!=", ["get", "id"], "route"],
+        ],
+      ),
+    );
+    expect(map.setFilter).toHaveBeenCalledWith(
+      "flight-route-selected-direction",
+      [
+        "all",
+        ["==", ["get", "id"], "route"],
+        ["!=", ["get", "directionMode"], "none"],
+      ],
+    );
+  });
+
   it("animates ordinary navigation without overriding reduced-motion settings", async () => {
     installMatchMedia(false);
     const props = defaultProps();
