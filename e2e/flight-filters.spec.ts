@@ -129,3 +129,64 @@ test("metadata comboboxes support pointer, typing, selection, clear, and keyboar
   await expect(page).toHaveURL(/aircraft=/);
   await expect(aircraft).not.toHaveValue("All available aircraft");
 });
+
+test("Add flight stays single-line at 1080p and the heading still stacks responsively", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chrome",
+    "One desktop browser covers both responsive viewport widths.",
+  );
+
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/flights");
+  await page.evaluate(() => document.fonts.ready);
+
+  const heading = page.locator(".section-heading.record-heading");
+  const addFlight = page.getByRole("button", { name: "Add flight" });
+  const layout = () =>
+    addFlight.evaluate((button) => {
+      const textNode = Array.from(button.childNodes).find(
+        (node) =>
+          node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()),
+      );
+      if (!textNode) throw new Error("Add flight text node is missing.");
+      const range = document.createRange();
+      range.selectNodeContents(textNode);
+      const lineTops = new Set(
+        Array.from(range.getClientRects()).map(({ top }) => Math.round(top)),
+      );
+      const styles = getComputedStyle(button);
+      return {
+        flexShrink: styles.flexShrink,
+        lineCount: lineTops.size,
+        whiteSpace: styles.whiteSpace,
+      };
+    });
+
+  await expect(addFlight).toBeVisible();
+  await expect(heading).toHaveCSS("flex-direction", "row");
+  await expect(heading.locator(":scope > div").first()).toHaveCSS(
+    "min-width",
+    "0px",
+  );
+  await expect.poll(layout).toEqual({
+    flexShrink: "0",
+    lineCount: 1,
+    whiteSpace: "nowrap",
+  });
+
+  await page.setViewportSize({ width: 760, height: 1000 });
+
+  await expect(heading).toHaveCSS("flex-direction", "column");
+  await expect.poll(layout).toEqual({
+    flexShrink: "0",
+    lineCount: 1,
+    whiteSpace: "nowrap",
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+});

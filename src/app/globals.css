@@ -1447,6 +1447,19 @@ h1 span {
 .stat-card strong { display: block; font-size: 32px; letter-spacing: -.04em; margin: 9px 0 3px; }
 .stat-card span { color: #708990; font-size: 11px; }
 .section-heading { align-items: flex-end; display: flex; justify-content: space-between; margin: 66px 0 20px; }
+.section-heading.record-heading { gap: clamp(16px, 2vw, 28px); }
+.section-heading.record-heading > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.section-heading.record-heading > p {
+  flex: 0 1 440px;
+  min-width: 0;
+}
+.section-heading.record-heading > .primary-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .section-heading h2, .modal h2 { font-size: 32px; letter-spacing: -.04em; margin: 0; }
 .segmented-control { background: rgba(255,255,255,.025); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
 .segmented-control button { background: transparent; border: 0; border-radius: 7px; color: #82999e; cursor: pointer; font-size: 12px; padding: 8px 12px; }
@@ -2104,6 +2117,7 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   }
   .globe-hint { bottom: 48px; top: auto; }
   .record-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .section-heading.record-heading > p { flex-basis: auto; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
