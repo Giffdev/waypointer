@@ -41,8 +41,8 @@ setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
 
 const DEFAULT_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 const OPENFREEMAP_SOURCE_PREFIX = "https://tiles.openfreemap.org/";
-const OPENFREEMAP_ATTRIBUTION =
-  '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+const REQUIRED_BASEMAP_ATTRIBUTION =
+  '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 const TERRAIN_SOURCE_ID = "flight-map-terrain";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
@@ -180,7 +180,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       });
       mapRef.current = map;
       const customAttribution = usesOpenFreeMap(style)
-        ? { customAttribution: OPENFREEMAP_ATTRIBUTION }
+        ? { customAttribution: REQUIRED_BASEMAP_ATTRIBUTION }
         : {};
       map.addControl(
         new AttributionControl({
@@ -490,34 +490,44 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             : "Basemap unavailable · routes remain local"}
         </div>
       )}
-      <details className="terrain-attribution">
-        <summary>Terrain data credits</summary>
-        <div className="terrain-attribution-content">
-          <p>
-            Elevation data sources used by the global terrain layer:
-          </p>
-          <ul>
-            <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
-            <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
-            <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
-            <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
-            <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
-            <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
-            <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
-            <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
-            <li>Norway terrain © Kartverket.</li>
-            <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
-            <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
-          </ul>
-          <a
-            href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-            rel="noopener"
-            target="_blank"
-          >
-            Terrain licence details
-          </a>
-        </div>
-      </details>
+      <div className="terrain-attribution">
+        <a
+          className="terrain-attribution-primary"
+          href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+          rel="noopener"
+          target="_blank"
+        >
+          Mapzen Terrarium terrain attribution
+        </a>
+        <details>
+          <summary>All terrain data credits</summary>
+          <div className="terrain-attribution-content">
+            <p>
+              Elevation data sources used by the global terrain layer:
+            </p>
+            <ul>
+              <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
+              <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
+              <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
+              <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
+              <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
+              <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
+              <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
+              <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
+              <li>Norway terrain © Kartverket.</li>
+              <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
+              <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
+            </ul>
+            <a
+              href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+              rel="noopener"
+              target="_blank"
+            >
+              Terrain licence details
+            </a>
+          </div>
+        </details>
+      </div>
       <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
@@ -591,7 +601,7 @@ async function loadStyle(
     const style = (await response.json()) as StyleSpecification;
     return {
       isFallback: false,
-      style: withMapProjection(withOpenFreeMapAttribution(style), viewMode),
+      style: withMapProjection(withRequiredBasemapAttribution(style), viewMode),
     };
   } catch (error) {
     if (signal.aborted) throw error;
@@ -614,7 +624,7 @@ function usesOpenFreeMap(style: StyleSpecification): boolean {
   );
 }
 
-function withOpenFreeMapAttribution(
+function withRequiredBasemapAttribution(
   style: StyleSpecification,
 ): StyleSpecification {
   return {
@@ -628,7 +638,7 @@ function withOpenFreeMapAttribution(
         return [
           id,
           sourceUrl.startsWith(OPENFREEMAP_SOURCE_PREFIX)
-            ? { ...source, attribution: OPENFREEMAP_ATTRIBUTION }
+            ? { ...source, attribution: REQUIRED_BASEMAP_ATTRIBUTION }
             : source,
         ];
       }),
