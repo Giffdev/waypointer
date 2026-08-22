@@ -5,6 +5,17 @@ const persistedPassword = process.env.FLIGHT_MAP_E2E_PASSWORD;
 const persistedCredentialsEnabled =
   process.env.FLIGHT_MAP_E2E_PERSISTED === "true" &&
   Boolean(persistedEmail && persistedPassword);
+const googleReauthEmail = process.env.FLIGHT_MAP_E2E_GOOGLE_EMAIL;
+const googleReauthEnabled =
+  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH === "true" &&
+  Boolean(
+    process.env.FLIGHT_MAP_E2E_BASE_URL &&
+      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE &&
+      googleReauthEmail,
+  );
+const googleReauthMaxMs = Number(
+  process.env.FLIGHT_MAP_E2E_GOOGLE_REAUTH_MAX_MS ?? "15000",
+);
 
 async function expectDescription(
   control: ReturnType<Parameters<typeof expect>[0]["getByLabel"]>,
@@ -188,7 +199,7 @@ test("profile sign-out returns home and clears protected access", async ({
   await expect(page).toHaveURL(/\/map$/);
 
   await page.goto("/settings");
-  await page.getByRole("button", { name: "Sign out" }).last().click();
+  await page.getByRole("button", { name: "Sign out" }).click();
 
   await expect(page).toHaveURL(/^https?:\/\/[^/]+\/$/);
   expect(
@@ -200,4 +211,34 @@ test("profile sign-out returns home and clears protected access", async ({
   await expect(page).toHaveURL(
     /\/auth\/sign-in\?callbackUrl=%2Fsettings$/,
   );
+});
+
+test("production hard gate: clean sign-out then Google sign-in completes promptly", async ({
+  page,
+}) => {
+  test.skip(
+    !googleReauthEnabled,
+    "Production Google reauthentication state is not configured.",
+  );
+  test.setTimeout(60_000);
+
+  await page.goto("/settings");
+  await expect(
+    page.getByRole("heading", { name: "Private account settings" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await expect(page).toHaveURL(/^https:\/\/[^/]+\/$/);
+
+  await page.getByRole("link", { name: "Sign in", exact: true }).click();
+  const startedAt = Date.now();
+  await page.getByRole("button", { name: "Continue with Google" }).click();
+  await page.waitForURL(/accounts\.google\.com/, { timeout: 10_000 });
+  await page.getByText(googleReauthEmail!, { exact: true }).first().click();
+  await expect(page).toHaveURL(/\/map$/, { timeout: googleReauthMaxMs });
+  expect(Date.now() - startedAt).toBeLessThan(googleReauthMaxMs);
+  await expect(
+    page.getByRole("region", {
+      name: /interactive cartographic flight map/i,
+    }),
+  ).toBeVisible();
 });

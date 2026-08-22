@@ -1,7 +1,7 @@
 "use client";
 
-import { signOutToHomepage } from "@/app/auth/sign-out/actions";
 import { useState, type FormEvent } from "react";
+import { SessionSignOutButton } from "@/components/auth/session-sign-out-button";
 import {
   normalizeUsername,
   USERNAME_INPUT_PATTERN,
@@ -264,11 +264,7 @@ export default function SettingsClient({
           </section>
         )}
         {configured && (
-          <form action={signOutToHomepage}>
-            <button className="secondary-button" type="submit">
-              Sign out
-            </button>
-          </form>
+          <SessionSignOutButton className="secondary-button" />
         )}
       </section>
     </main>

@@ -1,6 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
-const baseURL = "http://127.0.0.1:3100";
+const baseURL =
+  process.env.FLIGHT_MAP_E2E_BASE_URL ?? "http://127.0.0.1:3100";
+const externalBaseURL = Boolean(process.env.FLIGHT_MAP_E2E_BASE_URL);
+const googleStorageState =
+  process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE;
 const persistedImportE2e =
   process.env.FLIGHT_MAP_E2E_PERSISTED === "true";
 
@@ -12,6 +16,7 @@ export default defineConfig({
   use: {
     baseURL,
     channel: "chrome",
+    storageState: googleStorageState || undefined,
     trace: "retain-on-failure",
   },
   projects: [
@@ -28,7 +33,7 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
+  webServer: externalBaseURL ? undefined : {
     command: "npm run dev -- --hostname 127.0.0.1 --port 3100",
     url: baseURL,
     reuseExistingServer: false,
