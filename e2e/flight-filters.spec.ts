@@ -17,7 +17,7 @@ test("interactive globe initializes, loads data, and survives filter updates", a
 
   await page.goto("/map");
   const globe = page.getByRole("region", {
-    name: /interactive cartographic flight map/i,
+    name: /interactive .* flight routes/i,
   });
   await expect(globe).toHaveAttribute("data-map-ready", "true", {
     timeout: 15_000,

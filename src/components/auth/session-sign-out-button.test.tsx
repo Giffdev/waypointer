@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Component, type ReactNode } from "react";
 
 const mocks = vi.hoisted(() => ({
   firebaseAuth: { name: "firebase-auth" },
@@ -23,6 +31,25 @@ vi.mock("@/app/auth/sign-out/actions", () => ({
 
 import { SessionSignOutButton } from "./session-sign-out-button";
 
+class SignOutErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    return this.state.error ? (
+      <p role="alert">{this.state.error.message}</p>
+    ) : (
+      this.props.children
+    );
+  }
+}
+
 describe("session sign-out button", () => {
   beforeEach(() => {
     sessionStorage.clear();
@@ -32,6 +59,7 @@ describe("session sign-out button", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.restoreAllMocks();
   });
@@ -76,5 +104,38 @@ describe("session sign-out button", () => {
       "Firebase authentication failed.",
       { stage: "sign-out", code: "auth/network-request-failed" },
     );
+  });
+
+  it("does not let stalled Firebase cleanup block the server sign-out", async () => {
+    vi.useFakeTimers();
+    mocks.firebaseSignOut.mockReturnValue(new Promise(() => undefined));
+
+    render(<SessionSignOutButton />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    expect(mocks.serverSignOut).not.toHaveBeenCalled();
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+
+    expect(mocks.serverSignOut).toHaveBeenCalledOnce();
+    expect(console.error).toHaveBeenCalledWith(
+      "Firebase authentication failed.",
+      { stage: "sign-out", code: "auth/client-cleanup-timeout" },
+    );
+  });
+
+  it("surfaces server sign-out errors instead of masking them", async () => {
+    mocks.serverSignOut.mockRejectedValue(new Error("server sign-out failed"));
+    const user = userEvent.setup();
+
+    render(
+      <SignOutErrorBoundary>
+        <SessionSignOutButton />
+      </SignOutErrorBoundary>,
+    );
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await expect(
+      screen.findByRole("alert"),
+    ).resolves.toHaveTextContent("server sign-out failed");
   });
 });

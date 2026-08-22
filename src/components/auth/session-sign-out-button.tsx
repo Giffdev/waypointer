@@ -7,6 +7,7 @@ import { getFirebaseAuth } from "@/lib/auth/firebase-client";
 
 const FIREBASE_REDIRECT_STATE_KEY = "flight-map.firebase.redirect-state";
 const FIREBASE_RETURN_TO_KEY = "flight-map.firebase.return-to";
+const FIREBASE_SIGN_OUT_TIMEOUT_MS = 2_000;
 
 function reportFirebaseSignOutFailure(error: unknown) {
   const code =
@@ -37,6 +38,26 @@ async function clearFirebaseBrowserSession() {
   }
 }
 
+async function clearFirebaseBrowserSessionWithinDeadline() {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = await Promise.race([
+    clearFirebaseBrowserSession().then(() => false),
+    new Promise<true>((resolve) => {
+      timeoutId = setTimeout(() => resolve(true), FIREBASE_SIGN_OUT_TIMEOUT_MS);
+    }),
+  ]);
+
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+  if (timedOut) {
+    console.error("Firebase authentication failed.", {
+      stage: "sign-out",
+      code: "auth/client-cleanup-timeout",
+    });
+  }
+}
+
 export function SessionSignOutButton({
   children = "Sign out",
   className,
@@ -52,8 +73,8 @@ export function SessionSignOutButton({
     <form
       action={async () => {
         setPending(true);
-        await clearFirebaseBrowserSession();
         try {
+          await clearFirebaseBrowserSessionWithinDeadline();
           await signOutToHomepage();
         } finally {
           setPending(false);

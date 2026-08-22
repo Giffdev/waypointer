@@ -259,18 +259,19 @@ test("profile sign-out returns home and clears protected access", async ({
 });
 
 test.describe("production Google reauthentication", () => {
+  test.skip(
+    !googleReauthEnabled,
+    "Production Google reauthentication state is not configured.",
+  );
   test.use({
-    storageState:
-      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE || undefined,
+    storageState: googleReauthEnabled
+      ? process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE
+      : undefined,
   });
 
   test("production hard gate: clean sign-out then Google sign-in completes promptly", async ({
     page,
   }) => {
-    test.skip(
-      !googleReauthEnabled,
-      "Production Google reauthentication state is not configured.",
-    );
     test.setTimeout(60_000);
 
     await page.goto("/settings");
