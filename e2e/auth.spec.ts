@@ -258,34 +258,43 @@ test("profile sign-out returns home and clears protected access", async ({
   );
 });
 
-test("production hard gate: clean sign-out then Google sign-in completes promptly", async ({
-  page,
-}) => {
-  test.skip(
-    !googleReauthEnabled,
-    "Production Google reauthentication state is not configured.",
-  );
-  test.setTimeout(60_000);
+test.describe("production Google reauthentication", () => {
+  test.use({
+    storageState:
+      process.env.FLIGHT_MAP_E2E_GOOGLE_STORAGE_STATE || undefined,
+  });
 
-  await page.goto("/settings");
-  await expect(
-    page.getByRole("heading", { name: "Private account settings" }),
-  ).toBeVisible();
-  expect(await hasPersistedFirebaseIdentity(page)).toBe(true);
-  await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(`${canonicalProductionOrigin}/`);
-  expect(await hasPersistedFirebaseIdentity(page)).toBe(false);
+  test("production hard gate: clean sign-out then Google sign-in completes promptly", async ({
+    page,
+  }) => {
+    test.skip(
+      !googleReauthEnabled,
+      "Production Google reauthentication state is not configured.",
+    );
+    test.setTimeout(60_000);
 
-  await page.getByRole("link", { name: "Sign in", exact: true }).click();
-  const startedAt = Date.now();
-  await page.getByRole("button", { name: "Continue with Google" }).click();
-  await page.waitForURL(/accounts\.google\.com/, { timeout: 10_000 });
-  await page.getByText(googleReauthEmail!, { exact: true }).first().click();
-  await expect(page).toHaveURL(/\/map$/, { timeout: googleReauthMaxMs });
-  expect(Date.now() - startedAt).toBeLessThan(googleReauthMaxMs);
-  await expect(
-    page.getByRole("region", {
-      name: /interactive .* flight routes/i,
-    }),
-  ).toBeVisible();
+    await page.goto("/settings");
+    await expect(
+      page.getByRole("heading", { name: "Private account settings" }),
+    ).toBeVisible();
+    expect(await hasPersistedFirebaseIdentity(page)).toBe(true);
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(`${canonicalProductionOrigin}/`);
+    expect(await hasPersistedFirebaseIdentity(page)).toBe(false);
+
+    await page.getByRole("link", { name: "Sign in", exact: true }).click();
+    const startedAt = Date.now();
+    await page.getByRole("button", { name: "Continue with Google" }).click();
+    await page.waitForURL(/accounts\.google\.com/, { timeout: 10_000 });
+    await page.getByText(googleReauthEmail!, { exact: true }).first().click();
+    await expect(page).toHaveURL(/\/map$/, {
+      timeout: Math.max(1_000, googleReauthMaxMs - 500),
+    });
+    expect(Date.now() - startedAt).toBeLessThan(googleReauthMaxMs);
+    await expect(
+      page.getByRole("region", {
+        name: /interactive .* flight routes/i,
+      }),
+    ).toBeVisible();
+  });
 });

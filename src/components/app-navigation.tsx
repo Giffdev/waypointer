@@ -204,8 +204,8 @@ export default function AppNavigation({
                   Settings
                 </Link>
                 <SessionSignOutButton role="menuitem">
-                    <LogOut size={16} aria-hidden="true" />
-                    Sign out
+                  <LogOut size={16} aria-hidden="true" />
+                  Sign out
                 </SessionSignOutButton>
               </div>
             ) : null}

@@ -23,7 +23,7 @@ function reportFirebaseSignOutFailure(error: unknown) {
   });
 }
 
-export async function clearFirebaseBrowserSession() {
+async function clearFirebaseBrowserSession() {
   try {
     sessionStorage.removeItem(FIREBASE_REDIRECT_STATE_KEY);
     sessionStorage.removeItem(FIREBASE_RETURN_TO_KEY);
@@ -40,23 +40,24 @@ export async function clearFirebaseBrowserSession() {
 export function SessionSignOutButton({
   children = "Sign out",
   className,
-  formClassName,
   role,
 }: {
   children?: ReactNode;
   className?: string;
-  formClassName?: string;
   role?: "menuitem";
 }) {
   const [pending, setPending] = useState(false);
 
   return (
     <form
-      className={formClassName}
       action={async () => {
         setPending(true);
         await clearFirebaseBrowserSession();
-        await signOutToHomepage();
+        try {
+          await signOutToHomepage();
+        } finally {
+          setPending(false);
+        }
       }}
     >
       <button
