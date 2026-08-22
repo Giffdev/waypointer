@@ -4,6 +4,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/app/auth/sign-out/actions", () => ({
+  signOutToHomepage: vi.fn(),
+}));
+
 import SettingsClient from "./route-client";
 
 afterEach(() => {
@@ -51,6 +56,8 @@ describe("private settings UI", () => {
       "DELETE",
     );
     expect(screen.queryByText(/public profile URL/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out" }))
+      .toHaveAttribute("type", "submit");
   });
 
   it("shows a taken username inline without losing the entered value", async () => {
