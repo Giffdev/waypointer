@@ -138,7 +138,7 @@ describe("deploy-production", () => {
 
     await expect(
       verifyPublicAuthAvailability(
-        "https://flight-map-one.vercel.app",
+        "https://waypointer-app.vercel.app",
         fetchImplementation as typeof fetch,
       ),
     ).resolves.toBeUndefined();
@@ -149,7 +149,7 @@ describe("deploy-production", () => {
     );
     await expect(
       verifyPublicAuthAvailability(
-        "https://flight-map-one.vercel.app",
+        "https://waypointer-app.vercel.app",
         fetchImplementation as typeof fetch,
       ),
     ).rejects.toThrow(/Public auth route is unavailable/);

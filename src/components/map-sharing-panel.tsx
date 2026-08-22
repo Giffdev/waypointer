@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { canonicalPublicUrl } from "@/lib/public-origin";
 
 type OwnerShareStatusResponse = {
   enabled: boolean;
@@ -33,15 +34,11 @@ export function MapSharingPanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [browserOrigin] = useState(() =>
-    typeof window === "undefined" ? null : window.location.origin,
-  );
   const status =
     statusState.phase === "loaded" ? statusState.value : null;
-  const shareUrl =
-    status?.sharePath && browserOrigin
-      ? resolveShareUrl(status.sharePath, browserOrigin)
-      : null;
+  const shareUrl = status?.sharePath
+    ? resolveShareUrl(status.sharePath)
+    : null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -232,9 +229,6 @@ function apiErrorMessage(body: unknown): string {
   return "Sharing could not be updated.";
 }
 
-export function resolveShareUrl(
-  sharePath: string,
-  browserOrigin: string,
-): string {
-  return new URL(sharePath, browserOrigin).href;
+export function resolveShareUrl(sharePath: string): string {
+  return canonicalPublicUrl(sharePath);
 }

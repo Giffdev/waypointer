@@ -278,7 +278,7 @@ describe("airport release database target safety", () => {
         releaseControlPlane: {
           deploymentId: "dpl_12345678",
           deploymentUrl: "https://candidate.vercel.app",
-          productionAlias: "flight-map-one.vercel.app",
+          productionAlias: "waypointer-app.vercel.app",
           aliasDeploymentId: "dpl_12345678",
           projectId: "prj_1XEu7EWNl1Eekl3TKQ6FnKnGznv8",
           orgId: "team_qymLK9gugmE5lSs2mxC5XqRY",

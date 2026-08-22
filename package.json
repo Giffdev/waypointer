@@ -46,7 +46,7 @@
     "verify:production-candidate": "tsx scripts/verify-control-plane-deployment.ts",
     "promote:production": "tsx scripts/promote-production.ts",
     "check:preview-config": "node scripts/check-preview-release-config.mjs && node scripts/check-firebase-oauth-host.mjs flight-map-preview-giffdev.vercel.app",
-    "check:production-config": "node scripts/check-production-release-config.mjs && node scripts/check-firebase-oauth-host.mjs flight-map-one.vercel.app",
+    "check:production-config": "node scripts/check-production-release-config.mjs && node scripts/check-firebase-oauth-host.mjs waypointer-app.vercel.app",
     "check:durable-import-worker": "node scripts/check-durable-import-worker-config.mjs",
     "check": "npm run check:public-auth && npm run test && npm run lint && npm run build",
     "check:full": "node scripts/local-stack.mjs check-full"

@@ -16,7 +16,7 @@ const runtime = {
   deploymentId: "dpl_12345678",
   deploymentUrl: "https://candidate.vercel.app",
   projectId: "prj_12345678",
-  productionUrl: "flight-map-one.vercel.app",
+  productionUrl: "waypointer-app.vercel.app",
   environment: "production",
   targetEnvironment: "production",
   gitProvider: "github",

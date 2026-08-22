@@ -45,7 +45,7 @@ describe("MapSharingPanel", () => {
 
     expect(await screen.findByText("Public sharing is on")).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Public map link" })).toHaveValue(
-      resolveShareUrl("/test-pilot", window.location.origin),
+      "https://waypointer-app.vercel.app/test-pilot",
     );
     const write = vi.mocked(fetch).mock.calls.find(
       ([, init]) => init?.method === "POST",
@@ -59,7 +59,7 @@ describe("MapSharingPanel", () => {
     render(<MapSharingPanel />);
     await screen.findByText("Public sharing is on");
 
-    const absolute = resolveShareUrl("/test-pilot", window.location.origin);
+    const absolute = resolveShareUrl("/test-pilot");
     expect(screen.getByRole("link", { name: "Open public map" })).toHaveAttribute(
       "href",
       absolute,

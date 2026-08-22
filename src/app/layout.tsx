@@ -4,6 +4,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 import { FirebaseSessionCompletion } from "@/components/auth/firebase-session-completion";
 import { firebasePublicConfig } from "@/lib/auth/firebase-config";
+import { CANONICAL_PUBLIC_ORIGIN } from "@/lib/public-origin";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,13 +17,18 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(CANONICAL_PUBLIC_ORIGIN),
   applicationName: "Waypointer",
   title: {
     default: "Waypointer — Every flight, one living map",
     template: "%s · Waypointer",
   },
   description: "A private home for personal and commercial flight history.",
+  alternates: {
+    canonical: "/",
+  },
   openGraph: {
+    url: "/",
     type: "website",
     siteName: "Waypointer",
     title: "Waypointer — Every flight, one living map",
