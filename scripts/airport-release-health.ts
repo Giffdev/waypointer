@@ -24,6 +24,7 @@ import {
 } from "./airport-release-provenance.ts";
 import {
   requireAirportReleaseTarget,
+  requireRepositoryPath,
 } from "./airport-release-safety.ts";
 import {
   AirportCatalogSafetyError,
@@ -66,11 +67,29 @@ const EXPECTED_REGIONAL_IDENTITIES = new Map([
   ["UIL", "KUIL"],
   ["KUIL", "KUIL"],
 ]);
+const EXPECTED_APPLICATION_AIRPORT_CODES = new Map([
+  ["00A", "00A"],
+  ["W01", "W01"],
+  ["OMK", "OMK"],
+  ["S18", "S18"],
+  ["DMK", "DMK"],
+  ["REP", "REP"],
+  ["VDSR", "REP"],
+  ["VDSA", "SAI"],
+]);
 
 export interface ExistingFlightSnapshot {
   count: number;
   sha256: string;
   ids: string[];
+}
+
+export interface ReleaseReconciliationSummary {
+  resolved?: number;
+  completed?: number;
+  conflicts?: number;
+  ambiguous?: number;
+  unknown?: number;
 }
 
 export interface RegionalAirportHealth {
@@ -92,6 +111,7 @@ async function relationExists(
 export async function snapshotExistingFlights(
   sql: UnsafeSqlClient,
   ids?: string[],
+  excludeIds = false,
 ): Promise<ExistingFlightSnapshot> {
   if (!(await relationExists(sql, "public.flights"))) {
     return {
@@ -101,7 +121,11 @@ export async function snapshotExistingFlights(
     };
   }
   const parameters: unknown[] = [];
-  const filter = ids ? "where id = any($1::uuid[])" : "";
+  const filter = ids
+    ? excludeIds
+      ? "where id <> all($1::uuid[])"
+      : "where id = any($1::uuid[])"
+    : "";
   if (ids) parameters.push(ids);
   const rows = await sql.unsafe(
     `select
@@ -123,6 +147,65 @@ export async function snapshotExistingFlights(
     sha256: hash.digest("hex"),
     ids: rows.map((row) => String(row.id)),
   };
+}
+
+export async function verifyHistoricalFlightBaseline(
+  sql: UnsafeSqlClient,
+  before: ExistingFlightSnapshot,
+  reconciliation: ReleaseReconciliationSummary | undefined,
+): Promise<ExistingFlightSnapshot> {
+  const current = await snapshotExistingFlights(sql);
+  if (
+    current.count === before.count &&
+    current.sha256 === before.sha256
+  ) {
+    return current;
+  }
+  if (
+    reconciliation?.resolved !== 2 ||
+    reconciliation.completed !== 1 ||
+    reconciliation.conflicts !== 0 ||
+    reconciliation.ambiguous !== 0 ||
+    reconciliation.unknown !== 0 ||
+    current.count !== before.count + reconciliation.resolved
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const reconciledRows = await sql.unsafe(
+    `select flights.id::text
+     from flights
+     join airports origin on origin.id = flights.origin_airport_id
+     join airports destination on destination.id = flights.destination_airport_id
+     where flights.source_type = 'FlightRadar24'
+       and (
+         (
+           flights.date = '2018-10-23'
+           and origin.iata = 'DMK'
+           and destination.iata = 'REP'
+         )
+         or (
+           flights.date = '2018-10-26'
+           and origin.iata = 'REP'
+           and destination.iata = 'SIN'
+         )
+       )
+     order by flights.id`,
+  );
+  if (reconciledRows.length !== reconciliation.resolved) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  const baseline = await snapshotExistingFlights(
+    sql,
+    reconciledRows.map(({ id }) => String(id)),
+    true,
+  );
+  if (
+    baseline.count !== before.count ||
+    baseline.sha256 !== before.sha256
+  ) {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
+  return current;
 }
 
 export async function verifyExistingFlightsUnchanged(
@@ -224,7 +307,12 @@ export async function verifyApplicationHealth(
       oidcIdentitySha256: releaseEndpoint.oidcIdentitySha256,
     },
   ];
-  for (const route of ["/", "/map", "/flights", "/api/flights"]) {
+  for (const route of [
+    "/map",
+    "/flights",
+    "/import",
+    "/settings",
+  ]) {
     const response = await fetchImplementation(new URL(route, verifiedOrigin), {
       redirect: "manual",
       headers: { cookie: sessionCookie },
@@ -234,9 +322,9 @@ export async function verifyApplicationHealth(
     }
     observations.push({ route, status: response.status });
   }
-  for (const [code, sourceIdent] of EXPECTED_REGIONAL_IDENTITIES) {
+  for (const [query, expectedCode] of EXPECTED_APPLICATION_AIRPORT_CODES) {
     const url = new URL("/api/import/airports", verifiedOrigin);
-    url.searchParams.set("query", code);
+    url.searchParams.set("query", query);
     url.searchParams.set("limit", "10");
     const response = await fetchImplementation(url, {
       redirect: "manual",
@@ -249,20 +337,10 @@ export async function verifyApplicationHealth(
       airports?: Array<{ icao?: string; code?: string; name?: string }>;
     };
     const matches = payload.airports ?? [];
-    const expectedCode =
-      sourceIdent === "00A"
-        ? "00A"
-        : sourceIdent === "KW01"
-          ? "W01"
-          : sourceIdent === "KOMK"
-            ? "OMK"
-            : sourceIdent === "KUIL"
-              ? "UIL"
-              : "S18";
     if (!matches.some((airport) => airport.code === expectedCode)) {
       throw new AirportCatalogSafetyError("health-check-failed");
     }
-    observations.push({ code, count: matches.length });
+    observations.push({ query, count: matches.length });
   }
   const providerAfterHealth = await verifyVercelProductionDeployment(
     expectation,
@@ -295,7 +373,7 @@ export async function verifyApplicationHealth(
     providerRequestCompletedAt:
       providerAfterHealth.requestCompletedAt,
     routesChecked: 5,
-    airportQueriesChecked: EXPECTED_REGIONAL_IDENTITIES.size,
+    airportQueriesChecked: EXPECTED_APPLICATION_AIRPORT_CODES.size,
     responseSha256: createHash("sha256")
       .update(JSON.stringify(observations))
       .digest("hex"),
@@ -350,12 +428,12 @@ async function verifyReconciliationReadOnly(
 }
 
 async function main() {
-  const target = requireAirportReleaseTarget();
   const databaseEvidencePath =
     process.env.AIRPORT_RELEASE_DATABASE_EVIDENCE_PATH?.trim() ?? "";
   const databaseEvidenceSha256 =
     process.env.AIRPORT_RELEASE_DATABASE_EVIDENCE_SHA256?.trim() ?? "";
   let databaseEvidence: {
+    generatedAt?: string;
     status?: string;
     candidate?: {
       manifestSha256?: string;
@@ -372,9 +450,20 @@ async function main() {
       count?: number;
       afterSha256?: string;
     };
+    reconciliation?: ReleaseReconciliationSummary;
   };
   try {
-    const permittedEvidenceRoot = path.resolve(target.evidenceDirectory);
+    const permittedEvidenceBase = path.join(
+      "artifacts",
+      "release-evidence",
+      "airport-catalog",
+    );
+    const permittedEvidenceRoot = requireRepositoryPath(
+      process.env.AIRPORT_RELEASE_EVIDENCE_DIRECTORY?.trim() ||
+        permittedEvidenceBase,
+      permittedEvidenceBase,
+      undefined,
+    );
     const localEvidencePath = path.resolve(databaseEvidencePath);
     if (
       !localEvidencePath.startsWith(
@@ -395,6 +484,19 @@ async function main() {
   } catch {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
   }
+  const databaseReleaseTime = Date.parse(
+    databaseEvidence.generatedAt ?? "",
+  );
+  if (
+    !Number.isFinite(databaseReleaseTime) ||
+    databaseReleaseTime > Date.now()
+  ) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+  const target = requireAirportReleaseTarget(
+    process.env,
+    databaseReleaseTime,
+  );
   if (
     databaseEvidence.status !== "database-release-passed" ||
     databaseEvidence.candidate?.manifestSha256 !==
@@ -504,17 +606,16 @@ async function main() {
     const regional = await verifyRegionalAirportResolution(
       client as unknown as UnsafeSqlClient,
     );
-    const historicalFlights = await snapshotExistingFlights(
+    const historicalFlights = await verifyHistoricalFlightBaseline(
       client as unknown as UnsafeSqlClient,
+      {
+        count: databaseEvidence.historicalFlights?.count ?? -1,
+        sha256:
+          databaseEvidence.historicalFlights?.afterSha256 ?? "",
+        ids: [],
+      },
+      databaseEvidence.reconciliation,
     );
-    if (
-      historicalFlights.count !==
-        databaseEvidence.historicalFlights?.count ||
-      historicalFlights.sha256 !==
-        databaseEvidence.historicalFlights?.afterSha256
-    ) {
-      throw new AirportCatalogSafetyError("health-check-failed");
-    }
     const reconciliation = await verifyReconciliationReadOnly(client);
     const application = await verifyApplicationHealth(
       deployment,

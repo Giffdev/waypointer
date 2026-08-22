@@ -230,6 +230,30 @@ describe("airport release database target safety", () => {
     });
   });
 
+  it("keeps live release authorization fresh while permitting post-release evidence validation at commit time", async () => {
+    const releaseTime = Date.now();
+    const environment = await environmentWithApproval(
+      approvalPayload(releaseTime),
+    );
+
+    expect(() =>
+      requireAirportReleaseTarget(
+        environment,
+        releaseTime + 2 * 3_600_000,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        diagnosticCode: "target-approval-invalid",
+      }),
+    );
+    expect(
+      requireAirportReleaseTarget(environment, releaseTime),
+    ).toMatchObject({
+      databaseName: "flight_map",
+      databaseOid: 16_384,
+    });
+  });
+
   it("requires exact rollback stop conditions and verification command", async () => {
     const invalid = approvalPayload();
     invalid.snapshot.restoreProcedure.stopConditions =
