@@ -306,4 +306,28 @@ describe("public map projection parser", () => {
       }),
     ).toThrow(PublicMapProjectionValidationError);
   });
+
+  it("rejects duplicate route ids within one flight", () => {
+    expect(() =>
+      parsePublicMapProjection({
+        ...projection,
+        routes: [
+          {
+            ...projection.routes[0],
+            flightCount: 2,
+            forwardFlightCount: 2,
+          },
+        ],
+        flights: [
+          {
+            ...projection.flights[0],
+            routeLegs: [
+              { routeId: "route-1", direction: "forward" },
+              { routeId: "route-1", direction: "forward" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(PublicMapProjectionValidationError);
+  });
 });

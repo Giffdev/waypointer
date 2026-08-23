@@ -830,6 +830,12 @@ function normalizeStoredPublicProjection(
           return { routeId, direction };
         });
       }
+      if (
+        new Set(routeLegs.map(({ routeId }) => routeId)).size !==
+        routeLegs.length
+      ) {
+        throw new ShareValidationError();
+      }
       return {
         date: Reflect.get(candidate, "date") as string,
         kind,
