@@ -1,5 +1,34 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "./next.config";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe("Firebase authentication proxy", () => {
+  it("proxies the handler and Firebase initialization config", async () => {
+    vi.stubEnv(
+      "NEXT_PUBLIC_FIREBASE_AUTH_PROXY_DOMAIN",
+      "flight-map.example",
+    );
+    vi.stubEnv(
+      "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN",
+      "project.firebaseapp.com",
+    );
+    const rewrites = nextConfig.rewrites as () => Promise<unknown>;
+
+    await expect(rewrites()).resolves.toEqual([
+      {
+        source: "/__/auth/:path*",
+        destination: "https://project.firebaseapp.com/__/auth/:path*",
+      },
+      {
+        source: "/__/firebase/init.json",
+        destination: "https://project.firebaseapp.com/__/firebase/init.json",
+      },
+    ]);
+  });
+});
 
 describe("production host redirects", () => {
   it("redirects the legacy production host to the canonical origin", async () => {

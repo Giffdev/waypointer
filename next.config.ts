@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-import { firebaseAuthProxyRewrite } from "./src/lib/auth/firebase-config";
+import { firebaseAuthProxyRewrites } from "./src/lib/auth/firebase-config";
 import { CANONICAL_PUBLIC_ORIGIN } from "./src/lib/public-origin";
 
 const nextConfig: NextConfig = {
@@ -17,8 +17,7 @@ const nextConfig: NextConfig = {
       }
     : {}),
   async rewrites() {
-    const firebaseAuthRewrite = firebaseAuthProxyRewrite();
-    return firebaseAuthRewrite ? [firebaseAuthRewrite] : [];
+    return firebaseAuthProxyRewrites() ?? [];
   },
   async redirects() {
     return [
