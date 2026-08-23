@@ -6,7 +6,7 @@ afterEach(() => {
 });
 
 describe("Firebase authentication proxy", () => {
-  it("proxies the handler and Firebase initialization config", async () => {
+  it("proxies the Firebase-managed authentication handler", async () => {
     vi.stubEnv(
       "NEXT_PUBLIC_FIREBASE_AUTH_PROXY_DOMAIN",
       "flight-map.example",
@@ -24,7 +24,7 @@ describe("Firebase authentication proxy", () => {
       },
       {
         source: "/__/firebase/init.json",
-        destination: "https://project.firebaseapp.com/__/firebase/init.json",
+        destination: "/api/auth/firebase/init",
       },
     ]);
   });
