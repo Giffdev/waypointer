@@ -431,6 +431,63 @@ describe("public map sharing contracts", () => {
     ).rejects.toBeInstanceOf(ShareValidationError);
   });
 
+  it("rejects duplicate route ids within one stored flight", async () => {
+    mocks.getDb.mockReturnValue({
+      execute: vi.fn().mockResolvedValue([
+        {
+          projection: {
+            schemaVersion: 2,
+            owner: { displayName: null },
+            summary: { flightCount: 1, routeCount: 1 },
+            canonicalRoutes: [
+              {
+                id: "route-1",
+                kind: "commercial",
+                flightCount: 2,
+                forwardFlightCount: 2,
+                reverseFlightCount: 0,
+                directionMode: "one-way",
+                origin: airport(
+                  "SEA",
+                  "Seattle",
+                  "Seattle",
+                  "US",
+                  47.449,
+                  -122.309,
+                ),
+                destination: airport(
+                  "JFK",
+                  "John F Kennedy",
+                  "New York",
+                  "US",
+                  40.64,
+                  -73.779,
+                ),
+              },
+            ],
+            flights: [
+              {
+                date: "2026-08-01",
+                kind: "commercial",
+                role: "pilot",
+                aircraft: [],
+                registration: null,
+                routeLegs: [
+                  { routeId: "route-1", direction: "forward" },
+                  { routeId: "route-1", direction: "forward" },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+    });
+
+    await expect(
+      getPublicMapProjection("devsin"),
+    ).rejects.toBeInstanceOf(ShareValidationError);
+  });
+
   it("normalizes legacy opposite-direction routes without requiring republish", async () => {
     const sea = airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309);
     const jfk = airport(

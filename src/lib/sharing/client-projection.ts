@@ -110,6 +110,8 @@ export function parsePublicMapProjection(
       flights.some(
         (flight) =>
           flight.routeLegs.length === 0 ||
+          new Set(flight.routeLegs.map(({ routeId }) => routeId)).size !==
+            flight.routeLegs.length ||
           flight.routeLegs.some(
             ({ routeId, direction }) =>
               routeKindById.get(routeId) !== flight.kind ||
