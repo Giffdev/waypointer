@@ -45,7 +45,7 @@ describe("Firebase public authentication configuration", () => {
       },
       {
         source: "/__/firebase/init.json",
-        destination: "https://project.firebaseapp.com/__/firebase/init.json",
+        destination: "/api/auth/firebase/init",
       },
     ]);
   });

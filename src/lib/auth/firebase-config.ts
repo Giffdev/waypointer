@@ -35,7 +35,7 @@ export function firebaseAuthProxyRewrites(
     },
     {
       source: "/__/firebase/init.json",
-      destination: `https://${upstreamDomain}/__/firebase/init.json`,
+      destination: "/api/auth/firebase/init",
     },
   ];
 }
