@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  firebaseAuthProxyRewrite,
+  firebaseAuthProxyRewrites,
   firebaseOAuthDeploymentUrls,
   firebasePublicConfig,
 } from "./firebase-config";
@@ -38,11 +38,16 @@ describe("Firebase public authentication configuration", () => {
     expect(firebasePublicConfig(environment)?.authDomain).toBe(
       "flight-map.example",
     );
-    expect(firebaseAuthProxyRewrite(environment)).toEqual({
-      source: "/__/auth/:path*",
-      destination: "https://project.firebaseapp.com/__/auth/:path*",
-    });
-
+    expect(firebaseAuthProxyRewrites(environment)).toEqual([
+      {
+        source: "/__/auth/:path*",
+        destination: "https://project.firebaseapp.com/__/auth/:path*",
+      },
+      {
+        source: "/__/firebase/init.json",
+        destination: "https://project.firebaseapp.com/__/firebase/init.json",
+      },
+    ]);
   });
 
   it("derives the exact Firebase-managed Google handler for each host", () => {

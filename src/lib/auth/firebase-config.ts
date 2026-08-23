@@ -20,7 +20,7 @@ export function firebasePublicConfig(
   return Object.values(config).every(Boolean) ? config : null;
 }
 
-export function firebaseAuthProxyRewrite(
+export function firebaseAuthProxyRewrites(
   environment: NodeJS.ProcessEnv = process.env,
 ) {
   const proxyDomain =
@@ -28,10 +28,16 @@ export function firebaseAuthProxyRewrite(
   const upstreamDomain =
     environment.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN?.trim();
   if (!proxyDomain || !upstreamDomain) return null;
-  return {
-    source: "/__/auth/:path*",
-    destination: `https://${upstreamDomain}/__/auth/:path*`,
-  };
+  return [
+    {
+      source: "/__/auth/:path*",
+      destination: `https://${upstreamDomain}/__/auth/:path*`,
+    },
+    {
+      source: "/__/firebase/init.json",
+      destination: `https://${upstreamDomain}/__/firebase/init.json`,
+    },
+  ];
 }
 
 export function firebaseOAuthDeploymentUrls(host: string) {
