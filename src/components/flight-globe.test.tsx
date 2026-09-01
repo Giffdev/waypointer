@@ -237,15 +237,27 @@ describe("FlightGlobe reduced motion", () => {
     expect(summary.closest(".terrain-attribution")).toBeVisible();
     expect(mapMocks.attributionOptions[0]?.customAttribution)
       .not.toContain("OpenFreeMap");
-    expect(
-      screen.getByText(/ArcticDEM terrain data DEM\(s\) were created from/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/DigitalGlobe, Inc\., imagery/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/3DEP \(formerly NED\)/),
-    ).toBeInTheDocument();
+    const requiredAttributionItems = Array.from(
+      summary.closest(".terrain-attribution")?.querySelectorAll("li") ?? [],
+    ).map((item) => (item.textContent ?? "").replace(/\s+/g, " ").trim());
+    // Exact, order-sensitive comparison of the full 11-entry joerd-required
+    // attribution list (verbatim punctuation/Unicode, e.g. "©", en dashes,
+    // and the ArcticDEM funding-award numbers). A missing, reordered, or
+    // paraphrased entry is a real attribution-compliance regression and
+    // must fail this test, not just slip past a substring spot check.
+    expect(requiredAttributionItems).toEqual([
+      "ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc., imagery and funded under National Science Foundation awards 1043681, 1559691, and 1542736;",
+      "Australia terrain data © Commonwealth of Australia (Geoscience Australia) 2017;",
+      "Austria terrain data © offene Daten Österreichs – Digitales Geländemodell (DGM) Österreich;",
+      "Canada terrain data contains information licensed under the Open Government Licence – Canada;",
+      "Europe terrain data produced using Copernicus data and information funded by the European Union - EU-DEM layers;",
+      "Global ETOPO1 terrain data U.S. National Oceanic and Atmospheric Administration",
+      "Mexico terrain data source: INEGI, Continental relief, 2016;",
+      "New Zealand terrain data Copyright 2011 Crown copyright (c) Land Information New Zealand and the New Zealand Government (All rights reserved);",
+      "Norway terrain data © Kartverket;",
+      "United Kingdom terrain data © Environment Agency copyright and/or database right 2015. All rights reserved;",
+      "United States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.",
+    ]);
     expect(
       screen.getByRole("link", { name: "Full terrain provider attribution (joerd)" }),
     ).toHaveAttribute(

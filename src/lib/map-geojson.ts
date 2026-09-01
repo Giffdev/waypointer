@@ -24,10 +24,14 @@ export type RouteFeatureCollection = {
       reverseFlightCount: number;
       bidirectional: boolean;
       /**
-       * Direction is carried on the map exclusively by `directionMode` +
-       * the raster geometry icons. No Unicode cue character is exported on
-       * map features: DOM surfaces read `routeLabel` / `routeTitle` /
-       * `directionDetail`, which already embed the arrow glyphs.
+       * Direction on the map canvas is carried exclusively by
+       * `directionMode` + the raster geometry icons: no standalone
+       * `directionCue` feature property remains, and no MapLibre
+       * `text-field` layer reads an arrow-bearing property. DOM-facing
+       * `routeLabel` / `routeTitle` / `directionDetail` intentionally
+       * retain the accessible `➤` / `↔` direction cues for popups and
+       * other detail surfaces; only `mapSafeRouteLabel` feeds MapLibre
+       * glyph text-field layers.
        */
       directionMode: RouteDirectionMode;
       directionDetail: string;
