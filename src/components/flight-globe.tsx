@@ -516,27 +516,60 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             <summary>Terrain data credits</summary>
             <div className="terrain-attribution-content">
               <p>
-                Elevation data sources used by the global terrain layer:
+                Elevation (terrain) tiles are served directly from the AWS
+                Open Data Registry (elevation-tiles-prod), not through
+                Mapzen&apos;s hosted service. The required upstream provider
+                attribution for those tiles, reproduced from Tilezen&apos;s
+                joerd project, is:
               </p>
               <ul>
-                <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
-                <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
-                <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
-                <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
-                <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
-                <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
-                <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
-                <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
-                <li>Norway terrain © Kartverket.</li>
-                <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
-                <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
+                <li>
+                  ArcticDEM terrain data DEM(s) were created from
+                  DigitalGlobe, Inc., imagery and funded under National
+                  Science Foundation awards 1043681, 1559691, and 1542736;
+                </li>
+                <li>
+                  Australia terrain data © Commonwealth of Australia
+                  (Geoscience Australia) 2017;
+                </li>
+                <li>
+                  Austria terrain data © offene Daten Österreichs – Digitales
+                  Geländemodell (DGM) Österreich;
+                </li>
+                <li>
+                  Canada terrain data contains information licensed under the
+                  Open Government Licence – Canada;
+                </li>
+                <li>
+                  Europe terrain data produced using Copernicus data and
+                  information funded by the European Union - EU-DEM layers;
+                </li>
+                <li>
+                  Global ETOPO1 terrain data U.S. National Oceanic and
+                  Atmospheric Administration;
+                </li>
+                <li>Mexico terrain data source: INEGI, Continental relief, 2016;</li>
+                <li>
+                  New Zealand terrain data Copyright 2011 Crown copyright (c)
+                  Land Information New Zealand and the New Zealand Government
+                  (All rights reserved);
+                </li>
+                <li>Norway terrain data © Kartverket;</li>
+                <li>
+                  United Kingdom terrain data © Environment Agency copyright
+                  and/or database right 2015. All rights reserved;
+                </li>
+                <li>
+                  United States 3DEP (formerly NED) and global GMTED2010 and
+                  SRTM terrain data courtesy of the U.S. Geological Survey.
+                </li>
               </ul>
               <a
                 href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
                 rel="noopener"
                 target="_blank"
               >
-                Terrain licence details
+                Full terrain provider attribution (joerd)
               </a>
             </div>
           </details>

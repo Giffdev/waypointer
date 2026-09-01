@@ -185,17 +185,23 @@ describe("FlightGlobe reduced motion", () => {
     expect(mapMocks.attributionOptions[0]?.customAttribution)
       .not.toContain("OpenFreeMap");
     expect(
-      screen.getByText(/ArcticDEM terrain from DigitalGlobe imagery/),
+      screen.getByText(/ArcticDEM terrain data DEM\(s\) were created from/),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Terrain licence details" }),
+      screen.getByText(/DigitalGlobe, Inc\., imagery/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/3DEP \(formerly NED\)/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Full terrain provider attribution (joerd)" }),
     ).toHaveAttribute(
       "href",
       "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
     );
   });
 
-  it("omits the shaded-relief terrain source and its attribution control when starting in flat map mode", async () => {
+  it("omits the shaded-relief terrain source and the full required upstream terrain attribution when starting in flat map mode (no DEM in use)", async () => {
     installMatchMedia(false);
 
     render(<FlightGlobe {...defaultProps()} viewMode="flat" />);
@@ -209,9 +215,14 @@ describe("FlightGlobe reduced motion", () => {
     expect(
       screen.queryByText("Terrain data credits"),
     ).not.toBeInTheDocument();
+    // The full required upstream-provider attribution text must not be
+    // rendered at all when no DEM/terrain source is in use, since it would
+    // be misleading to credit data that flat mode never fetches.
+    expect(screen.queryByText(/3DEP \(formerly NED\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kartverket/)).not.toBeInTheDocument();
   });
 
-  it("adds and removes the shaded-relief terrain source as the view mode pivots between 3D globe and flat map", async () => {
+  it("adds and removes the shaded-relief terrain source and the full required upstream terrain attribution as the view mode pivots between 3D globe (DEM active) and flat map (no DEM)", async () => {
     installMatchMedia(false);
 
     const props = defaultProps();
@@ -219,6 +230,11 @@ describe("FlightGlobe reduced motion", () => {
     const map = await readyMap();
 
     expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    // While the DEM/terrain source is active (3D globe), the full required
+    // upstream-provider attribution text must be reachable, not just a
+    // generic summary link.
+    expect(screen.getByText(/3DEP \(formerly NED\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Kartverket/)).toBeInTheDocument();
     const terrainAddCallsBeforeToggle = map.addSource.mock.calls.filter(
       (call: unknown[]) => call[0] === "flight-map-terrain",
     ).length;
@@ -232,6 +248,8 @@ describe("FlightGlobe reduced motion", () => {
     expect(
       screen.queryByText("Terrain data credits"),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText(/3DEP \(formerly NED\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Kartverket/)).not.toBeInTheDocument();
 
     view.rerender(<FlightGlobe {...props} viewMode="globe" />);
     await waitFor(() => {
@@ -241,6 +259,8 @@ describe("FlightGlobe reduced motion", () => {
       expect(terrainAddCallsAfterToggle).toBe(2);
     });
     expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    expect(screen.getByText(/3DEP \(formerly NED\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Kartverket/)).toBeInTheDocument();
   });
 
   it("registers all four route-direction icons once, instead of relying on text glyphs", async () => {

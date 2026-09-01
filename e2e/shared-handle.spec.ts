@@ -193,11 +193,12 @@ test("opens a public username route with no key or token", async ({ page }) => {
   await expect(terrainCredits).toBeVisible();
   await terrainCredits.click();
   await expect(
-    page.getByRole("link", { name: "Terrain licence details" }),
+    page.getByRole("link", { name: "Full terrain provider attribution (joerd)" }),
   ).toHaveAttribute(
     "href",
     "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
   );
+  await expect(page.getByText(/3DEP \(formerly NED\)/)).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Filter shared flights by airport" }),
   ).toHaveValue("All shared airports");
@@ -242,6 +243,12 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     /Interactive 3D globe/,
   );
   await expect(page.getByText("Terrain data credits")).toBeVisible();
+  // The full required upstream-provider attribution list — not just a
+  // generic summary link — must be reachable while the DEM/terrain source
+  // is active (3D globe mode).
+  await page.getByText("Terrain data credits").click();
+  await expect(page.getByText(/3DEP \(formerly NED\)/)).toBeVisible();
+  await expect(page.getByText(/Kartverket/)).toBeVisible();
 
   await page
     .getByLabel("Filter shared flights by role")
@@ -263,8 +270,11 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     "aria-label",
     /Interactive flat projected map/,
   );
-  // Flat mode omits the DEM/hillshade source, so its terrain credit is absent.
+  // Flat mode omits the DEM/hillshade source, so its terrain credit — and
+  // the full required upstream-provider attribution text — is absent.
   await expect(page.getByText("Terrain data credits")).toHaveCount(0);
+  await expect(page.getByText(/3DEP \(formerly NED\)/)).toHaveCount(0);
+  await expect(page.getByText(/Kartverket/)).toHaveCount(0);
 
   // Toggling the view must not refetch or lose filters/stats/legend/route cues.
   await expect(
@@ -286,6 +296,10 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     /Interactive 3D globe/,
   );
   await expect(page.getByText("Terrain data credits")).toBeVisible();
+  // Re-expand after the toggle re-mounted the control (closed by default)
+  // to confirm the full attribution text is reachable again in 3D mode.
+  await page.getByText("Terrain data credits").click();
+  await expect(page.getByText(/3DEP \(formerly NED\)/)).toBeVisible();
   await expect(
     page.getByLabel("Filter shared flights by role"),
   ).toHaveValue("pilot");
