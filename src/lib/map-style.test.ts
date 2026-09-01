@@ -279,7 +279,6 @@ describe("cartographic map style", () => {
     expect(properties).toContain("mapSafeRouteLabel");
     expect(properties).not.toContain("routeLabel");
     expect(properties).not.toContain("routeTitle");
-    expect(properties).not.toContain("directionCue");
     expect(properties).not.toContain("directionDetail");
 
     const oneWay: MapRoute = {

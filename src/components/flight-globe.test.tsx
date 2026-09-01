@@ -12,14 +12,107 @@ import {
 } from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 import { DIRECTION_ICON_IDS } from "@/lib/map-icons";
-import { TERRAIN_RELIEF_LAYER_ID } from "@/lib/map-style";
+import { ROUTE_LAYER_IDS, TERRAIN_RELIEF_LAYER_ID } from "@/lib/map-style";
+
+type StyleLayerStub = { id: string; type: string };
+type MapConstructorOptions = Record<string, unknown> & {
+  style?: { layers?: StyleLayerStub[] };
+};
 
 const mapMocks = vi.hoisted(() => {
-  const instances: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
+  /**
+   * MapLibre stand-in that keeps a *real ordered layer list*: `addLayer`
+   * honours its `beforeId` argument (and throws for an unknown one, like
+   * MapLibre does), `removeLayer` splices, and `getStyle().layers` reports the
+   * resulting order. Layer order is a rendering contract here — the shaded
+   * relief has to stay underneath the route lines — so a mock that only
+   * records "some layer was added" cannot catch the regression.
+   */
+  const createMapMock = (initialLayers: StyleLayerStub[]) => {
+    const layers: StyleLayerStub[] = initialLayers.map((layer) => ({ ...layer }));
+    const sourceIds = new Set<string>();
+    const imageIds = new Set<string>();
+    const indexOfLayer = (id: string) =>
+      layers.findIndex((layer) => layer.id === id);
+
+    return {
+      addControl: vi.fn(),
+      addImage: vi.fn((id: string) => {
+        imageIds.add(id);
+      }),
+      addLayer: vi.fn((layer: StyleLayerStub, beforeId?: string) => {
+        if (indexOfLayer(layer.id) !== -1) {
+          throw new Error(`Layer "${layer.id}" already exists on this map.`);
+        }
+        const entry = { id: layer.id, type: layer.type };
+        if (beforeId === undefined) {
+          layers.push(entry);
+          return;
+        }
+        const before = indexOfLayer(beforeId);
+        if (before === -1) {
+          throw new Error(`Layer "${beforeId}" does not exist on this map.`);
+        }
+        layers.splice(before, 0, entry);
+      }),
+      addSource: vi.fn((id: string) => {
+        sourceIds.add(id);
+      }),
+      cameraForBounds: vi.fn((bounds: [[number, number], [number, number]]) => ({
+        center: [
+          (bounds[0][0] + bounds[1][0]) / 2,
+          (bounds[0][1] + bounds[1][1]) / 2,
+        ],
+        zoom: 3,
+      })),
+      easeTo: vi.fn(),
+      fitBounds: vi.fn(),
+      flyTo: vi.fn(),
+      getCanvas: vi.fn(() => ({ style: {} })),
+      getCenter: vi.fn(() => ({ lng: 0, lat: 0 })),
+      getContainer: vi.fn(() => ({ clientWidth: 1024, clientHeight: 640 })),
+      getLayer: vi.fn((id: string) => layers.find((layer) => layer.id === id)),
+      getSource: vi.fn((id: string) =>
+        sourceIds.has(id) ? { id, setData: vi.fn() } : undefined,
+      ),
+      getStyle: vi.fn(() => ({ layers: layers.map((layer) => ({ ...layer })) })),
+      getZoom: vi.fn(() => 4),
+      hasImage: vi.fn((id: string) => imageIds.has(id)),
+      jumpTo: vi.fn(),
+      off: vi.fn(),
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        void event;
+        void handler;
+      }),
+      once: vi.fn((event: string, callback: () => void) => {
+        if (event === "load" || event === "moveend") queueMicrotask(callback);
+      }),
+      queryRenderedFeatures: vi.fn(() => []),
+      remove: vi.fn(),
+      removeLayer: vi.fn((id: string) => {
+        const index = indexOfLayer(id);
+        if (index !== -1) layers.splice(index, 1);
+      }),
+      removeSource: vi.fn((id: string) => {
+        sourceIds.delete(id);
+      }),
+      resize: vi.fn(),
+      setCenter: vi.fn(),
+      setFilter: vi.fn(),
+      setLayoutProperty: vi.fn(),
+      setPaintProperty: vi.fn(),
+      setProjection: vi.fn(),
+      stop: vi.fn(),
+    };
+  };
+
+  const instances: Array<ReturnType<typeof createMapMock>> = [];
   const attributionOptions: Array<Record<string, unknown>> = [];
-  const mapOptions: Array<Record<string, unknown>> = [];
-  return { attributionOptions, instances, mapOptions };
+  const mapOptions: MapConstructorOptions[] = [];
+  return { attributionOptions, createMapMock, instances, mapOptions };
 });
+
+type MapMock = (typeof mapMocks.instances)[number];
 
 vi.mock("maplibre-gl", () => ({
   AttributionControl: class {
@@ -35,64 +128,9 @@ vi.mock("maplibre-gl", () => ({
   },
   setWorkerUrl: vi.fn(),
   Map: class {
-    constructor(options: Record<string, unknown>) {
+    constructor(options: MapConstructorOptions) {
       mapMocks.mapOptions.push(options);
-      const sourceIds = new Set<string>();
-      const layerIds = new Set<string>();
-      const imageIds = new Set<string>();
-      const methods: Record<string, ReturnType<typeof vi.fn>> = {
-        addControl: vi.fn(),
-        addImage: vi.fn((id: string) => {
-          imageIds.add(id);
-        }),
-        addLayer: vi.fn((layer: { id: string }) => {
-          layerIds.add(layer.id);
-        }),
-        addSource: vi.fn((id: string) => {
-          sourceIds.add(id);
-        }),
-        cameraForBounds: vi.fn((bounds: [[number, number], [number, number]]) => ({
-          center: [
-            (bounds[0][0] + bounds[1][0]) / 2,
-            (bounds[0][1] + bounds[1][1]) / 2,
-          ],
-          zoom: 3,
-        })),
-        easeTo: vi.fn(),
-        fitBounds: vi.fn(),
-        flyTo: vi.fn(),
-        getCanvas: vi.fn(() => ({ style: {} })),
-        getCenter: vi.fn(() => ({ lng: 0, lat: 0 })),
-        getContainer: vi.fn(() => ({ clientWidth: 1024, clientHeight: 640 })),
-        getLayer: vi.fn((id: string) => (layerIds.has(id) ? { id } : undefined)),
-        getSource: vi.fn((id: string) =>
-          sourceIds.has(id) ? { id, setData: vi.fn() } : undefined,
-        ),
-        getStyle: vi.fn(() => ({ layers: [] })),
-        getZoom: vi.fn(() => 4),
-        hasImage: vi.fn((id: string) => imageIds.has(id)),
-        jumpTo: vi.fn(),
-        off: vi.fn(),
-        on: vi.fn(),
-        once: vi.fn((event: string, callback: () => void) => {
-          if (event === "load" || event === "moveend") queueMicrotask(callback);
-        }),
-        queryRenderedFeatures: vi.fn(() => []),
-        remove: vi.fn(),
-        removeLayer: vi.fn((id: string) => {
-          layerIds.delete(id);
-        }),
-        removeSource: vi.fn((id: string) => {
-          sourceIds.delete(id);
-        }),
-        resize: vi.fn(),
-        setCenter: vi.fn(),
-        setFilter: vi.fn(),
-        setLayoutProperty: vi.fn(),
-        setPaintProperty: vi.fn(),
-        setProjection: vi.fn(),
-        stop: vi.fn(),
-      };
+      const methods = mapMocks.createMapMock(options.style?.layers ?? []);
       mapMocks.instances.push(methods);
       return methods;
     }
@@ -127,6 +165,13 @@ const route: MapRoute = {
   flightCount: 1,
 };
 const originIdentity = airportExactIdentity(origin);
+const BASEMAP_LAYERS = [
+  { id: "basemap-background", type: "background" },
+  { id: "basemap-water", type: "fill" },
+  { id: "basemap-roads", type: "line" },
+  { id: "basemap-place-labels", type: "symbol" },
+  { id: "basemap-poi-labels", type: "symbol" },
+];
 const homeFrame: MapFrame = {
   center: [5, 6],
   zoom: 3,
@@ -149,7 +194,10 @@ beforeEach(() => {
           url: "https://tiles.openfreemap.org/planet",
         },
       },
-      layers: [],
+      // A realistic basemap layer stack: the app inserts its own layers
+      // relative to the first basemap symbol layer, so an empty list would
+      // hide every ordering decision under test.
+      layers: BASEMAP_LAYERS,
     }),
   })));
 });
@@ -271,6 +319,44 @@ describe("FlightGlobe reduced motion", () => {
     expect(screen.getByText(/Kartverket/)).toBeInTheDocument();
   });
 
+  it("keeps the shaded relief beneath every flight-route layer on a direct 3D load and across repeated flat/3D pivots", async () => {
+    installMatchMedia(false);
+
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} />);
+    const map = await readyMap();
+
+    const directLoadOrder = orderedLayerIds(map);
+    expectReliefBeneathRoutes(directLoadOrder);
+    // The relief is inserted into the basemap stack, not on top of it.
+    expect(directLoadOrder.indexOf(TERRAIN_RELIEF_LAYER_ID)).toBeLessThan(
+      directLoadOrder.indexOf("basemap-place-labels"),
+    );
+    expect(directLoadOrder.indexOf(TERRAIN_RELIEF_LAYER_ID)).toBeGreaterThan(
+      directLoadOrder.indexOf("basemap-roads"),
+    );
+
+    // Pivoting rebuilds the relief against an already-populated app layer
+    // stack, where the first symbol layer is one of ours. The 3D stack must
+    // come back byte-for-byte identical every time, not just once.
+    for (const pivot of [1, 2]) {
+      view.rerender(<FlightGlobe {...props} viewMode="flat" />);
+      await waitFor(() =>
+        expect(orderedLayerIds(map)).not.toContain(TERRAIN_RELIEF_LAYER_ID),
+      );
+
+      view.rerender(<FlightGlobe {...props} viewMode="globe" />);
+      await waitFor(() =>
+        expect(orderedLayerIds(map)).toContain(TERRAIN_RELIEF_LAYER_ID),
+      );
+      expectReliefBeneathRoutes(orderedLayerIds(map));
+      expect({ pivot, order: orderedLayerIds(map) }).toEqual({
+        pivot,
+        order: directLoadOrder,
+      });
+    }
+  });
+
   it("computes shaded relief before updating state, keeping map mutation out of the React updater", async () => {
     const component = readFileSync(
       resolve(process.cwd(), "src/components/flight-globe.tsx"),
@@ -294,14 +380,13 @@ describe("FlightGlobe reduced motion", () => {
 
     const hillshadeAdds = () =>
       map.addLayer.mock.calls.filter(
-        (call: unknown[]) =>
-          (call[0] as { id?: string } | undefined)?.id === TERRAIN_RELIEF_LAYER_ID,
+        ([layer]) => layer.id === TERRAIN_RELIEF_LAYER_ID,
       ).length;
     expect(hillshadeAdds()).toBe(1);
 
     const styleLoad = map.on.mock.calls.find(
-      (call: unknown[]) => call[0] === "style.load",
-    )?.[1] as (() => void) | undefined;
+      ([event]) => event === "style.load",
+    )?.[1];
     expect(typeof styleLoad).toBe("function");
 
     // A style reload discards layers while the DEM source object survives:
@@ -340,8 +425,7 @@ describe("FlightGlobe reduced motion", () => {
     expect(screen.queryByText(/3DEP \(formerly NED\)/)).not.toBeInTheDocument();
     expect(
       map.addLayer.mock.calls.some(
-        (call: unknown[]) =>
-          (call[0] as { id?: string } | undefined)?.id === TERRAIN_RELIEF_LAYER_ID,
+        ([layer]) => layer.id === TERRAIN_RELIEF_LAYER_ID,
       ),
     ).toBe(false);
     expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeUndefined();
@@ -353,9 +437,7 @@ describe("FlightGlobe reduced motion", () => {
     render(<FlightGlobe {...defaultProps()} />);
     const map = await readyMap();
 
-    const registeredIds = map.addImage.mock.calls.map(
-      (call: unknown[]) => call[0],
-    );
+    const registeredIds = map.addImage.mock.calls.map(([id]) => id);
     expect(new Set(registeredIds)).toEqual(
       new Set([
         DIRECTION_ICON_IDS.oneWayPrivate,
@@ -368,9 +450,8 @@ describe("FlightGlobe reduced motion", () => {
     // Each registered id must report itself present to `hasImage`, matching
     // the `if (!map.hasImage(id)) map.addImage(id, image)` guard that keeps
     // re-registration on later style reloads from throwing.
-    const hasImage = map.hasImage as unknown as (id: string) => boolean;
     for (const id of registeredIds) {
-      expect(hasImage(id as string)).toBe(true);
+      expect(map.hasImage(id)).toBe(true);
     }
   });
 
@@ -509,11 +590,28 @@ function defaultProps() {
   };
 }
 
-async function readyMap() {
+async function readyMap(): Promise<MapMock> {
   await waitFor(() => expect(mapMocks.instances).toHaveLength(1));
   const map = mapMocks.instances[0];
   await waitFor(() => expect(map.setProjection).toHaveBeenCalled());
   return map;
+}
+
+function orderedLayerIds(map: MapMock): string[] {
+  return map.getStyle().layers.map((layer) => layer.id);
+}
+
+/**
+ * The hillshade renders opaquely from `TERRAIN_RELIEF_MIN_ZOOM` upwards, so it
+ * has to sit below *every* flight-route layer or it washes the routes out.
+ */
+function expectReliefBeneathRoutes(layerIds: string[]) {
+  const relief = layerIds.indexOf(TERRAIN_RELIEF_LAYER_ID);
+  expect(relief).toBeGreaterThanOrEqual(0);
+  for (const routeLayerId of Object.values(ROUTE_LAYER_IDS)) {
+    expect({ routeLayerId, above: layerIds.indexOf(routeLayerId) > relief })
+      .toEqual({ routeLayerId, above: true });
+  }
 }
 
 function installMatchMedia(matches: boolean) {

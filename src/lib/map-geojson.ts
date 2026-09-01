@@ -23,8 +23,13 @@ export type RouteFeatureCollection = {
       forwardFlightCount: number;
       reverseFlightCount: number;
       bidirectional: boolean;
+      /**
+       * Direction is carried on the map exclusively by `directionMode` +
+       * the raster geometry icons. No Unicode cue character is exported on
+       * map features: DOM surfaces read `routeLabel` / `routeTitle` /
+       * `directionDetail`, which already embed the arrow glyphs.
+       */
       directionMode: RouteDirectionMode;
-      directionCue: "➤" | "↔" | "";
       directionDetail: string;
       routeTitle: string;
       strength: number;
@@ -103,7 +108,6 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
           reverseFlightCount: direction.reverseFlightCount,
           bidirectional: direction.mode === "both",
           directionMode: direction.mode,
-          directionCue: direction.cue,
           directionDetail,
           routeTitle,
           strength: routeFrequencyStrength(route.flightCount, maximumRouteCount),

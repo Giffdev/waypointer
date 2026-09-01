@@ -164,7 +164,6 @@ describe("imported Australian map routes", () => {
         kind: "private",
         bidirectional: true,
         directionMode: "both",
-        directionCue: "↔",
         laneOffset: 0,
       },
       geometry: { type: "MultiLineString" },

@@ -56,6 +56,16 @@ const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
 const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
 
+/**
+ * Every layer id this app owns. Used to tell the app's own layers apart from
+ * the basemap's when resolving a stable insertion point.
+ */
+const APP_LAYER_IDS = new Set<string>([
+  ...Object.values(ROUTE_LAYER_IDS),
+  ...Object.values(AIRPORT_LAYER_IDS),
+  TERRAIN_RELIEF_LAYER_ID,
+]);
+
 const FALLBACK_STYLE: StyleSpecification = withGlobeProjection({
   version: 8,
   sources: {},
@@ -548,7 +558,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
                 </li>
                 <li>
                   Global ETOPO1 terrain data U.S. National Oceanic and
-                  Atmospheric Administration;
+                  Atmospheric Administration
                 </li>
                 <li>Mexico terrain data source: INEGI, Continental relief, 2016;</li>
                 <li>
@@ -719,10 +729,9 @@ function addShadedRelief(map: MapLibreMap): boolean {
       });
     }
     if (!map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
-      const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
       map.addLayer(
         buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
-        firstSymbolLayer,
+        terrainReliefBeforeId(map),
       );
     }
     return Boolean(
@@ -735,6 +744,40 @@ function addShadedRelief(map: MapLibreMap): boolean {
     removeShadedRelief(map);
     return false;
   }
+}
+
+/**
+ * Stable insertion point for the shaded-relief layer.
+ *
+ * The hillshade must always sit *below* the flight route lines: from
+ * `TERRAIN_RELIEF_MIN_ZOOM` upwards the relief is opaque enough to wash the
+ * routes out. "First symbol layer in the current style" is not a stable
+ * anchor, because after a flat → 3D pivot the app's own route-direction
+ * symbol layers already exist and sort first, which would insert the
+ * hillshade above the route lines. Prefer the bottom-most app route layer
+ * whenever it exists, and fall back to the basemap's first symbol layer only
+ * during the initial style load, before any route layer has been added. Both
+ * paths land the hillshade in the same slot, so a directly loaded 3D map and
+ * one reached through flat → 3D end up with identical layer order.
+ */
+function terrainReliefBeforeId(map: MapLibreMap): string | undefined {
+  if (map.getLayer(ROUTE_LAYER_IDS.commercial)) {
+    return ROUTE_LAYER_IDS.commercial;
+  }
+  return firstBasemapSymbolLayerId(map);
+}
+
+/**
+ * First symbol layer contributed by the basemap style. The app's own symbol
+ * layers are excluded so the insertion point cannot drift once route
+ * direction cues or airport labels exist.
+ */
+function firstBasemapSymbolLayerId(map: MapLibreMap): string | undefined {
+  return map
+    .getStyle()
+    .layers.find(
+      (layer) => layer.type === "symbol" && !APP_LAYER_IDS.has(layer.id),
+    )?.id;
 }
 
 function removeShadedRelief(map: MapLibreMap): void {
@@ -780,7 +823,7 @@ function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute
       data: airportData,
     });
   }
-  const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
+  const firstSymbolLayer = firstBasemapSymbolLayerId(map);
 
   for (const layer of buildFlightRouteLayers(ROUTE_SOURCE_ID)) {
     if (!map.getLayer(layer.id)) map.addLayer(layer, firstSymbolLayer);
