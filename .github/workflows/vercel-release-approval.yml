@@ -42,6 +42,7 @@ jobs:
         shell: bash
         env:
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_COMMIT_SHA: ${{ github.sha }}
           APPROVER: ${{ github.actor }}
@@ -59,6 +60,9 @@ jobs:
           [[ "$REVIEWED_COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ ]]
           [[ "$APPROVAL_RUN_ID" =~ ^[0-9]+$ ]]
+          # Waypointer has one collaborator (the repository owner); only the
+          # owner may record an approval.
+          test "$APPROVER" = "$REPOSITORY_OWNER"
           if [[ "$OPERATION" == "deploy" ]]; then
             [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
             [[ "$PREBUILT_SHA256" =~ ^[a-f0-9]{64}$ ]]
