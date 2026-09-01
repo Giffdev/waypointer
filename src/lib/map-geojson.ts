@@ -3,8 +3,10 @@ import { routeFrequencyStrength } from "./map-visualization";
 import { airportIdentity } from "./route-aggregation";
 import {
   formatRouteDirection,
+  formatRouteDirectionMapSafe,
   routeDirection,
   routeDirectionDetail,
+  routeDirectionDetailMapSafe,
   type RouteDirectionMode,
 } from "./route-direction";
 
@@ -32,7 +34,18 @@ export type RouteFeatureCollection = {
       destinationIdentity: string;
       destinationCode: string;
       destinationName: string;
+      /**
+       * DOM-facing label: keeps the Unicode direction cue, for popups,
+       * assistive text and any HTML surface rendered with a web font.
+       */
       routeLabel: string;
+      /**
+       * Map-facing label: rendered through MapLibre's glyph pipeline, so it
+       * must never contain a direction cue character the basemap font stack
+       * may not ship a glyph for. Direction on the map is carried by the
+       * raster geometry icons instead.
+       */
+      mapSafeRouteLabel: string;
       laneOffset: number;
     };
     geometry: {
@@ -75,6 +88,11 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
       const directionDetail = routeDirectionDetail(route);
       const directionSummary =
         direction.mode === "both" ? ` (${directionDetail})` : "";
+      const flightCountLabel = `${route.flightCount} ${route.flightCount === 1 ? "flight" : "flights"}`;
+      const mapSafeDirectionSummary =
+        direction.mode === "both"
+          ? ` (${routeDirectionDetailMapSafe(route)})`
+          : "";
       return {
         type: "Feature",
         properties: {
@@ -95,7 +113,8 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
           destinationIdentity: airportIdentity(route.destination),
           destinationCode: route.destination.code,
           destinationName: route.destination.name,
-          routeLabel: `${routeTitle} · ${route.flightCount} ${route.flightCount === 1 ? "flight" : "flights"}${directionSummary}`,
+          routeLabel: `${routeTitle} · ${flightCountLabel}${directionSummary}`,
+          mapSafeRouteLabel: `${formatRouteDirectionMapSafe(route)} · ${flightCountLabel}${mapSafeDirectionSummary}`,
           laneOffset: 0,
         },
         geometry: {

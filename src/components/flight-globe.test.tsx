@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   airportExactIdentity,
@@ -10,6 +12,7 @@ import {
 } from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 import { DIRECTION_ICON_IDS } from "@/lib/map-icons";
+import { TERRAIN_RELIEF_LAYER_ID } from "@/lib/map-style";
 
 const mapMocks = vi.hoisted(() => {
   const instances: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
@@ -62,7 +65,9 @@ vi.mock("maplibre-gl", () => ({
         getCenter: vi.fn(() => ({ lng: 0, lat: 0 })),
         getContainer: vi.fn(() => ({ clientWidth: 1024, clientHeight: 640 })),
         getLayer: vi.fn((id: string) => (layerIds.has(id) ? { id } : undefined)),
-        getSource: vi.fn((id: string) => (sourceIds.has(id) ? { id } : undefined)),
+        getSource: vi.fn((id: string) =>
+          sourceIds.has(id) ? { id, setData: vi.fn() } : undefined,
+        ),
         getStyle: vi.fn(() => ({ layers: [] })),
         getZoom: vi.fn(() => 4),
         hasImage: vi.fn((id: string) => imageIds.has(id)),
@@ -245,6 +250,9 @@ describe("FlightGlobe reduced motion", () => {
       expect(map.removeSource).toHaveBeenCalledWith("flight-map-terrain"),
     );
     expect(map.removeLayer).toHaveBeenCalledWith("flight-map-hillshade");
+    // The removal must target the id the style module actually builds, so a
+    // rename in one place can never orphan the layer in the other.
+    expect(map.removeLayer).toHaveBeenCalledWith(TERRAIN_RELIEF_LAYER_ID);
     expect(
       screen.queryByText("Terrain data credits"),
     ).not.toBeInTheDocument();
@@ -261,6 +269,82 @@ describe("FlightGlobe reduced motion", () => {
     expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
     expect(screen.getByText(/3DEP \(formerly NED\)/)).toBeInTheDocument();
     expect(screen.getByText(/Kartverket/)).toBeInTheDocument();
+  });
+
+  it("computes shaded relief before updating state, keeping map mutation out of the React updater", async () => {
+    const component = readFileSync(
+      resolve(process.cwd(), "src/components/flight-globe.tsx"),
+      "utf8",
+    );
+
+    // React may invoke a state updater more than once (and at an arbitrary
+    // later time), so the MapLibre mutation must run eagerly in the effect
+    // and only its result may be pushed into state.
+    expect(component).not.toMatch(/setTerrainActive\([^)]*=>/);
+    expect(component).toMatch(
+      /const active = addShadedRelief\(map\);\s*setTerrainActive\(active\);/,
+    );
+  });
+
+  it("restores a shaded-relief layer dropped by a style reload instead of trusting the surviving DEM source", async () => {
+    installMatchMedia(false);
+
+    render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+
+    const hillshadeAdds = () =>
+      map.addLayer.mock.calls.filter(
+        (call: unknown[]) =>
+          (call[0] as { id?: string } | undefined)?.id === TERRAIN_RELIEF_LAYER_ID,
+      ).length;
+    expect(hillshadeAdds()).toBe(1);
+
+    const styleLoad = map.on.mock.calls.find(
+      (call: unknown[]) => call[0] === "style.load",
+    )?.[1] as (() => void) | undefined;
+    expect(typeof styleLoad).toBe("function");
+
+    // A style reload discards layers while the DEM source object survives:
+    // the terrain credit is only truthful if the hillshade layer is rebuilt.
+    map.removeLayer(TERRAIN_RELIEF_LAYER_ID);
+    await act(async () => {
+      styleLoad?.();
+    });
+
+    expect(hillshadeAdds()).toBe(2);
+    expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeTruthy();
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    expect(screen.getByText(/3DEP \(formerly NED\)/)).toBeInTheDocument();
+  });
+
+  it("withholds terrain credits when the DEM source cannot be created, leaving no half-built relief stack", async () => {
+    installMatchMedia(false);
+
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} viewMode="flat" />);
+    const map = await readyMap();
+
+    expect(screen.queryByText("Terrain data credits")).not.toBeInTheDocument();
+    map.addSource.mockImplementation((id: string) => {
+      if (id === "flight-map-terrain") throw new Error("DEM unavailable");
+    });
+
+    view.rerender(<FlightGlobe {...props} viewMode="globe" />);
+    await waitFor(() =>
+      expect(map.setProjection).toHaveBeenCalledWith({ type: "globe" }),
+    );
+
+    // The credit line describes real DEM activity, so a failed activation
+    // must not leave it on screen, and no hillshade layer may be left behind.
+    expect(screen.queryByText("Terrain data credits")).not.toBeInTheDocument();
+    expect(screen.queryByText(/3DEP \(formerly NED\)/)).not.toBeInTheDocument();
+    expect(
+      map.addLayer.mock.calls.some(
+        (call: unknown[]) =>
+          (call[0] as { id?: string } | undefined)?.id === TERRAIN_RELIEF_LAYER_ID,
+      ),
+    ).toBe(false);
+    expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeUndefined();
   });
 
   it("registers all four route-direction icons once, instead of relying on text glyphs", async () => {

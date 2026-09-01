@@ -33,9 +33,11 @@ import {
   buildAirportMarkerLayer,
   buildFlightRouteLayers,
   buildRouteDirectionLayers,
+  buildRouteLabelLayer,
   buildTerrainReliefLayer,
   ROUTE_LAYER_IDS,
   routeLineOpacity,
+  TERRAIN_RELIEF_LAYER_ID,
   withMapProjection,
   withGlobeProjection,
 } from "@/lib/map-style";
@@ -50,7 +52,6 @@ const OPENFREEMAP_SOURCE_PREFIX = "https://tiles.openfreemap.org/";
 const REQUIRED_BASEMAP_ATTRIBUTION =
   '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 const TERRAIN_SOURCE_ID = "flight-map-terrain";
-const TERRAIN_HILLSHADE_LAYER_ID = "flight-map-hillshade";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
 const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
@@ -331,7 +332,8 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       type: props.viewMode === "globe" ? "globe" : "mercator",
     });
     if (props.viewMode === "globe") {
-      setTerrainActive((active) => active || addShadedRelief(map));
+      const active = addShadedRelief(map);
+      setTerrainActive(active);
     } else {
       removeShadedRelief(map);
       setTerrainActive(false);
@@ -693,36 +695,52 @@ function withRequiredBasemapAttribution(
   };
 }
 
+/**
+ * Ensures both halves of the shaded-relief stack (DEM source + hillshade
+ * layer) exist, and reports whether the DEM is actually driving a rendered
+ * layer. The return value gates the upstream terrain attribution, so it must
+ * describe real DEM activity: a half-restored stack (for example a source
+ * that survived a style reload while its layer did not) is completed here
+ * rather than reported as active.
+ */
 function addShadedRelief(map: MapLibreMap): boolean {
-  if (map.getSource(TERRAIN_SOURCE_ID)) return true;
   try {
-    map.addSource(TERRAIN_SOURCE_ID, {
-      type: "raster-dem",
-      tiles: [
-        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
-      ],
-      encoding: "terrarium",
-      tileSize: 256,
-      maxzoom: 15,
-      attribution:
-        '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain data sources & attribution</a>',
-    });
-    const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
-    map.addLayer(
-      buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
-      firstSymbolLayer,
+    if (!map.getSource(TERRAIN_SOURCE_ID)) {
+      map.addSource(TERRAIN_SOURCE_ID, {
+        type: "raster-dem",
+        tiles: [
+          "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+        ],
+        encoding: "terrarium",
+        tileSize: 256,
+        maxzoom: 15,
+        attribution:
+          '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain data sources & attribution</a>',
+      });
+    }
+    if (!map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
+      const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
+      map.addLayer(
+        buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
+        firstSymbolLayer,
+      );
+    }
+    return Boolean(
+      map.getSource(TERRAIN_SOURCE_ID) && map.getLayer(TERRAIN_RELIEF_LAYER_ID),
     );
-    return true;
   } catch {
-    // The basemap remains usable when the optional elevation source is unavailable.
+    // The basemap remains usable when the optional elevation source is
+    // unavailable; tear down any half-built stack so no terrain credit is
+    // shown for DEM tiles that are not being rendered.
+    removeShadedRelief(map);
     return false;
   }
 }
 
 function removeShadedRelief(map: MapLibreMap): void {
   try {
-    if (map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
-      map.removeLayer(TERRAIN_HILLSHADE_LAYER_ID);
+    if (map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
+      map.removeLayer(TERRAIN_RELIEF_LAYER_ID);
     }
     if (map.getSource(TERRAIN_SOURCE_ID)) {
       map.removeSource(TERRAIN_SOURCE_ID);
@@ -799,33 +817,7 @@ function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute
 
 function addRouteLabelLayer(map: MapLibreMap) {
   if (map.getLayer(ROUTE_LAYER_IDS.labels)) return;
-  map.addLayer({
-    id: ROUTE_LAYER_IDS.labels,
-    type: "symbol",
-    source: ROUTE_SOURCE_ID,
-    minzoom: 7,
-    filter: ["==", ["get", "id"], "__none__"],
-    layout: {
-      "symbol-placement": "line-center",
-      "text-field": ["get", "routeLabel"],
-      "text-font": ["Noto Sans Regular"],
-      "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 12],
-      "text-optional": true,
-      "text-padding": 9,
-      "symbol-sort-key": ["-", ["get", "flightCount"]],
-    },
-    paint: {
-      "text-color": [
-        "match",
-        ["get", "kind"],
-        "private",
-        "#76540c",
-        "#0c5e69",
-      ],
-      "text-halo-color": "rgba(255, 255, 255, 0.96)",
-      "text-halo-width": 1.6,
-    },
-  });
+  map.addLayer(buildRouteLabelLayer(ROUTE_SOURCE_ID));
 }
 
 function applyRoutePresentation(

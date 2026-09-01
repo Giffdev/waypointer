@@ -22,6 +22,13 @@ export const ROUTE_LAYER_IDS = {
 
 export const TERRAIN_RELIEF_MIN_ZOOM = 7;
 
+/**
+ * Single source of truth for the shaded-relief layer id, shared by the layer
+ * builder and by the runtime teardown that removes the layer when the map
+ * leaves 3D mode, so the two can never drift apart.
+ */
+export const TERRAIN_RELIEF_LAYER_ID = "flight-map-hillshade";
+
 export const AIRPORT_LAYER_IDS = {
   markers: "flight-airports",
   hubLabels: "flight-airport-hub-labels",
@@ -44,7 +51,7 @@ export function withMapProjection(
 
 export function buildTerrainReliefLayer(source: string): HillshadeLayerSpecification {
   return {
-    id: "flight-map-hillshade",
+    id: TERRAIN_RELIEF_LAYER_ID,
     type: "hillshade",
     source,
     minzoom: TERRAIN_RELIEF_MIN_ZOOM,
@@ -223,6 +230,44 @@ export function buildFlightRouteLayers(source: string): LineLayerSpecification[]
       },
     },
   ];
+}
+
+/**
+ * Selected-route label. `text-field` renders through MapLibre's glyph
+ * pipeline, so it deliberately reads the arrow-free `mapSafeRouteLabel`
+ * property: the direction cue characters used in DOM surfaces are outside
+ * the default Noto Sans glyph ranges served by the basemap and would render
+ * as an unrelated fallback shape. Direction on the map is communicated by
+ * the raster geometry icons in `buildRouteDirectionLayers`.
+ */
+export function buildRouteLabelLayer(source: string): SymbolLayerSpecification {
+  return {
+    id: ROUTE_LAYER_IDS.labels,
+    type: "symbol",
+    source,
+    minzoom: 7,
+    filter: ["==", ["get", "id"], "__none__"],
+    layout: {
+      "symbol-placement": "line-center",
+      "text-field": ["get", "mapSafeRouteLabel"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 12],
+      "text-optional": true,
+      "text-padding": 9,
+      "symbol-sort-key": ["-", ["get", "flightCount"]],
+    },
+    paint: {
+      "text-color": [
+        "match",
+        ["get", "kind"],
+        "private",
+        "#76540c",
+        "#0c5e69",
+      ],
+      "text-halo-color": "rgba(255, 255, 255, 0.96)",
+      "text-halo-width": 1.6,
+    },
+  };
 }
 
 export function buildRouteDirectionLayers(

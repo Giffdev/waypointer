@@ -100,6 +100,38 @@ export function formatRouteDirection(
   return `${formatAirport(direction.origin)} ${separator} ${formatAirport(direction.destination)}`;
 }
 
+/**
+ * Map-safe variants of the route title/detail strings. Anything rendered
+ * through MapLibre's glyph pipeline must stay inside the character coverage
+ * the basemap's font stack actually ships: the default OpenFreeMap Noto Sans
+ * glyph ranges do not include U+27A4 (➤) or U+2194 (↔), so those characters
+ * silently fall back to an unrelated substitute shape on the map canvas.
+ * Direction on the map is carried exclusively by the raster geometry icons;
+ * these strings pair airport codes with a plain ASCII separator and never
+ * embed a direction cue character. The arrow-bearing strings remain for DOM
+ * popups, the legend and stats titles, which render with real web fonts.
+ */
+export const MAP_SAFE_ROUTE_SEPARATOR = "-";
+
+export function formatRouteDirectionMapSafe(
+  route: MapRoute,
+  formatAirport: (airport: Airport) => string = ({ code }) => code,
+): string {
+  const direction = routeDirection(route);
+  return `${formatAirport(direction.origin)}${MAP_SAFE_ROUTE_SEPARATOR}${formatAirport(direction.destination)}`;
+}
+
+export function routeDirectionDetailMapSafe(route: MapRoute): string {
+  const direction = routeDirection(route);
+  if (direction.mode === "none") return "Direction unavailable";
+  const forwardLeg = `${route.origin.code}${MAP_SAFE_ROUTE_SEPARATOR}${route.destination.code}`;
+  const reverseLeg = `${route.destination.code}${MAP_SAFE_ROUTE_SEPARATOR}${route.origin.code}`;
+  if (direction.mode === "one-way") {
+    return `${route.flightCount.toLocaleString()} ${formatRouteDirectionMapSafe(route)}`;
+  }
+  return `${direction.forwardFlightCount.toLocaleString()} ${forwardLeg} · ${direction.reverseFlightCount.toLocaleString()} ${reverseLeg}`;
+}
+
 export function routeDirectionDetail(route: MapRoute): string {
   const direction = routeDirection(route);
   if (direction.mode === "none") return "Direction unavailable";

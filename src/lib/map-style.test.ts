@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import type { StyleSpecification } from "maplibre-gl";
+import { airports, type MapRoute } from "./flight-data";
+import { createRouteFeatureCollection } from "./map-geojson";
 import {
   createDirectionIconImage,
   DIRECTION_ICON_COLORS,
@@ -13,12 +16,35 @@ import {
   buildAirportMarkerLayer,
   buildFlightRouteLayers,
   buildRouteDirectionLayers,
+  buildRouteLabelLayer,
   buildTerrainReliefLayer,
   ROUTE_LAYER_IDS,
+  TERRAIN_RELIEF_LAYER_ID,
   TERRAIN_RELIEF_MIN_ZOOM,
   withGlobeProjection,
   withMapProjection,
 } from "./map-style";
+
+/** U+27A4 (➤) and U+2194 (↔) - the Unicode direction cues used in the DOM. */
+const DIRECTION_CUE_PATTERN = /[\u27a4\u2194]/u;
+
+/**
+ * Collects every feature property a layer's `text-field` reads, so the test
+ * can assert on the actual strings MapLibre would hand to the glyph pipeline.
+ */
+function textFieldProperties(layers: Array<{ layout?: Record<string, unknown> }>): string[] {
+  const properties = new Set<string>();
+  const walk = (expression: unknown) => {
+    if (!Array.isArray(expression)) return;
+    if (expression[0] === "get" && typeof expression[1] === "string") {
+      properties.add(expression[1]);
+      return;
+    }
+    for (const part of expression) walk(part);
+  };
+  for (const layer of layers) walk(layer.layout?.["text-field"]);
+  return [...properties];
+}
 
 /**
  * Evaluates the nested `["match", ["get", key], ...]` expressions used for
@@ -216,6 +242,100 @@ describe("cartographic map style", () => {
     expect(terrain.minzoom).toBe(7);
     expect(terrain.type).toBe("hillshade");
     expect(terrain.source).toBe("terrain");
+  });
+
+  it("publishes one shared shaded-relief layer id that the map runtime removes by, so the two cannot drift", () => {
+    expect(buildTerrainReliefLayer("terrain").id).toBe(TERRAIN_RELIEF_LAYER_ID);
+    expect(TERRAIN_RELIEF_LAYER_ID).toBe("flight-map-hillshade");
+
+    // The component must not re-declare the id: it has to import the shared
+    // constant, otherwise a rename here would silently leave an orphaned
+    // hillshade layer (and a stale terrain credit) behind in flat mode.
+    const component = readFileSync(
+      new URL("../components/flight-globe.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(component).toContain("TERRAIN_RELIEF_LAYER_ID");
+    expect(component).not.toContain('"flight-map-hillshade"');
+  });
+
+  it("never sends a Unicode direction cue character through a map text-field", () => {
+    const labelLayers = [
+      buildRouteLabelLayer("routes"),
+      ...buildRouteDirectionLayers("routes"),
+      buildAirportLabelLayer(
+        "airports",
+        AIRPORT_LAYER_IDS.hubLabels,
+        0,
+        ["==", ["get", "isHub"], true],
+        4.5,
+      ),
+      buildAirportLabelLayer("airports", AIRPORT_LAYER_IDS.labels, 4.5),
+    ];
+    const properties = textFieldProperties(labelLayers);
+
+    // The selected-route label must read the map-safe property, never the
+    // arrow-bearing DOM label/title.
+    expect(properties).toContain("mapSafeRouteLabel");
+    expect(properties).not.toContain("routeLabel");
+    expect(properties).not.toContain("routeTitle");
+    expect(properties).not.toContain("directionCue");
+    expect(properties).not.toContain("directionDetail");
+
+    const oneWay: MapRoute = {
+      id: "one-way",
+      origin: airports.SEA,
+      destination: airports.PAE,
+      kind: "commercial",
+      flightCount: 4,
+      forwardFlightCount: 4,
+      reverseFlightCount: 0,
+    };
+    const bidirectional: MapRoute = {
+      id: "both",
+      origin: airports.PAE,
+      destination: airports.SEA,
+      kind: "private",
+      flightCount: 5,
+      forwardFlightCount: 3,
+      reverseFlightCount: 2,
+    };
+    const features = createRouteFeatureCollection([oneWay, bidirectional]).features;
+
+    for (const feature of features) {
+      for (const property of properties) {
+        const value = (feature.properties as Record<string, unknown>)[property];
+        if (typeof value !== "string") continue;
+        expect(value).not.toMatch(DIRECTION_CUE_PATTERN);
+      }
+    }
+
+    // Discriminating counterpart: the DOM-facing strings still carry the
+    // cues, so the loop above would fail the moment a text-field is pointed
+    // back at them. Direction on the map stays with the raster icons.
+    expect(features[0].properties.routeTitle).toMatch(DIRECTION_CUE_PATTERN);
+    expect(features[1].properties.routeLabel).toMatch(DIRECTION_CUE_PATTERN);
+    expect(features[1].properties.directionDetail).toMatch(DIRECTION_CUE_PATTERN);
+    expect(features[0].properties.mapSafeRouteLabel).toBe("SEA-PAE · 4 flights");
+    expect(features[1].properties.mapSafeRouteLabel).toBe(
+      "PAE-SEA · 5 flights (3 PAE-SEA · 2 SEA-PAE)",
+    );
+    expect(
+      buildRouteLabelLayer("routes").layout?.["text-field"],
+    ).toEqual(["get", "mapSafeRouteLabel"]);
+    expect(buildRouteLabelLayer("routes").id).toBe(ROUTE_LAYER_IDS.labels);
+    expect(
+      validateStyleMin({
+        version: 8,
+        sources: {
+          routes: {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: [] },
+          },
+        },
+        layers: [buildRouteLabelLayer("routes")],
+      }),
+    ).toEqual([]);
   });
 
   it("uses one facility-neutral marker and label treatment for every airport", () => {
