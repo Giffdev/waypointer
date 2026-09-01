@@ -7,6 +7,7 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 import type { FlightKind } from "./flight-data";
+import { DIRECTION_ICON_IDS } from "./map-icons";
 import type { MapViewMode } from "./map-view-mode";
 
 export const ROUTE_LAYER_IDS = {
@@ -20,6 +21,13 @@ export const ROUTE_LAYER_IDS = {
 } as const;
 
 export const TERRAIN_RELIEF_MIN_ZOOM = 7;
+
+/**
+ * Single source of truth for the shaded-relief layer id, shared by the layer
+ * builder and by the runtime teardown that removes the layer when the map
+ * leaves 3D mode, so the two can never drift apart.
+ */
+export const TERRAIN_RELIEF_LAYER_ID = "flight-map-hillshade";
 
 export const AIRPORT_LAYER_IDS = {
   markers: "flight-airports",
@@ -43,7 +51,7 @@ export function withMapProjection(
 
 export function buildTerrainReliefLayer(source: string): HillshadeLayerSpecification {
   return {
-    id: "flight-map-hillshade",
+    id: TERRAIN_RELIEF_LAYER_ID,
     type: "hillshade",
     source,
     minzoom: TERRAIN_RELIEF_MIN_ZOOM,
@@ -224,31 +232,82 @@ export function buildFlightRouteLayers(source: string): LineLayerSpecification[]
   ];
 }
 
+/**
+ * Selected-route label. `text-field` renders through MapLibre's glyph
+ * pipeline, so it deliberately reads the arrow-free `mapSafeRouteLabel`
+ * property: the direction cue characters used in DOM surfaces are outside
+ * the default Noto Sans glyph ranges served by the basemap and would render
+ * as an unrelated fallback shape. Direction on the map is communicated by
+ * the raster geometry icons in `buildRouteDirectionLayers`.
+ */
+export function buildRouteLabelLayer(source: string): SymbolLayerSpecification {
+  return {
+    id: ROUTE_LAYER_IDS.labels,
+    type: "symbol",
+    source,
+    minzoom: 7,
+    filter: ["==", ["get", "id"], "__none__"],
+    layout: {
+      "symbol-placement": "line-center",
+      "text-field": ["get", "mapSafeRouteLabel"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 12],
+      "text-optional": true,
+      "text-padding": 9,
+      "symbol-sort-key": ["-", ["get", "flightCount"]],
+    },
+    paint: {
+      "text-color": [
+        "match",
+        ["get", "kind"],
+        "private",
+        "#76540c",
+        "#0c5e69",
+      ],
+      "text-halo-color": "rgba(255, 255, 255, 0.96)",
+      "text-halo-width": 1.6,
+    },
+  };
+}
+
 export function buildRouteDirectionLayers(
   source: string,
 ): SymbolLayerSpecification[] {
-  const layout: SymbolLayerSpecification["layout"] = {
-    "symbol-placement": "line-center",
-    "text-field": ["get", "directionCue"],
-    "text-font": ["Noto Sans Regular"],
-    "text-size": ["interpolate", ["linear"], ["zoom"], 1, 9, 7, 13],
-    "text-rotation-alignment": "map",
-    "text-pitch-alignment": "map",
-    "text-keep-upright": false,
-    "text-optional": true,
-    "text-padding": 5,
-  };
-  const paint: SymbolLayerSpecification["paint"] = {
-    "text-color": [
+  const iconImage: ExpressionSpecification = [
+    "match",
+    ["get", "directionMode"],
+    "one-way",
+    [
       "match",
       ["get", "kind"],
       "private",
-      "#fff0b3",
-      "#bafff6",
+      DIRECTION_ICON_IDS.oneWayPrivate,
+      DIRECTION_ICON_IDS.oneWayCommercial,
     ],
-    "text-halo-color": "rgba(3, 16, 26, 0.9)",
-    "text-halo-width": 1.2,
-    "text-opacity": ["interpolate", ["linear"], ["zoom"], 1, 0.62, 7, 0.9],
+    "both",
+    [
+      "match",
+      ["get", "kind"],
+      "private",
+      DIRECTION_ICON_IDS.bothPrivate,
+      DIRECTION_ICON_IDS.bothCommercial,
+    ],
+    "",
+  ];
+  const layout: SymbolLayerSpecification["layout"] = {
+    "symbol-placement": "line-center",
+    "icon-image": iconImage,
+    "icon-rotation-alignment": "map",
+    "icon-pitch-alignment": "map",
+    "icon-keep-upright": false,
+    "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.56, 7, 0.82],
+    "icon-allow-overlap": false,
+    "icon-ignore-placement": false,
+    "icon-optional": true,
+    "icon-padding": 5,
+  };
+  const paint: SymbolLayerSpecification["paint"] = {
+    "icon-opacity": ["interpolate", ["linear"], ["zoom"], 1, 0.62, 7, 0.9],
   };
   return [
     {
@@ -272,15 +331,15 @@ export function buildRouteDirectionLayers(
       ],
       layout: {
         ...layout,
-        "text-size": ["interpolate", ["linear"], ["zoom"], 1, 11, 7, 15],
-        "text-offset": [0, -1.2],
-        "text-allow-overlap": true,
-        "text-ignore-placement": true,
-        "text-optional": false,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 7, 1.05],
+        "icon-offset": [0, -16],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-optional": false,
       },
       paint: {
         ...paint,
-        "text-opacity": 1,
+        "icon-opacity": 1,
       },
     },
   ];

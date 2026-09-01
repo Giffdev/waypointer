@@ -40,7 +40,7 @@ describe("unordered route aggregation", () => {
     expect(feature.properties.bidirectional).toBe(true);
     expect(routes[0].directionMode).toBe("both");
     expect(feature.properties.directionMode).toBe("both");
-    expect(feature.properties.directionCue).toBe("↔");
+    expect(feature.properties).not.toHaveProperty("directionCue");
     expect(feature.properties.routeLabel).toContain("LAX");
     expect(feature.properties.routeLabel).toContain("LAP");
   });
@@ -60,8 +60,8 @@ describe("unordered route aggregation", () => {
         routes[0].reverseFlightCount ?? 0,
       ),
     ).toBe(3);
-    expect(createRouteFeatureCollection(routes).features[0].properties.directionCue)
-      .toBe("➤");
+    expect(createRouteFeatureCollection(routes).features[0].properties.directionMode)
+      .toBe("one-way");
   });
 
   it("uses persisted airport identity for aliases without merging distinct airports", () => {

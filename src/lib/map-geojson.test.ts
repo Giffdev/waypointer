@@ -71,7 +71,7 @@ describe("MapLibre map data", () => {
     expect(collection.features[0].properties.reverseFlightCount).toBe(2);
     expect(collection.features[0].properties.bidirectional).toBe(true);
     expect(collection.features[0].properties.directionMode).toBe("both");
-    expect(collection.features[0].properties.directionCue).toBe("↔");
+    expect(collection.features[0].properties).not.toHaveProperty("directionCue");
     expect(collection.features[0].properties.routeTitle).toBe("PAE ↔ SEA");
     expect(collection.features[0].properties.routeLabel).toContain("flights");
     expect(collection.features[0].properties).not.toHaveProperty("aircraft");
@@ -91,8 +91,8 @@ describe("MapLibre map data", () => {
     const collection = createRouteFeatureCollection(trip);
 
     expect(
-      collection.features.map(({ properties }) => properties.directionCue),
-    ).toEqual(["➤", "➤", "➤"]);
+      collection.features.map(({ properties }) => properties.directionMode),
+    ).toEqual(["one-way", "one-way", "one-way"]);
   });
 
   it("keeps truthful cues on modest and dense routes for collision handling", () => {
@@ -128,7 +128,7 @@ describe("MapLibre map data", () => {
     }]);
 
     expect(collection.features[0].properties.routeTitle).toBe("SEA ➤ PAE");
-    expect(collection.features[0].properties.directionCue).toBe("➤");
+    expect(collection.features[0].properties.directionMode).toBe("one-way");
     const coordinates =
       collection.features[0].geometry.coordinates.flat();
     expect(coordinates[0][0]).toBeCloseTo(airports.SEA.lon);
@@ -146,7 +146,7 @@ describe("MapLibre map data", () => {
     }]);
 
     expect(collection.features[0].properties.directionMode).toBe("none");
-    expect(collection.features[0].properties.directionCue).toBe("");
+    expect(collection.features[0].properties).not.toHaveProperty("directionCue");
     expect(collection.features[0].properties.routeTitle).toBe("PAE — SEA");
   });
 

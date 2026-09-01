@@ -33,13 +33,16 @@ import {
   buildAirportMarkerLayer,
   buildFlightRouteLayers,
   buildRouteDirectionLayers,
+  buildRouteLabelLayer,
   buildTerrainReliefLayer,
   ROUTE_LAYER_IDS,
   routeLineOpacity,
+  TERRAIN_RELIEF_LAYER_ID,
   withMapProjection,
   withGlobeProjection,
 } from "@/lib/map-style";
 import { bindCompletedMapZoom } from "@/lib/map-zoom-sync";
+import { buildDirectionIconSet, DIRECTION_ICON_IDS } from "@/lib/map-icons";
 import type { MapViewMode } from "@/lib/map-view-mode";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
@@ -52,6 +55,16 @@ const TERRAIN_SOURCE_ID = "flight-map-terrain";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
 const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
+
+/**
+ * Every layer id this app owns. Used to tell the app's own layers apart from
+ * the basemap's when resolving a stable insertion point.
+ */
+const APP_LAYER_IDS = new Set<string>([
+  ...Object.values(ROUTE_LAYER_IDS),
+  ...Object.values(AIRPORT_LAYER_IDS),
+  TERRAIN_RELIEF_LAYER_ID,
+]);
 
 const FALLBACK_STYLE: StyleSpecification = withGlobeProjection({
   version: 8,
@@ -84,6 +97,18 @@ type FlightGlobeProps = {
 
 type BasemapMode = "loading" | "open-map" | "fallback";
 
+/**
+ * Result of a shaded-relief teardown attempt. `removed` is only true when the
+ * hillshade layer *and* the DEM source are both verified absent afterwards,
+ * so callers can never turn the terrain credit off while the map is still
+ * rendering DEM-driven relief.
+ */
+type TerrainTeardown = { removed: boolean; message: string };
+
+const TERRAIN_TEARDOWN_ERROR_PREFIX = "Terrain relief could not be removed";
+const DIRECTION_ICON_ERROR =
+  "Route direction cues could not be registered, so the map cannot show which way each route runs.";
+
 export default function FlightGlobe(props: FlightGlobeProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -109,6 +134,8 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("loading");
   const [mapReady, setMapReady] = useState(false);
   const [initializationError, setInitializationError] = useState("");
+  const [terrainActive, setTerrainActive] = useState(false);
+  const [terrainError, setTerrainError] = useState("");
 
   useLayoutEffect(() => {
     viewModeRef.current = props.viewMode;
@@ -204,7 +231,21 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           map.setProjection({
             type: viewModeRef.current === "globe" ? "globe" : "mercator",
           });
-          addShadedRelief(map);
+          if (viewModeRef.current === "globe") {
+            setTerrainActive(addShadedRelief(map));
+            setTerrainError("");
+          } else {
+            const teardown = removeShadedRelief(map);
+            setTerrainActive(!teardown.removed);
+            setTerrainError(
+              teardown.removed
+                ? ""
+                : `${TERRAIN_TEARDOWN_ERROR_PREFIX} · ${teardown.message}`,
+            );
+          }
+          if (!ensureDirectionIcons(map)) {
+            throw new Error(DIRECTION_ICON_ERROR);
+          }
           addFlightLayers(map, latest.airports, latest.routes);
           applyRoutePresentation(
             map,
@@ -324,6 +365,24 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     map.setProjection({
       type: props.viewMode === "globe" ? "globe" : "mercator",
     });
+    if (props.viewMode === "globe") {
+      const active = addShadedRelief(map);
+      setTerrainActive(active);
+      setTerrainError("");
+    } else {
+      // Teardown is verified, not assumed: the credit line may only be
+      // withdrawn once the hillshade layer and the DEM source are both gone.
+      // A failed removal keeps the terrain state (and its attribution) on,
+      // and surfaces the failure instead of silently claiming a flat,
+      // DEM-free map.
+      const teardown = removeShadedRelief(map);
+      setTerrainActive(!teardown.removed);
+      setTerrainError(
+        teardown.removed
+          ? ""
+          : `${TERRAIN_TEARDOWN_ERROR_PREFIX} · ${teardown.message}`,
+      );
+    }
   }, [props.viewMode]);
 
   useEffect(() => {
@@ -478,7 +537,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     <div
       className="globe-shell cartographic-map"
       role="region"
-      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels, terrain relief, airports, and flight routes`}
+      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
       aria-busy={!mapReady}
       data-airport-count={props.airports.length}
       data-map-ready={mapReady}
@@ -491,6 +550,11 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           Interactive globe failed to initialize · {initializationError}
         </div>
       )}
+      {terrainError && (
+        <div className="map-layer-status error" role="alert">
+          {terrainError}
+        </div>
+      )}
       {(basemapMode === "loading" || basemapMode === "fallback") && (
         <div className={`map-layer-status ${basemapMode}`}>
           {basemapMode === "loading"
@@ -498,44 +562,71 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             : "Basemap unavailable · routes remain local"}
         </div>
       )}
-      <div className="terrain-attribution">
-        <a
-          className="terrain-attribution-primary"
-          href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-          rel="noopener"
-          target="_blank"
-        >
-          Mapzen Terrarium terrain attribution
-        </a>
-        <details>
-          <summary>All terrain data credits</summary>
-          <div className="terrain-attribution-content">
-            <p>
-              Elevation data sources used by the global terrain layer:
-            </p>
-            <ul>
-              <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
-              <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
-              <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
-              <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
-              <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
-              <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
-              <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
-              <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
-              <li>Norway terrain © Kartverket.</li>
-              <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
-              <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
-            </ul>
-            <a
-              href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-              rel="noopener"
-              target="_blank"
-            >
-              Terrain licence details
-            </a>
-          </div>
-        </details>
-      </div>
+      {terrainActive && (
+        <div className="terrain-attribution">
+          <details>
+            <summary>Terrain data credits</summary>
+            <div className="terrain-attribution-content">
+              <p>
+                Elevation (terrain) tiles are served directly from the AWS
+                Open Data Registry (elevation-tiles-prod), not through
+                Mapzen&apos;s hosted service. The required upstream provider
+                attribution for those tiles, reproduced from Tilezen&apos;s
+                joerd project, is:
+              </p>
+              <ul>
+                <li>
+                  ArcticDEM terrain data DEM(s) were created from
+                  DigitalGlobe, Inc., imagery and funded under National
+                  Science Foundation awards 1043681, 1559691, and 1542736;
+                </li>
+                <li>
+                  Australia terrain data © Commonwealth of Australia
+                  (Geoscience Australia) 2017;
+                </li>
+                <li>
+                  Austria terrain data © offene Daten Österreichs – Digitales
+                  Geländemodell (DGM) Österreich;
+                </li>
+                <li>
+                  Canada terrain data contains information licensed under the
+                  Open Government Licence – Canada;
+                </li>
+                <li>
+                  Europe terrain data produced using Copernicus data and
+                  information funded by the European Union - EU-DEM layers;
+                </li>
+                <li>
+                  Global ETOPO1 terrain data U.S. National Oceanic and
+                  Atmospheric Administration
+                </li>
+                <li>Mexico terrain data source: INEGI, Continental relief, 2016;</li>
+                <li>
+                  New Zealand terrain data Copyright 2011 Crown copyright (c)
+                  Land Information New Zealand and the New Zealand Government
+                  (All rights reserved);
+                </li>
+                <li>Norway terrain data © Kartverket;</li>
+                <li>
+                  United Kingdom terrain data © Environment Agency copyright
+                  and/or database right 2015. All rights reserved;
+                </li>
+                <li>
+                  United States 3DEP (formerly NED) and global GMTED2010 and
+                  SRTM terrain data courtesy of the U.S. Geological Survey.
+                </li>
+              </ul>
+              <a
+                href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+                rel="noopener"
+                target="_blank"
+              >
+                Full terrain provider attribution (joerd)
+              </a>
+            </div>
+          </details>
+        </div>
+      )}
       <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
@@ -654,27 +745,170 @@ function withRequiredBasemapAttribution(
   };
 }
 
-function addShadedRelief(map: MapLibreMap) {
+/**
+ * Ensures both halves of the shaded-relief stack (DEM source + hillshade
+ * layer) exist, and reports whether the DEM is actually driving a rendered
+ * layer. The return value gates the upstream terrain attribution, so it must
+ * describe real DEM activity: a half-restored stack (for example a source
+ * that survived a style reload while its layer did not) is completed here
+ * rather than reported as active.
+ */
+function addShadedRelief(map: MapLibreMap): boolean {
   try {
-    map.addSource(TERRAIN_SOURCE_ID, {
-      type: "raster-dem",
-      tiles: [
-        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
-      ],
-      encoding: "terrarium",
-      tileSize: 256,
-      maxzoom: 15,
-      attribution:
-        '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain data sources & attribution</a>',
-    });
-    const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
-    map.addLayer(
-      buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
-      firstSymbolLayer,
+    if (!map.getSource(TERRAIN_SOURCE_ID)) {
+      map.addSource(TERRAIN_SOURCE_ID, {
+        type: "raster-dem",
+        tiles: [
+          "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+        ],
+        encoding: "terrarium",
+        tileSize: 256,
+        maxzoom: 15,
+        attribution:
+          '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain data sources & attribution</a>',
+      });
+    }
+    if (!map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
+      map.addLayer(
+        buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
+        terrainReliefBeforeId(map),
+      );
+    }
+    return shadedReliefIsRendering(map);
+  } catch {
+    // The basemap remains usable when the optional elevation source is
+    // unavailable; tear down any half-built stack so no terrain credit is
+    // shown for DEM tiles that are not being rendered. The report still
+    // describes what actually survived the teardown, so state and map
+    // resources cannot diverge even when cleanup itself fails.
+    removeShadedRelief(map);
+    return shadedReliefIsRendering(map);
+  }
+}
+
+/**
+ * True only when both halves of the relief stack are present, which is the
+ * exact condition under which DEM tiles are being fetched and rendered — and
+ * therefore the exact condition under which the upstream terrain credit must
+ * be shown.
+ */
+function shadedReliefIsRendering(map: MapLibreMap): boolean {
+  try {
+    return Boolean(
+      map.getSource(TERRAIN_SOURCE_ID) && map.getLayer(TERRAIN_RELIEF_LAYER_ID),
     );
   } catch {
-    // The basemap remains usable when the optional elevation source is unavailable.
+    return false;
   }
+}
+
+/**
+ * Stable insertion point for the shaded-relief layer.
+ *
+ * The hillshade must always sit *below* the flight route lines: from
+ * `TERRAIN_RELIEF_MIN_ZOOM` upwards the relief is opaque enough to wash the
+ * routes out. "First symbol layer in the current style" is not a stable
+ * anchor, because after a flat → 3D pivot the app's own route-direction
+ * symbol layers already exist and sort first, which would insert the
+ * hillshade above the route lines. Prefer the bottom-most app route layer
+ * whenever it exists, and fall back to the basemap's first symbol layer only
+ * during the initial style load, before any route layer has been added. Both
+ * paths land the hillshade in the same slot, so a directly loaded 3D map and
+ * one reached through flat → 3D end up with identical layer order.
+ */
+function terrainReliefBeforeId(map: MapLibreMap): string | undefined {
+  if (map.getLayer(ROUTE_LAYER_IDS.commercial)) {
+    return ROUTE_LAYER_IDS.commercial;
+  }
+  return firstBasemapSymbolLayerId(map);
+}
+
+/**
+ * First symbol layer contributed by the basemap style. The app's own symbol
+ * layers are excluded so the insertion point cannot drift once route
+ * direction cues or airport labels exist.
+ */
+function firstBasemapSymbolLayerId(map: MapLibreMap): string | undefined {
+  return map
+    .getStyle()
+    .layers.find(
+      (layer) => layer.type === "symbol" && !APP_LAYER_IDS.has(layer.id),
+    )?.id;
+}
+
+/**
+ * Tears the shaded-relief stack down and *verifies* the outcome. Both halves
+ * are attempted independently (a failed `removeLayer` must not skip the
+ * source removal), and success is decided by re-reading the map rather than
+ * by the absence of a thrown error: MapLibre can reject a removal while the
+ * layer keeps rendering DEM data. The caller uses `removed` to decide whether
+ * the terrain state and its required upstream attribution may be turned off,
+ * so a swallowed failure here would let the UI claim a flat, DEM-free map
+ * while relief is still on screen.
+ */
+function removeShadedRelief(map: MapLibreMap): TerrainTeardown {
+  const failures: string[] = [];
+  try {
+    if (map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
+      map.removeLayer(TERRAIN_RELIEF_LAYER_ID);
+    }
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+  try {
+    if (map.getSource(TERRAIN_SOURCE_ID)) {
+      map.removeSource(TERRAIN_SOURCE_ID);
+    }
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+
+  let layerPresent = true;
+  let sourcePresent = true;
+  try {
+    layerPresent = Boolean(map.getLayer(TERRAIN_RELIEF_LAYER_ID));
+    sourcePresent = Boolean(map.getSource(TERRAIN_SOURCE_ID));
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+  if (!layerPresent && !sourcePresent) return { removed: true, message: "" };
+
+  const leftover = [
+    layerPresent ? "hillshade layer" : "",
+    sourcePresent ? "elevation source" : "",
+  ].filter(Boolean).join(" and ");
+  const message =
+    failures[0] ?? `${leftover || "terrain resources"} still attached`;
+  console.error("Shaded relief teardown failed.", { leftover, failures });
+  return { removed: false, message };
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Registers the four direction-cue icons and reports whether every id the
+ * direction layers reference is actually available. Direction is an
+ * acceptance-critical cue, and a symbol layer whose `icon-image` resolves to
+ * a missing image renders nothing, so a partial registration must be treated
+ * as a failure rather than quietly producing a map with no direction cues.
+ */
+function ensureDirectionIcons(map: MapLibreMap): boolean {
+  for (const { id, image } of buildDirectionIconSet()) {
+    try {
+      if (!map.hasImage(id)) map.addImage(id, image);
+    } catch (error) {
+      console.error(`Direction icon "${id}" could not be registered.`, error);
+    }
+  }
+  return Object.values(DIRECTION_ICON_IDS).every((id) => {
+    try {
+      return Boolean(map.hasImage(id));
+    } catch {
+      return false;
+    }
+  });
 }
 
 function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute[]) {
@@ -697,7 +931,7 @@ function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute
       data: airportData,
     });
   }
-  const firstSymbolLayer = map.getStyle().layers.find((layer) => layer.type === "symbol")?.id;
+  const firstSymbolLayer = firstBasemapSymbolLayerId(map);
 
   for (const layer of buildFlightRouteLayers(ROUTE_SOURCE_ID)) {
     if (!map.getLayer(layer.id)) map.addLayer(layer, firstSymbolLayer);
@@ -734,33 +968,7 @@ function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute
 
 function addRouteLabelLayer(map: MapLibreMap) {
   if (map.getLayer(ROUTE_LAYER_IDS.labels)) return;
-  map.addLayer({
-    id: ROUTE_LAYER_IDS.labels,
-    type: "symbol",
-    source: ROUTE_SOURCE_ID,
-    minzoom: 7,
-    filter: ["==", ["get", "id"], "__none__"],
-    layout: {
-      "symbol-placement": "line-center",
-      "text-field": ["get", "routeLabel"],
-      "text-font": ["Noto Sans Regular"],
-      "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 12],
-      "text-optional": true,
-      "text-padding": 9,
-      "symbol-sort-key": ["-", ["get", "flightCount"]],
-    },
-    paint: {
-      "text-color": [
-        "match",
-        ["get", "kind"],
-        "private",
-        "#76540c",
-        "#0c5e69",
-      ],
-      "text-halo-color": "rgba(255, 255, 255, 0.96)",
-      "text-halo-width": 1.6,
-    },
-  });
+  map.addLayer(buildRouteLabelLayer(ROUTE_SOURCE_ID));
 }
 
 function applyRoutePresentation(
