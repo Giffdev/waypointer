@@ -20,6 +20,8 @@ type MapConstructorOptions = Record<string, unknown> & {
 };
 
 const mapMocks = vi.hoisted(() => {
+  /** Image ids whose `addImage` call must throw, injected per test. */
+  const imageFailures = new Set<string>();
   /**
    * MapLibre stand-in that keeps a *real ordered layer list*: `addLayer`
    * honours its `beforeId` argument (and throws for an unknown one, like
@@ -38,6 +40,12 @@ const mapMocks = vi.hoisted(() => {
     return {
       addControl: vi.fn(),
       addImage: vi.fn((id: string) => {
+        // Registration failures have to be injectable *before* the map is
+        // constructed, because the direction icons are installed during the
+        // very first style load.
+        if (imageFailures.has(id)) {
+          throw new Error(`addImage rejected "${id}"`);
+        }
         imageIds.add(id);
       }),
       addLayer: vi.fn((layer: StyleLayerStub, beforeId?: string) => {
@@ -109,7 +117,13 @@ const mapMocks = vi.hoisted(() => {
   const instances: Array<ReturnType<typeof createMapMock>> = [];
   const attributionOptions: Array<Record<string, unknown>> = [];
   const mapOptions: MapConstructorOptions[] = [];
-  return { attributionOptions, createMapMock, instances, mapOptions };
+  return {
+    attributionOptions,
+    createMapMock,
+    imageFailures,
+    instances,
+    mapOptions,
+  };
 });
 
 type MapMock = (typeof mapMocks.instances)[number];
@@ -182,6 +196,7 @@ const homeFrame: MapFrame = {
 
 beforeEach(() => {
   mapMocks.attributionOptions.length = 0;
+  mapMocks.imageFailures.clear();
   mapMocks.instances.length = 0;
   mapMocks.mapOptions.length = 0;
   vi.stubGlobal("fetch", vi.fn(async () => ({
@@ -443,6 +458,71 @@ describe("FlightGlobe reduced motion", () => {
     expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeUndefined();
   });
 
+  it("keeps terrain state and credits on when the hillshade layer cannot be removed, instead of claiming a flat, DEM-free map", async () => {
+    installMatchMedia(false);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} />);
+    const map = await readyMap();
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+
+    map.removeLayer.mockImplementation((id: string) => {
+      if (id === TERRAIN_RELIEF_LAYER_ID) {
+        throw new Error("hillshade layer is locked");
+      }
+    });
+
+    view.rerender(<FlightGlobe {...props} viewMode="flat" />);
+    await waitFor(() =>
+      expect(map.setProjection).toHaveBeenCalledWith({ type: "mercator" }),
+    );
+
+    // The hillshade is still attached, so DEM data is still on screen: the
+    // required upstream credit must stay, and the failure must be visible.
+    expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeTruthy();
+    const alert = await screen.findByText(/Terrain relief could not be removed/);
+    expect(alert).toHaveAttribute("role", "alert");
+    expect(alert).toHaveTextContent("hillshade layer is locked");
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    expect(screen.getByText(/3DEP \(formerly NED\)/)).toBeInTheDocument();
+    expect(screen.getByRole("region").getAttribute("aria-label")).toContain(
+      "terrain relief",
+    );
+    consoleError.mockRestore();
+  });
+
+  it("keeps terrain state and credits on when the DEM source cannot be removed, even though the hillshade layer went away", async () => {
+    installMatchMedia(false);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} />);
+    const map = await readyMap();
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+
+    map.removeSource.mockImplementation((id: string) => {
+      if (id === "flight-map-terrain") {
+        throw new Error("elevation source still in use");
+      }
+    });
+
+    view.rerender(<FlightGlobe {...props} viewMode="flat" />);
+    await waitFor(() =>
+      expect(map.setProjection).toHaveBeenCalledWith({ type: "mercator" }),
+    );
+
+    // Teardown is only "done" when *both* halves are verified gone. A
+    // surviving DEM source keeps fetching elevation tiles, so the credit
+    // stays and the partial teardown is reported rather than swallowed.
+    expect(map.getLayer(TERRAIN_RELIEF_LAYER_ID)).toBeUndefined();
+    expect(map.getSource("flight-map-terrain")).toBeTruthy();
+    const alert = await screen.findByText(/Terrain relief could not be removed/);
+    expect(alert).toHaveTextContent("elevation source still in use");
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
   it("registers all four route-direction icons once, instead of relying on text glyphs", async () => {
     installMatchMedia(false);
 
@@ -465,6 +545,34 @@ describe("FlightGlobe reduced motion", () => {
     for (const id of registeredIds) {
       expect(map.hasImage(id)).toBe(true);
     }
+  });
+
+  it("refuses to report a ready map when a direction icon fails to register, instead of installing layers that reference a missing image", async () => {
+    installMatchMedia(false);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    mapMocks.imageFailures.add(DIRECTION_ICON_IDS.bothCommercial);
+
+    const view = render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+
+    // Direction is an acceptance-critical cue: a symbol layer pointing at a
+    // missing image renders nothing, so the map must not silently claim it
+    // initialized successfully.
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/Route direction cues could not be registered/);
+    const region = view.container.querySelector(".globe-shell");
+    expect(region).toHaveAttribute("data-map-ready", "false");
+    expect(region).toHaveAttribute("aria-busy", "true");
+    for (const layerId of [
+      ROUTE_LAYER_IDS.direction,
+      ROUTE_LAYER_IDS.selectedDirection,
+    ]) {
+      expect({
+        layerId,
+        added: map.addLayer.mock.calls.some(([layer]) => layer.id === layerId),
+      }).toEqual({ layerId, added: false });
+    }
+    consoleError.mockRestore();
   });
 
   it("uses immediate camera updates while preserving every final state", async () => {

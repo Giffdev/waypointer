@@ -42,7 +42,7 @@ import {
   withGlobeProjection,
 } from "@/lib/map-style";
 import { bindCompletedMapZoom } from "@/lib/map-zoom-sync";
-import { buildDirectionIconSet } from "@/lib/map-icons";
+import { buildDirectionIconSet, DIRECTION_ICON_IDS } from "@/lib/map-icons";
 import type { MapViewMode } from "@/lib/map-view-mode";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
@@ -97,6 +97,18 @@ type FlightGlobeProps = {
 
 type BasemapMode = "loading" | "open-map" | "fallback";
 
+/**
+ * Result of a shaded-relief teardown attempt. `removed` is only true when the
+ * hillshade layer *and* the DEM source are both verified absent afterwards,
+ * so callers can never turn the terrain credit off while the map is still
+ * rendering DEM-driven relief.
+ */
+type TerrainTeardown = { removed: boolean; message: string };
+
+const TERRAIN_TEARDOWN_ERROR_PREFIX = "Terrain relief could not be removed";
+const DIRECTION_ICON_ERROR =
+  "Route direction cues could not be registered, so the map cannot show which way each route runs.";
+
 export default function FlightGlobe(props: FlightGlobeProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -123,6 +135,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   const [mapReady, setMapReady] = useState(false);
   const [initializationError, setInitializationError] = useState("");
   const [terrainActive, setTerrainActive] = useState(false);
+  const [terrainError, setTerrainError] = useState("");
 
   useLayoutEffect(() => {
     viewModeRef.current = props.viewMode;
@@ -218,10 +231,21 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           map.setProjection({
             type: viewModeRef.current === "globe" ? "globe" : "mercator",
           });
-          setTerrainActive(
-            viewModeRef.current === "globe" ? addShadedRelief(map) : false,
-          );
-          ensureDirectionIcons(map);
+          if (viewModeRef.current === "globe") {
+            setTerrainActive(addShadedRelief(map));
+            setTerrainError("");
+          } else {
+            const teardown = removeShadedRelief(map);
+            setTerrainActive(!teardown.removed);
+            setTerrainError(
+              teardown.removed
+                ? ""
+                : `${TERRAIN_TEARDOWN_ERROR_PREFIX} · ${teardown.message}`,
+            );
+          }
+          if (!ensureDirectionIcons(map)) {
+            throw new Error(DIRECTION_ICON_ERROR);
+          }
           addFlightLayers(map, latest.airports, latest.routes);
           applyRoutePresentation(
             map,
@@ -344,9 +368,20 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     if (props.viewMode === "globe") {
       const active = addShadedRelief(map);
       setTerrainActive(active);
+      setTerrainError("");
     } else {
-      removeShadedRelief(map);
-      setTerrainActive(false);
+      // Teardown is verified, not assumed: the credit line may only be
+      // withdrawn once the hillshade layer and the DEM source are both gone.
+      // A failed removal keeps the terrain state (and its attribution) on,
+      // and surfaces the failure instead of silently claiming a flat,
+      // DEM-free map.
+      const teardown = removeShadedRelief(map);
+      setTerrainActive(!teardown.removed);
+      setTerrainError(
+        teardown.removed
+          ? ""
+          : `${TERRAIN_TEARDOWN_ERROR_PREFIX} · ${teardown.message}`,
+      );
     }
   }, [props.viewMode]);
 
@@ -513,6 +548,11 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       {initializationError && (
         <div className="map-layer-status error" role="alert">
           Interactive globe failed to initialize · {initializationError}
+        </div>
+      )}
+      {terrainError && (
+        <div className="map-layer-status error" role="alert">
+          {terrainError}
         </div>
       )}
       {(basemapMode === "loading" || basemapMode === "fallback") && (
@@ -734,14 +774,30 @@ function addShadedRelief(map: MapLibreMap): boolean {
         terrainReliefBeforeId(map),
       );
     }
+    return shadedReliefIsRendering(map);
+  } catch {
+    // The basemap remains usable when the optional elevation source is
+    // unavailable; tear down any half-built stack so no terrain credit is
+    // shown for DEM tiles that are not being rendered. The report still
+    // describes what actually survived the teardown, so state and map
+    // resources cannot diverge even when cleanup itself fails.
+    removeShadedRelief(map);
+    return shadedReliefIsRendering(map);
+  }
+}
+
+/**
+ * True only when both halves of the relief stack are present, which is the
+ * exact condition under which DEM tiles are being fetched and rendered — and
+ * therefore the exact condition under which the upstream terrain credit must
+ * be shown.
+ */
+function shadedReliefIsRendering(map: MapLibreMap): boolean {
+  try {
     return Boolean(
       map.getSource(TERRAIN_SOURCE_ID) && map.getLayer(TERRAIN_RELIEF_LAYER_ID),
     );
   } catch {
-    // The basemap remains usable when the optional elevation source is
-    // unavailable; tear down any half-built stack so no terrain credit is
-    // shown for DEM tiles that are not being rendered.
-    removeShadedRelief(map);
     return false;
   }
 }
@@ -780,27 +836,79 @@ function firstBasemapSymbolLayerId(map: MapLibreMap): string | undefined {
     )?.id;
 }
 
-function removeShadedRelief(map: MapLibreMap): void {
+/**
+ * Tears the shaded-relief stack down and *verifies* the outcome. Both halves
+ * are attempted independently (a failed `removeLayer` must not skip the
+ * source removal), and success is decided by re-reading the map rather than
+ * by the absence of a thrown error: MapLibre can reject a removal while the
+ * layer keeps rendering DEM data. The caller uses `removed` to decide whether
+ * the terrain state and its required upstream attribution may be turned off,
+ * so a swallowed failure here would let the UI claim a flat, DEM-free map
+ * while relief is still on screen.
+ */
+function removeShadedRelief(map: MapLibreMap): TerrainTeardown {
+  const failures: string[] = [];
   try {
     if (map.getLayer(TERRAIN_RELIEF_LAYER_ID)) {
       map.removeLayer(TERRAIN_RELIEF_LAYER_ID);
     }
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+  try {
     if (map.getSource(TERRAIN_SOURCE_ID)) {
       map.removeSource(TERRAIN_SOURCE_ID);
     }
-  } catch {
-    // Flat mode remains usable even if the optional elevation source can't be torn down cleanly.
+  } catch (error) {
+    failures.push(describeError(error));
   }
+
+  let layerPresent = true;
+  let sourcePresent = true;
+  try {
+    layerPresent = Boolean(map.getLayer(TERRAIN_RELIEF_LAYER_ID));
+    sourcePresent = Boolean(map.getSource(TERRAIN_SOURCE_ID));
+  } catch (error) {
+    failures.push(describeError(error));
+  }
+  if (!layerPresent && !sourcePresent) return { removed: true, message: "" };
+
+  const leftover = [
+    layerPresent ? "hillshade layer" : "",
+    sourcePresent ? "elevation source" : "",
+  ].filter(Boolean).join(" and ");
+  const message =
+    failures[0] ?? `${leftover || "terrain resources"} still attached`;
+  console.error("Shaded relief teardown failed.", { leftover, failures });
+  return { removed: false, message };
 }
 
-function ensureDirectionIcons(map: MapLibreMap): void {
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Registers the four direction-cue icons and reports whether every id the
+ * direction layers reference is actually available. Direction is an
+ * acceptance-critical cue, and a symbol layer whose `icon-image` resolves to
+ * a missing image renders nothing, so a partial registration must be treated
+ * as a failure rather than quietly producing a map with no direction cues.
+ */
+function ensureDirectionIcons(map: MapLibreMap): boolean {
   for (const { id, image } of buildDirectionIconSet()) {
     try {
       if (!map.hasImage(id)) map.addImage(id, image);
-    } catch {
-      // Route direction cues remain optional; the plain line still renders.
+    } catch (error) {
+      console.error(`Direction icon "${id}" could not be registered.`, error);
     }
   }
+  return Object.values(DIRECTION_ICON_IDS).every((id) => {
+    try {
+      return Boolean(map.hasImage(id));
+    } catch {
+      return false;
+    }
+  });
 }
 
 function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute[]) {
