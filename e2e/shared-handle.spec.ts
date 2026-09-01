@@ -3,14 +3,17 @@ import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
 import { installOpenMapAttributionFixture } from "./map-style-fixture";
 
 const projection = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   owner: { displayName: null },
-  summary: { flightCount: 4, routeCount: 3 },
+  summary: { flightCount: 4, routeCount: 2 },
   routes: [
     {
       id: "public-route",
       kind: "commercial",
-      flightCount: 2,
+      flightCount: 3,
+      forwardFlightCount: 2,
+      reverseFlightCount: 1,
+      directionMode: "both",
       origin: {
         code: "SEA",
         name: "Seattle-Tacoma International Airport",
@@ -26,29 +29,6 @@ const projection = {
         city: "New York",
         lat: 40.6,
         lon: -73.8,
-        country: "US",
-        facility: "commercial",
-      },
-    },
-    {
-      id: "public-return-route",
-      kind: "commercial",
-      flightCount: 1,
-      origin: {
-        code: "JFK",
-        name: "John F Kennedy International Airport",
-        city: "New York",
-        lat: 40.6,
-        lon: -73.8,
-        country: "US",
-        facility: "commercial",
-      },
-      destination: {
-        code: "SEA",
-        name: "Seattle-Tacoma International Airport",
-        city: "Seattle",
-        lat: 47.4,
-        lon: -122.3,
         country: "US",
         facility: "commercial",
       },
@@ -57,6 +37,9 @@ const projection = {
       id: "unrelated-route",
       kind: "private",
       flightCount: 1,
+      forwardFlightCount: 1,
+      reverseFlightCount: 0,
+      directionMode: "one-way",
       origin: {
         code: "DEN",
         name: "Denver International Airport",
@@ -84,7 +67,7 @@ const projection = {
       role: "passenger",
       aircraft: ["Boeing 737"],
       registration: "N100AA",
-      routeIds: ["public-route"],
+      routeLegs: [{ routeId: "public-route", direction: "forward" }],
     },
     {
       date: "2024-12-01",
@@ -92,7 +75,7 @@ const projection = {
       role: "passenger",
       aircraft: ["Piper PA-28"],
       registration: "N400DD",
-      routeIds: ["unrelated-route"],
+      routeLegs: [{ routeId: "unrelated-route", direction: "forward" }],
     },
     {
       date: "2026-02-20",
@@ -100,7 +83,7 @@ const projection = {
       role: "passenger",
       aircraft: ["Airbus A320"],
       registration: "N200BB",
-      routeIds: ["public-return-route"],
+      routeLegs: [{ routeId: "public-route", direction: "reverse" }],
     },
     {
       date: "2026-03-15",
@@ -108,7 +91,7 @@ const projection = {
       role: "pilot",
       aircraft: ["Cessna 172"],
       registration: "N300CC",
-      routeIds: ["public-route"],
+      routeLegs: [{ routeId: "public-route", direction: "forward" }],
     },
   ],
 };
@@ -157,7 +140,7 @@ test("enables the entire public map and returns an absolute username link", asyn
       },
     });
   });
-  await page.route(/\/api\/shared\/readable-pilot$/, (route) =>
+  await page.route(/\/api\/shared\/readable-pilot(\?|$)/, (route) =>
     route.fulfill({ json: { map: projection } }),
   );
 
@@ -182,7 +165,7 @@ test("enables the entire public map and returns an absolute username link", asyn
 
 test("opens a public username route with no key or token", async ({ page }) => {
   const requests: Array<{ method: string; body: string | null }> = [];
-  await page.route(/\/api\/shared\/readable-pilot$/, async (route) => {
+  await page.route(/\/api\/shared\/readable-pilot(\?|$)/, async (route) => {
     requests.push({
       method: route.request().method(),
       body: route.request().postData(),
@@ -231,6 +214,104 @@ test("opens a public username route with no key or token", async ({ page }) => {
   expect(requests).toEqual([{ method: "GET", body: null }]);
 });
 
+test("pivots between 3D globe and flat map while preserving filters, stats, legend, and route cues", async ({
+  page,
+}) => {
+  const sharedRequests: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/shared/readable-pilot") {
+      sharedRequests.push(`${request.method()} ${path}`);
+    }
+  });
+  await page.route(/\/api\/shared\/readable-pilot(\?|$)/, (route) =>
+    route.fulfill({ json: { map: projection } }),
+  );
+  await installOpenMapAttributionFixture(page);
+
+  await page.goto("/readable-pilot");
+  const interactiveGlobe = page.getByRole("region", {
+    name: /Interactive 3D globe|Interactive flat projected map/,
+  });
+  const globeButton = page.getByRole("button", { name: "3D globe" });
+  const flatButton = page.getByRole("button", { name: "Flat map" });
+
+  // Sensible default: opens in 3D globe, matching the private map default.
+  await expect(globeButton).toHaveAttribute("aria-pressed", "true");
+  await expect(interactiveGlobe).toHaveAttribute(
+    "aria-label",
+    /Interactive 3D globe/,
+  );
+
+  await page
+    .getByLabel("Filter shared flights by role")
+    .selectOption("pilot");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 1 of 4 shared flights",
+  );
+  const busiestBefore = await page
+    .getByText(/Busiest route:/)
+    .locator("..")
+    .innerText();
+  await expect(page.getByText("Map legend")).toBeVisible();
+
+  // Keyboard accessibility: arrow keys move focus between the two choices.
+  await flatButton.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(flatButton).toHaveAttribute("aria-pressed", "true");
+  await expect(interactiveGlobe).toHaveAttribute(
+    "aria-label",
+    /Interactive flat projected map/,
+  );
+
+  // Toggling the view must not refetch or lose filters/stats/legend/route cues.
+  await expect(
+    page.getByLabel("Filter shared flights by role"),
+  ).toHaveValue("pilot");
+  await expect(page.getByRole("status")).toContainText(
+    "Showing 1 of 4 shared flights",
+  );
+  await expect(
+    page.getByText(/Busiest route:/).locator(".."),
+  ).toHaveText(busiestBefore);
+  await expect(page.getByText("Map legend")).toBeVisible();
+  expect(sharedRequests).toEqual(["GET /api/shared/readable-pilot"]);
+
+  await globeButton.click();
+  await expect(globeButton).toHaveAttribute("aria-pressed", "true");
+  await expect(interactiveGlobe).toHaveAttribute(
+    "aria-label",
+    /Interactive 3D globe/,
+  );
+  await expect(
+    page.getByLabel("Filter shared flights by role"),
+  ).toHaveValue("pilot");
+  expect(sharedRequests).toEqual(["GET /api/shared/readable-pilot"]);
+});
+
+test("keeps the view toggle usable at mobile widths", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.route(/\/api\/shared\/readable-pilot(\?|$)/, (route) =>
+    route.fulfill({ json: { map: projection } }),
+  );
+  await installOpenMapAttributionFixture(page);
+
+  await page.goto("/readable-pilot");
+  const globeButton = page.getByRole("button", { name: "3D globe" });
+  const flatButton = page.getByRole("button", { name: "Flat map" });
+  await expect(globeButton).toBeVisible();
+  await expect(flatButton).toBeVisible();
+
+  await flatButton.click();
+  await expect(flatButton).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("region", { name: /Interactive flat projected map/ }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth + 1));
+});
+
 test("filters locally and renders truthful route modes on desktop and mobile", async ({
   page,
 }) => {
@@ -245,7 +326,7 @@ test("filters locally and renders truthful route modes on desktop and mobile", a
       apiWrites.push(`${request.method()} ${path}`);
     }
   });
-  await page.route(/\/api\/shared\/readable-pilot$/, (route) =>
+  await page.route(/\/api\/shared\/readable-pilot(\?|$)/, (route) =>
     route.fulfill({ json: { map: projection } }),
   );
 
@@ -257,11 +338,11 @@ test("filters locally and renders truthful route modes on desktop and mobile", a
   await expect(page.getByText("One-way route").locator("..")).toContainText(
     "➤",
   );
-  await expect(page.getByText("Reciprocal route").locator("..")).toContainText(
+  await expect(page.getByText("Both directions").locator("..")).toContainText(
     "↔",
   );
   await expect(
-    page.getByText(/JFK — John F Kennedy International Airport ↔ SEA — Seattle-Tacoma International Airport/),
+    page.getByText(/SEA — Seattle-Tacoma International Airport ↔ JFK — John F Kennedy International Airport/),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Statistics for this view" }),
@@ -273,7 +354,7 @@ test("filters locally and renders truthful route modes on desktop and mobile", a
   await expect(page.getByRole("status")).toContainText(
     "Showing 1 of 4 shared flights",
   );
-  await expect(page.getByText("Reciprocal route")).toHaveCount(0);
+  await expect(page.getByText("Both directions")).toHaveCount(0);
   await expect(page.getByText("One-way route").locator("..")).toContainText(
     "➤",
   );
@@ -337,7 +418,7 @@ test("filters locally and renders truthful route modes on desktop and mobile", a
 test("shows the generic unavailable state for an unknown or disabled handle", async ({
   page,
 }) => {
-  await page.route(/\/api\/shared\/unknown$/, (route) =>
+  await page.route(/\/api\/shared\/unknown(\?|$)/, (route) =>
     route.fulfill({
       status: 404,
       json: {

@@ -96,6 +96,73 @@ describe("SharedMapView", () => {
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("key");
   });
 
+  it("preserves filters, statistics, legend, and route-direction cues across a view-mode toggle", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(json(sharedMap()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView handle="public-handle" />);
+    expect(
+      await screen.findByRole("heading", { name: "Shared Waypointer map" }),
+    ).toBeVisible();
+
+    // Sensible default: the shared map opens in 3D globe mode, matching the
+    // private map's default (DEFAULT_MAP_VIEW_MODE).
+    expect(screen.getByRole("button", { name: "3D globe" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+      "data-view-mode",
+      "globe",
+    );
+
+    await user.selectOptions(
+      screen.getByRole("combobox", {
+        name: "Filter shared flights by role",
+      }),
+      "pilot",
+    );
+    expect(screen.getByText(/Showing 2 of 3 shared flights/)).toBeVisible();
+    const busiestRouteBefore = screen.getByText(/Busiest route:/).parentElement;
+    expect(busiestRouteBefore).toHaveTextContent(
+      "LAX — Los Angeles International Airport",
+    );
+    expect(screen.getByText("Map legend")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Flat map" }));
+    expect(screen.getByRole("button", { name: "Flat map" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+      "data-view-mode",
+      "flat",
+    );
+    // Toggling the view mode must not refetch, re-filter, or drop context.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("combobox", { name: "Filter shared flights by role" }),
+    ).toHaveValue("pilot");
+    expect(screen.getByText(/Showing 2 of 3 shared flights/)).toBeVisible();
+    expect(screen.getByText(/Busiest route:/).parentElement).toHaveTextContent(
+      "LAX — Los Angeles International Airport",
+    );
+    expect(screen.getByText("Map legend")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "3D globe" }));
+    expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+      "data-view-mode",
+      "globe",
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Filter shared flights by role" }),
+    ).toHaveValue("pilot");
+    expect(screen.getByText(/Showing 2 of 3 shared flights/)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("consumes the canonical public direction contract without re-aggregation", () => {
     const canonical: PublicMapProjection["routes"][number] = {
       ...sharedMap().map.routes[0],
