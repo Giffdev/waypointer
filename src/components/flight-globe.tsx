@@ -49,6 +49,7 @@ const OPENFREEMAP_SOURCE_PREFIX = "https://tiles.openfreemap.org/";
 const REQUIRED_BASEMAP_ATTRIBUTION =
   '<a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
 const TERRAIN_SOURCE_ID = "flight-map-terrain";
+const TERRAIN_HILLSHADE_LAYER_ID = "flight-map-hillshade";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
 const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
@@ -109,6 +110,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("loading");
   const [mapReady, setMapReady] = useState(false);
   const [initializationError, setInitializationError] = useState("");
+  const [terrainActive, setTerrainActive] = useState(false);
 
   useLayoutEffect(() => {
     viewModeRef.current = props.viewMode;
@@ -204,7 +206,9 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           map.setProjection({
             type: viewModeRef.current === "globe" ? "globe" : "mercator",
           });
-          addShadedRelief(map);
+          setTerrainActive(
+            viewModeRef.current === "globe" ? addShadedRelief(map) : false,
+          );
           addFlightLayers(map, latest.airports, latest.routes);
           applyRoutePresentation(
             map,
@@ -324,6 +328,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     map.setProjection({
       type: props.viewMode === "globe" ? "globe" : "mercator",
     });
+    if (props.viewMode === "globe") {
+      setTerrainActive((active) => active || addShadedRelief(map));
+    } else {
+      removeShadedRelief(map);
+      setTerrainActive(false);
+    }
   }, [props.viewMode]);
 
   useEffect(() => {
@@ -478,7 +488,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     <div
       className="globe-shell cartographic-map"
       role="region"
-      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels, terrain relief, airports, and flight routes`}
+      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
       aria-busy={!mapReady}
       data-airport-count={props.airports.length}
       data-map-ready={mapReady}
@@ -498,44 +508,38 @@ export default function FlightGlobe(props: FlightGlobeProps) {
             : "Basemap unavailable · routes remain local"}
         </div>
       )}
-      <div className="terrain-attribution">
-        <a
-          className="terrain-attribution-primary"
-          href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-          rel="noopener"
-          target="_blank"
-        >
-          Mapzen Terrarium terrain attribution
-        </a>
-        <details>
-          <summary>All terrain data credits</summary>
-          <div className="terrain-attribution-content">
-            <p>
-              Elevation data sources used by the global terrain layer:
-            </p>
-            <ul>
-              <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
-              <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
-              <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
-              <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
-              <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
-              <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
-              <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
-              <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
-              <li>Norway terrain © Kartverket.</li>
-              <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
-              <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
-            </ul>
-            <a
-              href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
-              rel="noopener"
-              target="_blank"
-            >
-              Terrain licence details
-            </a>
-          </div>
-        </details>
-      </div>
+      {terrainActive && (
+        <div className="terrain-attribution">
+          <details>
+            <summary>Terrain data credits</summary>
+            <div className="terrain-attribution-content">
+              <p>
+                Elevation data sources used by the global terrain layer:
+              </p>
+              <ul>
+                <li>ArcticDEM terrain from DigitalGlobe imagery, funded by National Science Foundation awards 1043681, 1559691, and 1542736.</li>
+                <li>Australia terrain © Commonwealth of Australia (Geoscience Australia) 2017.</li>
+                <li>Austria terrain © offene Daten Österreichs — Digitales Geländemodell (DGM) Österreich.</li>
+                <li>Canada terrain contains information licensed under the Open Government Licence — Canada.</li>
+                <li>Europe terrain produced using Copernicus data and information funded by the European Union — EU-DEM layers.</li>
+                <li>Global ETOPO1 terrain data from the U.S. National Oceanic and Atmospheric Administration.</li>
+                <li>Mexico terrain source: INEGI, Continental relief, 2016.</li>
+                <li>New Zealand terrain Copyright 2011 Crown copyright Land Information New Zealand and the New Zealand Government. All rights reserved.</li>
+                <li>Norway terrain © Kartverket.</li>
+                <li>United Kingdom terrain © Environment Agency copyright and/or database right 2015. All rights reserved.</li>
+                <li>United States 3DEP and global GMTED2010 and SRTM terrain data courtesy of the U.S. Geological Survey.</li>
+              </ul>
+              <a
+                href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md"
+                rel="noopener"
+                target="_blank"
+              >
+                Terrain licence details
+              </a>
+            </div>
+          </details>
+        </div>
+      )}
       <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
@@ -654,7 +658,8 @@ function withRequiredBasemapAttribution(
   };
 }
 
-function addShadedRelief(map: MapLibreMap) {
+function addShadedRelief(map: MapLibreMap): boolean {
+  if (map.getSource(TERRAIN_SOURCE_ID)) return true;
   try {
     map.addSource(TERRAIN_SOURCE_ID, {
       type: "raster-dem",
@@ -672,8 +677,23 @@ function addShadedRelief(map: MapLibreMap) {
       buildTerrainReliefLayer(TERRAIN_SOURCE_ID),
       firstSymbolLayer,
     );
+    return true;
   } catch {
     // The basemap remains usable when the optional elevation source is unavailable.
+    return false;
+  }
+}
+
+function removeShadedRelief(map: MapLibreMap): void {
+  try {
+    if (map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
+      map.removeLayer(TERRAIN_HILLSHADE_LAYER_ID);
+    }
+    if (map.getSource(TERRAIN_SOURCE_ID)) {
+      map.removeSource(TERRAIN_SOURCE_ID);
+    }
+  } catch {
+    // Flat mode remains usable even if the optional elevation source can't be torn down cleanly.
   }
 }
 

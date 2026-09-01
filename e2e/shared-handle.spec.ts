@@ -188,17 +188,16 @@ test("opens a public username route with no key or token", async ({ page }) => {
   await expect(attribution).toContainText("OpenMapTiles");
   await expect(attribution).toContainText("OpenStreetMap");
   await expect(page.locator(".maplibregl-ctrl-attrib-button")).toBeHidden();
+  await expect(page.getByText("Mapzen Terrarium", { exact: false })).toHaveCount(0);
+  const terrainCredits = page.getByText("Terrain data credits", { exact: true });
+  await expect(terrainCredits).toBeVisible();
+  await terrainCredits.click();
   await expect(
-    page.getByRole("link", {
-      name: "Mapzen Terrarium terrain attribution",
-    }),
+    page.getByRole("link", { name: "Terrain licence details" }),
   ).toHaveAttribute(
     "href",
     "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
   );
-  await expect(
-    page.getByText("All terrain data credits", { exact: true }),
-  ).toBeVisible();
   await expect(
     page.getByRole("combobox", { name: "Filter shared flights by airport" }),
   ).toHaveValue("All shared airports");
@@ -214,7 +213,7 @@ test("opens a public username route with no key or token", async ({ page }) => {
   expect(requests).toEqual([{ method: "GET", body: null }]);
 });
 
-test("pivots between 3D globe and flat map while preserving filters, stats, legend, and route cues", async ({
+test("pivots between 3D globe and flat map while preserving filters, stats, legend, and route cues, and toggling terrain attribution", async ({
   page,
 }) => {
   const sharedRequests: string[] = [];
@@ -242,6 +241,7 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     "aria-label",
     /Interactive 3D globe/,
   );
+  await expect(page.getByText("Terrain data credits")).toBeVisible();
 
   await page
     .getByLabel("Filter shared flights by role")
@@ -263,6 +263,8 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     "aria-label",
     /Interactive flat projected map/,
   );
+  // Flat mode omits the DEM/hillshade source, so its terrain credit is absent.
+  await expect(page.getByText("Terrain data credits")).toHaveCount(0);
 
   // Toggling the view must not refetch or lose filters/stats/legend/route cues.
   await expect(
@@ -283,6 +285,7 @@ test("pivots between 3D globe and flat map while preserving filters, stats, lege
     "aria-label",
     /Interactive 3D globe/,
   );
+  await expect(page.getByText("Terrain data credits")).toBeVisible();
   await expect(
     page.getByLabel("Filter shared flights by role"),
   ).toHaveValue("pilot");

@@ -33,10 +33,16 @@ vi.mock("maplibre-gl", () => ({
   Map: class {
     constructor(options: Record<string, unknown>) {
       mapMocks.mapOptions.push(options);
+      const sourceIds = new Set<string>();
+      const layerIds = new Set<string>();
       const methods: Record<string, ReturnType<typeof vi.fn>> = {
         addControl: vi.fn(),
-        addLayer: vi.fn(),
-        addSource: vi.fn(),
+        addLayer: vi.fn((layer: { id: string }) => {
+          layerIds.add(layer.id);
+        }),
+        addSource: vi.fn((id: string) => {
+          sourceIds.add(id);
+        }),
         cameraForBounds: vi.fn((bounds: [[number, number], [number, number]]) => ({
           center: [
             (bounds[0][0] + bounds[1][0]) / 2,
@@ -50,8 +56,8 @@ vi.mock("maplibre-gl", () => ({
         getCanvas: vi.fn(() => ({ style: {} })),
         getCenter: vi.fn(() => ({ lng: 0, lat: 0 })),
         getContainer: vi.fn(() => ({ clientWidth: 1024, clientHeight: 640 })),
-        getLayer: vi.fn(() => undefined),
-        getSource: vi.fn(() => undefined),
+        getLayer: vi.fn((id: string) => (layerIds.has(id) ? { id } : undefined)),
+        getSource: vi.fn((id: string) => (sourceIds.has(id) ? { id } : undefined)),
         getStyle: vi.fn(() => ({ layers: [] })),
         getZoom: vi.fn(() => 4),
         jumpTo: vi.fn(),
@@ -62,6 +68,12 @@ vi.mock("maplibre-gl", () => ({
         }),
         queryRenderedFeatures: vi.fn(() => []),
         remove: vi.fn(),
+        removeLayer: vi.fn((id: string) => {
+          layerIds.delete(id);
+        }),
+        removeSource: vi.fn((id: string) => {
+          sourceIds.delete(id);
+        }),
         resize: vi.fn(),
         setCenter: vi.fn(),
         setFilter: vi.fn(),
@@ -137,7 +149,7 @@ afterEach(() => {
 });
 
 describe("FlightGlobe reduced motion", () => {
-  it("keeps required map attribution visible and exposes complete terrain credits", async () => {
+  it("keeps required map attribution compact and persistent without unnecessary branding text", async () => {
     installMatchMedia(false);
 
     render(<FlightGlobe {...defaultProps()} />);
@@ -158,14 +170,12 @@ describe("FlightGlobe reduced motion", () => {
         },
       },
     });
-    const terrainAttribution = screen.getByRole("link", {
-      name: "Mapzen Terrarium terrain attribution",
-    });
-    expect(terrainAttribution).toBeVisible();
-    expect(terrainAttribution).toHaveAttribute(
-      "href",
-      "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
-    );
+    expect(
+      screen.queryByText(/Mapzen Terrarium/),
+    ).not.toBeInTheDocument();
+    const summary = screen.getByText("Terrain data credits");
+    expect(summary.closest("details")).not.toHaveAttribute("open");
+    expect(summary.closest(".terrain-attribution")).toBeVisible();
     expect(mapMocks.attributionOptions[0]?.customAttribution)
       .not.toContain("OpenFreeMap");
     expect(
@@ -177,6 +187,54 @@ describe("FlightGlobe reduced motion", () => {
       "href",
       "https://github.com/tilezen/joerd/blob/master/docs/attribution.md",
     );
+  });
+
+  it("omits the shaded-relief terrain source and its attribution control when starting in flat map mode", async () => {
+    installMatchMedia(false);
+
+    render(<FlightGlobe {...defaultProps()} viewMode="flat" />);
+    const map = await readyMap();
+
+    expect(
+      map.addSource.mock.calls.some(
+        (call: unknown[]) => call[0] === "flight-map-terrain",
+      ),
+    ).toBe(false);
+    expect(
+      screen.queryByText("Terrain data credits"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("adds and removes the shaded-relief terrain source as the view mode pivots between 3D globe and flat map", async () => {
+    installMatchMedia(false);
+
+    const props = defaultProps();
+    const view = render(<FlightGlobe {...props} />);
+    const map = await readyMap();
+
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+    const terrainAddCallsBeforeToggle = map.addSource.mock.calls.filter(
+      (call: unknown[]) => call[0] === "flight-map-terrain",
+    ).length;
+    expect(terrainAddCallsBeforeToggle).toBe(1);
+
+    view.rerender(<FlightGlobe {...props} viewMode="flat" />);
+    await waitFor(() =>
+      expect(map.removeSource).toHaveBeenCalledWith("flight-map-terrain"),
+    );
+    expect(map.removeLayer).toHaveBeenCalledWith("flight-map-hillshade");
+    expect(
+      screen.queryByText("Terrain data credits"),
+    ).not.toBeInTheDocument();
+
+    view.rerender(<FlightGlobe {...props} viewMode="globe" />);
+    await waitFor(() => {
+      const terrainAddCallsAfterToggle = map.addSource.mock.calls.filter(
+        (call: unknown[]) => call[0] === "flight-map-terrain",
+      ).length;
+      expect(terrainAddCallsAfterToggle).toBe(2);
+    });
+    expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
   });
 
   it("uses immediate camera updates while preserving every final state", async () => {

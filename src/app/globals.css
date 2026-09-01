@@ -236,12 +236,6 @@ body:has(.runtime-mode) .map-stage {
   right: 8px;
   z-index: 3;
 }
-.terrain-attribution-primary {
-  color: #075d70;
-  display: block;
-  font-weight: 700;
-  padding: 5px 8px;
-}
 .terrain-attribution summary {
   cursor: pointer;
   font-weight: 700;
