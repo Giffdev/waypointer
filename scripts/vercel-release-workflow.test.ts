@@ -42,7 +42,12 @@ describe("Vercel release workflow", () => {
     expect(workflow.slice(0, approvalIndex)).not.toContain(
       "secrets.VERCEL_TOKEN",
     );
-    expect(workflow).toContain('test "$APPROVER" != "$REQUESTER"');
+    expect(workflow).not.toContain('test "$APPROVER" != "$REQUESTER"');
+    expect(workflow).toContain(
+      "REPOSITORY_OWNER: ${{ github.repository_owner }}",
+    );
+    expect(workflow).toContain('test "$REQUESTER" = "$REPOSITORY_OWNER"');
+    expect(workflow).toContain('test "$APPROVER" = "$REPOSITORY_OWNER"');
     expect(workflow).toContain(".approvalRunId == $approvalRunId");
     expect(workflow).not.toContain("target_fingerprint");
     expect(workflow).not.toContain("FLIGHT_MAP_TARGET_FINGERPRINT");
@@ -91,5 +96,9 @@ describe("Vercel release workflow", () => {
     expect(workflow).not.toContain("VERCEL_TOKEN");
     expect(workflow).not.toContain("target_fingerprint");
     expect(workflow).not.toMatch(/^\s+pull_request:/mu);
+    expect(workflow).toContain(
+      "REPOSITORY_OWNER: ${{ github.repository_owner }}",
+    );
+    expect(workflow).toContain('test "$APPROVER" = "$REPOSITORY_OWNER"');
   });
 });

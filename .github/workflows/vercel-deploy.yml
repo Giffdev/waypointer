@@ -63,6 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
           REQUESTER: ${{ github.actor }}
           OPERATION: ${{ inputs.operation }}
           APPROVAL_RUN_ID: ${{ inputs.approval_run_id }}
@@ -100,7 +101,10 @@ jobs:
                 select(type == "string" and length > 0)
               ' "$APPROVAL_FILE"
           )"
-          test "$APPROVER" != "$REQUESTER"
+          # Waypointer has one collaborator (the repository owner); this
+          # replaces the impossible distinct-second-identity requirement.
+          test "$REQUESTER" = "$REPOSITORY_OWNER"
+          test "$APPROVER" = "$REPOSITORY_OWNER"
           curl --fail --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
