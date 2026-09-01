@@ -7,6 +7,7 @@ import type {
   SymbolLayerSpecification,
 } from "maplibre-gl";
 import type { FlightKind } from "./flight-data";
+import { DIRECTION_ICON_IDS } from "./map-icons";
 import type { MapViewMode } from "./map-view-mode";
 
 export const ROUTE_LAYER_IDS = {
@@ -227,28 +228,41 @@ export function buildFlightRouteLayers(source: string): LineLayerSpecification[]
 export function buildRouteDirectionLayers(
   source: string,
 ): SymbolLayerSpecification[] {
-  const layout: SymbolLayerSpecification["layout"] = {
-    "symbol-placement": "line-center",
-    "text-field": ["get", "directionCue"],
-    "text-font": ["Noto Sans Regular"],
-    "text-size": ["interpolate", ["linear"], ["zoom"], 1, 9, 7, 13],
-    "text-rotation-alignment": "map",
-    "text-pitch-alignment": "map",
-    "text-keep-upright": false,
-    "text-optional": true,
-    "text-padding": 5,
-  };
-  const paint: SymbolLayerSpecification["paint"] = {
-    "text-color": [
+  const iconImage: ExpressionSpecification = [
+    "match",
+    ["get", "directionMode"],
+    "one-way",
+    [
       "match",
       ["get", "kind"],
       "private",
-      "#fff0b3",
-      "#bafff6",
+      DIRECTION_ICON_IDS.oneWayPrivate,
+      DIRECTION_ICON_IDS.oneWayCommercial,
     ],
-    "text-halo-color": "rgba(3, 16, 26, 0.9)",
-    "text-halo-width": 1.2,
-    "text-opacity": ["interpolate", ["linear"], ["zoom"], 1, 0.62, 7, 0.9],
+    "both",
+    [
+      "match",
+      ["get", "kind"],
+      "private",
+      DIRECTION_ICON_IDS.bothPrivate,
+      DIRECTION_ICON_IDS.bothCommercial,
+    ],
+    "",
+  ];
+  const layout: SymbolLayerSpecification["layout"] = {
+    "symbol-placement": "line-center",
+    "icon-image": iconImage,
+    "icon-rotation-alignment": "map",
+    "icon-pitch-alignment": "map",
+    "icon-keep-upright": false,
+    "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.56, 7, 0.82],
+    "icon-allow-overlap": false,
+    "icon-ignore-placement": false,
+    "icon-optional": true,
+    "icon-padding": 5,
+  };
+  const paint: SymbolLayerSpecification["paint"] = {
+    "icon-opacity": ["interpolate", ["linear"], ["zoom"], 1, 0.62, 7, 0.9],
   };
   return [
     {
@@ -272,15 +286,15 @@ export function buildRouteDirectionLayers(
       ],
       layout: {
         ...layout,
-        "text-size": ["interpolate", ["linear"], ["zoom"], 1, 11, 7, 15],
-        "text-offset": [0, -1.2],
-        "text-allow-overlap": true,
-        "text-ignore-placement": true,
-        "text-optional": false,
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 7, 1.05],
+        "icon-offset": [0, -16],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+        "icon-optional": false,
       },
       paint: {
         ...paint,
-        "text-opacity": 1,
+        "icon-opacity": 1,
       },
     },
   ];

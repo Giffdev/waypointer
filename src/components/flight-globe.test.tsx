@@ -9,6 +9,7 @@ import {
   type MapRoute,
 } from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
+import { DIRECTION_ICON_IDS } from "@/lib/map-icons";
 
 const mapMocks = vi.hoisted(() => {
   const instances: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
@@ -35,8 +36,12 @@ vi.mock("maplibre-gl", () => ({
       mapMocks.mapOptions.push(options);
       const sourceIds = new Set<string>();
       const layerIds = new Set<string>();
+      const imageIds = new Set<string>();
       const methods: Record<string, ReturnType<typeof vi.fn>> = {
         addControl: vi.fn(),
+        addImage: vi.fn((id: string) => {
+          imageIds.add(id);
+        }),
         addLayer: vi.fn((layer: { id: string }) => {
           layerIds.add(layer.id);
         }),
@@ -60,6 +65,7 @@ vi.mock("maplibre-gl", () => ({
         getSource: vi.fn((id: string) => (sourceIds.has(id) ? { id } : undefined)),
         getStyle: vi.fn(() => ({ layers: [] })),
         getZoom: vi.fn(() => 4),
+        hasImage: vi.fn((id: string) => imageIds.has(id)),
         jumpTo: vi.fn(),
         off: vi.fn(),
         on: vi.fn(),
@@ -235,6 +241,33 @@ describe("FlightGlobe reduced motion", () => {
       expect(terrainAddCallsAfterToggle).toBe(2);
     });
     expect(screen.getByText("Terrain data credits")).toBeInTheDocument();
+  });
+
+  it("registers all four route-direction icons once, instead of relying on text glyphs", async () => {
+    installMatchMedia(false);
+
+    render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+
+    const registeredIds = map.addImage.mock.calls.map(
+      (call: unknown[]) => call[0],
+    );
+    expect(new Set(registeredIds)).toEqual(
+      new Set([
+        DIRECTION_ICON_IDS.oneWayPrivate,
+        DIRECTION_ICON_IDS.oneWayCommercial,
+        DIRECTION_ICON_IDS.bothPrivate,
+        DIRECTION_ICON_IDS.bothCommercial,
+      ]),
+    );
+    expect(map.addImage).toHaveBeenCalledTimes(4);
+    // Each registered id must report itself present to `hasImage`, matching
+    // the `if (!map.hasImage(id)) map.addImage(id, image)` guard that keeps
+    // re-registration on later style reloads from throwing.
+    const hasImage = map.hasImage as unknown as (id: string) => boolean;
+    for (const id of registeredIds) {
+      expect(hasImage(id as string)).toBe(true);
+    }
   });
 
   it("uses immediate camera updates while preserving every final state", async () => {

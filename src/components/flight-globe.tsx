@@ -40,6 +40,7 @@ import {
   withGlobeProjection,
 } from "@/lib/map-style";
 import { bindCompletedMapZoom } from "@/lib/map-zoom-sync";
+import { buildDirectionIconSet } from "@/lib/map-icons";
 import type { MapViewMode } from "@/lib/map-view-mode";
 
 setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
@@ -209,6 +210,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           setTerrainActive(
             viewModeRef.current === "globe" ? addShadedRelief(map) : false,
           );
+          ensureDirectionIcons(map);
           addFlightLayers(map, latest.airports, latest.routes);
           applyRoutePresentation(
             map,
@@ -694,6 +696,16 @@ function removeShadedRelief(map: MapLibreMap): void {
     }
   } catch {
     // Flat mode remains usable even if the optional elevation source can't be torn down cleanly.
+  }
+}
+
+function ensureDirectionIcons(map: MapLibreMap): void {
+  for (const { id, image } of buildDirectionIconSet()) {
+    try {
+      if (!map.hasImage(id)) map.addImage(id, image);
+    } catch {
+      // Route direction cues remain optional; the plain line still renders.
+    }
   }
 }
 

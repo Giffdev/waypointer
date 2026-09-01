@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import type { StyleSpecification } from "maplibre-gl";
 import {
+  createDirectionIconImage,
+  DIRECTION_ICON_COLORS,
+  DIRECTION_ICON_IDS,
+  type DirectionIconImage,
+} from "./map-icons";
+import {
   AIRPORT_LAYER_IDS,
   buildAirportLabelLayer,
   buildAirportMarkerLayer,
@@ -13,6 +19,42 @@ import {
   withGlobeProjection,
   withMapProjection,
 } from "./map-style";
+
+/**
+ * Evaluates the nested `["match", ["get", key], ...]` expressions used for
+ * `icon-image` against a plain feature-properties object, without needing a
+ * real MapLibre map instance.
+ */
+function evaluateMatchExpression(
+  expression: unknown,
+  properties: Record<string, string>,
+): unknown {
+  if (!Array.isArray(expression)) return expression;
+  const [operator, getExpression, ...rest] = expression;
+  if (operator !== "match") return expression;
+  const [, key] = getExpression as ["get", string];
+  const value = properties[key];
+  for (let index = 0; index < rest.length - 1; index += 2) {
+    if (rest[index] === value) {
+      return evaluateMatchExpression(rest[index + 1], properties);
+    }
+  }
+  return evaluateMatchExpression(rest[rest.length - 1], properties);
+}
+
+function isPointSymmetric(image: DirectionIconImage): boolean {
+  for (let y = 0; y < image.height; y++) {
+    for (let x = 0; x < image.width; x++) {
+      const alpha = image.data[(y * image.width + x) * 4 + 3];
+      const mirroredX = image.width - 1 - x;
+      const mirroredY = image.height - 1 - y;
+      const mirroredAlpha =
+        image.data[(mirroredY * image.width + mirroredX) * 4 + 3];
+      if (Math.abs(alpha - mirroredAlpha) > 2) return false;
+    }
+  }
+  return true;
+}
 
 describe("cartographic map style", () => {
   it("starts in globe projection without discarding provider layers", () => {
@@ -105,19 +147,60 @@ describe("cartographic map style", () => {
       ROUTE_LAYER_IDS.selectedDirection,
     ]);
     expect(layers[0].layout?.["symbol-placement"]).toBe("line-center");
-    expect(layers[0].layout?.["text-rotation-alignment"]).toBe("map");
+    expect(layers[0].layout?.["icon-rotation-alignment"]).toBe("map");
+    expect(layers[0].layout?.["icon-keep-upright"]).toBe(false);
     expect(layers[0].filter).toEqual([
       "!=",
       ["get", "directionMode"],
       "none",
     ]);
-    expect(layers[0].layout?.["text-field"]).toEqual([
-      "get",
-      "directionCue",
-    ]);
     expect(JSON.stringify(layers[1].filter)).toContain("directionMode");
-    expect(layers[1].layout?.["text-allow-overlap"]).toBe(true);
-    expect(layers[1].layout?.["text-ignore-placement"]).toBe(true);
+    expect(layers[1].layout?.["icon-allow-overlap"]).toBe(true);
+    expect(layers[1].layout?.["icon-ignore-placement"]).toBe(true);
+  });
+
+  it("selects a distinct on-map direction icon per direction mode and route kind, never falling back to text glyphs", () => {
+    const [layer] = buildRouteDirectionLayers("routes");
+    const iconImage = layer.layout?.["icon-image"];
+
+    // The on-map cue must not rely on rendering a Unicode arrow character
+    // through the vector-tile glyph/font pipeline: no text-field/text-font
+    // should be present on the direction layers at all.
+    expect(layer.layout?.["text-field"]).toBeUndefined();
+    expect(layer.layout?.["text-font"]).toBeUndefined();
+
+    for (const [directionMode, kind, expectedId] of [
+      ["one-way", "private", DIRECTION_ICON_IDS.oneWayPrivate],
+      ["one-way", "commercial", DIRECTION_ICON_IDS.oneWayCommercial],
+      ["both", "private", DIRECTION_ICON_IDS.bothPrivate],
+      ["both", "commercial", DIRECTION_ICON_IDS.bothCommercial],
+    ] as const) {
+      expect(
+        evaluateMatchExpression(iconImage, { directionMode, kind }),
+      ).toBe(expectedId);
+    }
+    // A route with no meaningful direction (same-airport loop) must resolve
+    // to no icon, matching the layer's own `directionMode !== "none"` filter.
+    expect(
+      evaluateMatchExpression(iconImage, {
+        directionMode: "none",
+        kind: "commercial",
+      }),
+    ).toBe("");
+  });
+
+  it("generates a one-way icon that is not point-symmetric and a bidirectional icon that is", () => {
+    const oneWay = createDirectionIconImage(
+      "one-way",
+      DIRECTION_ICON_COLORS.commercial,
+    );
+    const both = createDirectionIconImage(
+      "both",
+      DIRECTION_ICON_COLORS.commercial,
+    );
+
+    expect(isPointSymmetric(oneWay)).toBe(false);
+    expect(isPointSymmetric(both)).toBe(true);
   });
 
   it("rebuilds direction layers deterministically for style reloads", () => {
