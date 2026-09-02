@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AirportRepository } from "@/lib/db/repositories/airport-repository";
 import type { FlightRepository } from "@/lib/db/repositories/flight-repository";
 import type { ImportRepository } from "@/lib/db/repositories/import-repository";
-import { parseCsv } from "./csv";
+import { parseCsv, detectCsvDelimiter } from "./csv";
 import { applyDuplicateCandidates } from "./dedupe";
 import { createFileFingerprint, createRowFingerprint } from "./fingerprint";
 import {
@@ -24,15 +24,17 @@ import type {
   UploadImportResponse,
 } from "./types";
 import { sourceRoleDefault } from "../flight-role";
+import { CSV_MIME_TYPES } from "./csv-mime";
 
 export const DEFAULT_MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
-const ACCEPTED_MIME_TYPES = new Set([
-  "text/csv",
-  "text/plain",
-  "application/octet-stream",
-  "",
-]);
+// Shared with the client preview gate, synchronous upload service, and
+// durable upload service; see src/lib/import/csv-mime.ts for why this must
+// stay in sync across all call sites. "" is included locally because a
+// blank declared content type is accepted as-is here (the durable worker
+// normalizes it upstream, but this worker is also exercised directly by
+// unit tests with blank/omitted MIME types).
+const ACCEPTED_MIME_TYPES = new Set<string>(["", ...CSV_MIME_TYPES]);
 
 export type FlightImportUpload = {
   fileName: string;
@@ -351,7 +353,10 @@ async function mapGenericRows(
   airports: AirportRepository,
 ): Promise<StoredImportRow[]> {
   const rawByRowNumber = new Map(
-    parseCsv(content).map((record) => [record.rowNumber, record.cells]),
+    parseCsv(content, detectCsvDelimiter(content)).map((record) => [
+      record.rowNumber,
+      record.cells,
+    ]),
   );
   return Promise.all(
     parsed.flights.map(async (flight) => {

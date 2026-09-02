@@ -16,6 +16,8 @@ import {
 } from "./generic-csv";
 import { commitImportBatch, decideImportRows } from "./service";
 import { stageMappedFlightImport } from "./worker";
+import { decodeCsvBytes } from "./csv-decode";
+import { encodeWindows1252 } from "./__fixtures__/encode-windows-1252";
 
 const myFlightbook = fixture("myflightbook.csv");
 const pilotLog = fixture("crewlounge-pilotlog.csv");
@@ -310,6 +312,137 @@ describe("generic digital logbook CSV", () => {
   });
 });
 
+describe("realistic MyFlightbook exports (BOM/CRLF/quote-all, Windows-1252, semicolon locales)", () => {
+  const realisticBytes = fixtureBytes("myflightbook-realistic.csv");
+  const semicolonBytes = fixtureBytes("myflightbook-semicolon.csv");
+
+  it("decodes and parses a real-shaped UTF-8 BOM + CRLF + quote-all export with a Route column", () => {
+    const decoded = decodeCsvBytes(realisticBytes);
+    expect(decoded.encoding).toBe("utf-8");
+    expect(decoded.content.startsWith("\uFEFF")).toBe(false);
+    expect(decoded.content.includes("\r\n")).toBe(true);
+
+    const inspected = inspectGenericCsv(decoded.content);
+    expect(inspected.preset?.id).toBe("myflightbook-export");
+    expect(inspected.totalRows).toBe(1);
+
+    const detected = detectGenericCsvPreset(inspected.headers);
+    expect(detected.confidence).toBe(1);
+    expect(detected.preset?.id).toBe("myflightbook-export");
+
+    const parsed = parseMappedGenericCsv(
+      decoded.content,
+      detected.suggestedMapping,
+    );
+    expect(parsed.flights[0]).toMatchObject({
+      date: "2026-06-01",
+      originIdentifier: "KSEA",
+      destinationIdentifier: "KPDX",
+      durationHours: 1.5,
+      registration: "N100ZZ",
+      aircraftModel: "C172",
+      issues: [],
+    });
+  });
+
+  it("decodes and parses the same export re-saved as Windows-1252 by a spreadsheet", () => {
+    // Reuses the exact text content of the UTF-8 BOM fixture (minus the
+    // BOM, which Windows-1252 has no equivalent of) to prove the two
+    // encodings produce identical parsed results end to end.
+    const utf8Content = decodeCsvBytes(realisticBytes).content;
+    const windows1252Bytes = encodeWindows1252(utf8Content);
+    // Sanity check: this is genuinely not valid UTF-8, so the test exercises
+    // the fallback path rather than accidentally succeeding via UTF-8.
+    expect(() =>
+      new TextDecoder("utf-8", { fatal: true }).decode(windows1252Bytes),
+    ).toThrow();
+
+    const decoded = decodeCsvBytes(windows1252Bytes);
+    expect(decoded.encoding).toBe("windows-1252");
+    expect(decoded.content).toBe(utf8Content);
+
+    const inspected = inspectGenericCsv(decoded.content);
+    expect(inspected.preset?.id).toBe("myflightbook-export");
+    const parsed = parseMappedGenericCsv(
+      decoded.content,
+      detectGenericCsvPreset(inspected.headers).suggestedMapping,
+    );
+    expect(parsed.flights[0]).toMatchObject({
+      date: "2026-06-01",
+      originIdentifier: "KSEA",
+      destinationIdentifier: "KPDX",
+      durationHours: 1.5,
+      registration: "N100ZZ",
+    });
+  });
+
+  it("auto-detects a semicolon-delimited MyFlightbook export and parses it correctly", () => {
+    const decoded = decodeCsvBytes(semicolonBytes);
+    expect(decoded.encoding).toBe("utf-8");
+
+    const inspected = inspectGenericCsv(decoded.content);
+    expect(inspected.headers).toEqual([
+      "Date",
+      "Tail Number",
+      "Model",
+      "Total Flight Time",
+      "Route",
+      "PIC",
+      "Comments",
+    ]);
+    expect(inspected.preset?.id).toBe("myflightbook-export");
+
+    const parsed = parseMappedGenericCsv(
+      decoded.content,
+      detectGenericCsvPreset(inspected.headers).suggestedMapping,
+    );
+    expect(parsed.flights[0]).toMatchObject({
+      date: "2026-06-02",
+      originIdentifier: "EDDF",
+      destinationIdentifier: "EDDM",
+      durationHours: 2.25,
+      registration: "D-EABC",
+      aircraftModel: "C172",
+      issues: [],
+    });
+  });
+
+  it("stages a semicolon-delimited export through the worker with a correctly split raw snapshot", async () => {
+    const airport = (code: string) => ({
+      code,
+      name: `Synthetic ${code}`,
+      city: code,
+      country: "DE",
+      lat: 0,
+      lon: 0,
+      facility: "commercial" as const,
+    });
+    const store = new InMemoryImportRepository([
+      { id: "eddf", airport: airport("EDDF"), aliases: ["EDDF"] },
+      { id: "eddm", airport: airport("EDDM"), aliases: ["EDDM"] },
+    ]);
+    const content = decodeCsvBytes(semicolonBytes).content;
+    const inspected = inspectGenericCsv(content);
+    const mapping = detectGenericCsvPreset(inspected.headers).suggestedMapping;
+    const staged = await stageMappedFlightImport(
+      "owner-semicolon",
+      upload(content),
+      mapping,
+      { imports: store, flights: store, airports: store },
+    );
+    expect(staged).toMatchObject({ status: "review", reused: false });
+    const [row] = (await store.getRowsForCommit("owner-semicolon", staged.batchId)) ?? [];
+    // 7 distinct cells proves the row was split on ";" rather than being
+    // parsed as a single unsplit field (or split incorrectly on ",").
+    expect(row.rawSnapshot).toHaveLength(7);
+    expect(row.rawSnapshot).toContain("D-EABC");
+    expect(row.proposedFlight).toMatchObject({
+      registration: "D-EABC",
+      durationHours: 2.25,
+    });
+  });
+});
+
 function genericMapping(): GenericCsvMapping {
   return {
     version: 1,
@@ -332,6 +465,12 @@ function fixture(name: string): string {
   return readFileSync(
     fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)),
     "utf8",
+  );
+}
+
+function fixtureBytes(name: string): Uint8Array {
+  return new Uint8Array(
+    readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url))),
   );
 }
 

@@ -56,6 +56,7 @@ import {
   airportResultLabel,
 } from "@/components/airport-search-picker";
 import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
+import { CsvDecodeError, decodeCsvBytes } from "@/lib/import/csv-decode";
 
 const PAGE_SIZE = 25;
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -2179,35 +2180,18 @@ async function readPreviewCsv(
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.includes(0)) {
-    throw new Error(
-      "The selected file contains binary data. Export a UTF-8 CSV and try again.",
-    );
-  }
-
-  let content: string;
   try {
-    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
+    return decodeCsvBytes(bytes).content;
+  } catch (error) {
+    if (error instanceof CsvDecodeError && error.reason === "binary-content") {
+      throw new Error(
+        "The selected file contains binary data. Export a UTF-8 CSV and try again.",
+      );
+    }
     throw new Error(
-      "The selected file is not valid UTF-8 text. Re-export it as a UTF-8 CSV.",
+      "The selected file is not valid UTF-8 or Windows-1252 text. Re-export it as a UTF-8 CSV.",
     );
   }
-
-  const inspected = content.slice(0, 8192);
-  const controlCharacters = [...inspected].filter((character) => {
-    const code = character.charCodeAt(0);
-    return code < 32 && ![9, 10, 13].includes(code);
-  }).length;
-  if (
-    controlCharacters >
-    Math.max(2, Math.floor(inspected.length * 0.005))
-  ) {
-    throw new Error(
-      "The selected file appears to contain binary data. Export a UTF-8 CSV and try again.",
-    );
-  }
-  return content.replace(/^\uFEFF/, "");
 }
 
 function previewParseError(
