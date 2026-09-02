@@ -17,6 +17,7 @@ import {
   shouldPauseImportPolling,
   shouldWarnImportPolling,
 } from "./route-client";
+import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
 
 const replace = vi.fn();
 const refresh = vi.fn();
@@ -81,6 +82,39 @@ describe("development import preview", () => {
     expect(
       notice.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("advertises the .csv extension plus every shared CSV MIME type on the file input, with no wildcard", () => {
+    // Android Chrome's native file picker (Storage Access Framework)
+    // filters documents by MIME type, and document providers label CSVs as
+    // text/csv, text/plain, application/vnd.ms-excel, or
+    // application/octet-stream depending on provider/device. An accept
+    // value of only ".csv" causes SAF to grey out valid CSVs. This asserts
+    // the rendered input's accept contract stays in lockstep with
+    // CSV_MIME_TYPES (src/lib/import/csv-mime.ts) without ever widening to
+    // "*/*", which would defeat picker filtering entirely.
+    //
+    // Note: jsdom/RTL cannot model native Android SAF chooser filtering, so
+    // this only verifies the rendered accept attribute contract, not real
+    // device behavior.
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+        maxFileBytes={1024 * 1024}
+      />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    const accept = input.getAttribute("accept") ?? "";
+    const acceptTokens = accept.split(",").map((token) => token.trim());
+
+    expect(acceptTokens).toContain(".csv");
+    for (const mimeType of CSV_MIME_TYPES) {
+      expect(acceptTokens).toContain(mimeType);
+    }
+    expect(accept).not.toContain("*/*");
   });
 
   it("plainly distinguishes the empty map from the file being reviewed", () => {

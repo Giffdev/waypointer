@@ -167,4 +167,22 @@ describe("mobile flight actions", () => {
       /\.mobile-nav a\s*\{[^}]*min-height:\s*48px/,
     );
   });
+
+  it("keeps all four primary mobile nav destinations on a single row", () => {
+    const css = fs.readFileSync(path.join(process.cwd(), "src", "app", "globals.css"), "utf8");
+    const tabletRules = css.slice(
+      css.indexOf("@media (max-width: 800px)"),
+      css.indexOf("@media (max-width: 580px)"),
+    );
+
+    // Map, Flights, Import, Settings: the grid must have one column per
+    // destination so the row never wraps onto a second line on phones.
+    expect(tabletRules).toMatch(
+      /\.mobile-nav\s*\{[^}]*grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/,
+    );
+    expect(tabletRules).not.toMatch(
+      /\.mobile-nav\s*\{[^}]*grid-template-columns:\s*repeat\(3,/,
+    );
+    expect(tabletRules).toMatch(/\.mobile-nav a\s*\{[^}]*min-width:\s*0/);
+  });
 });
