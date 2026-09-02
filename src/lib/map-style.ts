@@ -64,6 +64,18 @@ export function buildTerrainReliefLayer(source: string): HillshadeLayerSpecifica
   };
 }
 
+/**
+ * Single source of truth for the rendered airport marker colors, shared with
+ * `MapLegend` so the legend swatch can never silently drift from the actual
+ * on-map circle-color paint expression below (see AIRPORT_MARKER_COLORS.active).
+ */
+export const AIRPORT_MARKER_COLORS = {
+  active: "#087b8f",
+  activeHalo: "rgba(8, 123, 143, 0.28)",
+  context: "rgba(255,255,255,0.08)",
+  contextStroke: "#174b58",
+} as const;
+
 export function buildAirportMarkerLayer(source: string): CircleLayerSpecification {
   return {
     id: AIRPORT_LAYER_IDS.markers,
@@ -83,14 +95,14 @@ export function buildAirportMarkerLayer(source: string): CircleLayerSpecificatio
       "circle-color": [
         "case",
         ["get", "isActive"],
-        "#087b8f",
-        "rgba(255,255,255,0.08)",
+        AIRPORT_MARKER_COLORS.active,
+        AIRPORT_MARKER_COLORS.context,
       ],
       "circle-stroke-color": [
         "case",
         ["get", "isActive"],
         "#f7ffff",
-        "#174b58",
+        AIRPORT_MARKER_COLORS.contextStroke,
       ],
       "circle-stroke-width": [
         "case",

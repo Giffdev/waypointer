@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { airports } from "@/lib/flight-data";
+import { AIRPORT_MARKER_COLORS } from "@/lib/map-style";
 import { MapLegend } from "./map-legend";
 
 afterEach(cleanup);
@@ -115,5 +116,25 @@ describe("MapLegend", () => {
 
     expect(screen.getByText("Flown airport")).toBeTruthy();
     expect(screen.getByText("Context airport")).toBeTruthy();
+  });
+
+  it("renders the flown-airport swatch in the same teal used for the actual map marker", () => {
+    // Regression guard for the legend-vs-map color mismatch: the swatch must
+    // reuse AIRPORT_MARKER_COLORS.active (see src/lib/map-style.ts), the same
+    // constant that drives the real MapLibre circle-color paint expression,
+    // rather than a separately guessed/hardcoded color.
+    render(
+      <MapLegend
+        airports={[airports.SEA, airports.HNL]}
+        routes={[commercialRoute]}
+        selectedRouteId=""
+      />,
+    );
+
+    const flownLabel = screen.getByText("Flown airport");
+    const swatch = flownLabel.parentElement?.querySelector(".legend-airport.active");
+    expect(swatch).not.toBeNull();
+    expect(swatch).toHaveStyle({ background: AIRPORT_MARKER_COLORS.active });
+    expect(swatch).not.toHaveStyle({ background: "#f0c56b" });
   });
 });

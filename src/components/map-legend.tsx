@@ -3,6 +3,7 @@ import {
   type Airport,
   type MapRoute,
 } from "@/lib/flight-data";
+import { AIRPORT_MARKER_COLORS } from "@/lib/map-style";
 import { routeDirection } from "@/lib/route-direction";
 
 type MapLegendProps = {
@@ -77,7 +78,14 @@ export function MapLegend({
     ),
     hasActiveAirports && (
       <span key="active-airport">
-        <i className="legend-airport active" aria-hidden="true" />
+        <i
+          className="legend-airport active"
+          aria-hidden="true"
+          style={{
+            background: AIRPORT_MARKER_COLORS.active,
+            borderColor: AIRPORT_MARKER_COLORS.activeHalo,
+          }}
+        />
         Flown airport
       </span>
     ),

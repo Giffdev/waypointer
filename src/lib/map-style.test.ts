@@ -12,6 +12,7 @@ import {
 } from "./map-icons";
 import {
   AIRPORT_LAYER_IDS,
+  AIRPORT_MARKER_COLORS,
   buildAirportLabelLayer,
   buildAirportMarkerLayer,
   buildFlightRouteLayers,
@@ -372,5 +373,16 @@ describe("cartographic map style", () => {
     expect(JSON.stringify(layers[0].paint)).toContain("isActive");
     expect(layers[0].paint?.["circle-color"]).not.toBe("#147f91");
     expect(layers[2].minzoom).toBe(4.5);
+  });
+
+  it("paints flown airports with the exported AIRPORT_MARKER_COLORS.active color", () => {
+    // Guards against the marker paint layer and MapLegend's swatch (see
+    // map-legend.test.tsx) silently drifting apart: both must import and
+    // render the same shared constant rather than independent hex literals.
+    const layer = buildAirportMarkerLayer("airports");
+    const circleColor = layer.paint?.["circle-color"];
+    expect(Array.isArray(circleColor)).toBe(true);
+    expect(circleColor).toContain(AIRPORT_MARKER_COLORS.active);
+    expect(circleColor).not.toContain("#f0c56b");
   });
 });
