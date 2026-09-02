@@ -13,7 +13,17 @@ import {
 } from "@/lib/import/generic-mapping";
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
 
-const ALLOWED_TYPES = new Set(["text/csv", "text/plain"]);
+// iOS Safari's Files picker reports "application/vnd.ms-excel" for .csv
+// files (Apple maps the .csv extension to the Excel/Numbers UTI instead of
+// text/csv) and sometimes omits a content type entirely. The filename
+// extension is already validated by cleanCsvName, so this allowlist only
+// needs to reject clearly unrelated content types, not every browser/OS
+// MIME-sniffing quirk.
+const ALLOWED_TYPES = new Set([
+  "text/csv",
+  "text/plain",
+  "application/vnd.ms-excel",
+]);
 
 export type InitiateImportUpload = {
   batchId: string;
@@ -43,7 +53,10 @@ export async function initiateDurableImport(
 ): Promise<InitiateImportUpload> {
   assertDurableImportsEnabled();
   const fileName = cleanCsvName(input.fileName);
-  const contentType = input.contentType.trim().toLowerCase();
+  // Mirror the client's own fallback (selectedFile.type || "text/csv") so a
+  // blank content type reported by a browser's file picker is treated as a
+  // CSV rather than rejected.
+  const contentType = (input.contentType.trim() || "text/csv").toLowerCase();
   const maxBytes = configuredMaxBytes();
   if (!ALLOWED_TYPES.has(contentType)) {
     throw new ImportServiceError(

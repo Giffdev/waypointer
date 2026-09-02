@@ -418,6 +418,41 @@ describe("durable direct-upload initiation", () => {
     },
   );
 
+  it.each([
+    // iOS Safari's Files picker commonly reports this MIME type for .csv
+    // files instead of "text/csv"; regression coverage for the mobile
+    // upload bug where such files were rejected as unsupported.
+    ["application/vnd.ms-excel", "application/vnd.ms-excel"],
+    ["APPLICATION/VND.MS-EXCEL", "application/vnd.ms-excel"],
+    // Some mobile browsers omit a content type entirely; this should be
+    // treated the same as a plain CSV rather than rejected.
+    ["", "text/csv"],
+    ["   ", "text/csv"],
+  ])(
+    "accepts real-world mobile content-type declaration %s as %s",
+    async (declaredContentType, normalizedContentType) => {
+      const response = await initiateDurableImport(userId, {
+        fileName: "synthetic.csv",
+        contentType: declaredContentType,
+        sizeBytes: 1024,
+      });
+
+      const persisted = mocks.values.mock.calls[0][0];
+      expect(persisted).toEqual(
+        expect.objectContaining({
+          declaredContentType: normalizedContentType,
+        }),
+      );
+      expect(mocks.presignPut).toHaveBeenCalledWith(
+        persisted.originalObjectKey,
+        1024,
+        normalizedContentType,
+        expect.any(Number),
+      );
+      expect(response.batchId).toBe(persisted.id);
+    },
+  );
+
   it("rejects unsafe names and idempotency keys before object authorization", async () => {
     await expect(
       initiateDurableImport(userId, {

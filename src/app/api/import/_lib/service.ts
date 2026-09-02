@@ -43,9 +43,15 @@ import { getPrivateObjectStorage } from "@/lib/storage";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// iOS Safari's Files picker reports "application/vnd.ms-excel" for .csv
+// files (Apple maps the .csv extension to the Excel/Numbers UTI instead of
+// text/csv). The filename extension is already validated elsewhere in the
+// upload flow, so this allowlist only needs to reject clearly unrelated
+// content types, not every browser/OS MIME-sniffing quirk.
 const ALLOWED_MIME_TYPES = new Set([
   "text/csv",
   "text/plain",
+  "application/vnd.ms-excel",
   "application/octet-stream",
   "",
 ]);
@@ -119,7 +125,10 @@ function retentionDays(): number {
   return configured;
 }
 
-function decodeUpload(file: File, bytes: Uint8Array): string {
+// Exported for direct unit testing of the mobile-safe content-type
+// allowlist without needing to mock the database/storage dependencies of
+// createUpload.
+export function decodeUpload(file: File, bytes: Uint8Array): string {
   if (file.size === 0) {
     throw new ImportServiceError(400, "empty-file", "The upload is empty.");
   }
