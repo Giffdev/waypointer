@@ -1,129 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { canonicalPublicUrl } from "@/lib/public-origin";
+import { useOwnerSharingStatus } from "@/lib/sharing/owner-sharing-client";
 
-type OwnerShareStatusResponse = {
-  enabled: boolean;
-  sharePath: string | null;
-  publishedFlightCount: number;
-  publicHandle: string;
-};
-
-type ShareStatusState =
-  | { phase: "loading" }
-  | { phase: "loaded"; value: OwnerShareStatusResponse }
-  | { phase: "failed" };
-
-async function fetchShareStatus(
-  signal?: AbortSignal,
-): Promise<OwnerShareStatusResponse> {
-  const response = await fetch("/api/account/sharing", {
-    cache: "no-store",
-    signal,
-  });
-  const body = await response.json();
-  if (!response.ok) throw new Error(apiErrorMessage(body));
-  return body.sharing as OwnerShareStatusResponse;
-}
+export { resolveShareUrl } from "@/lib/sharing/owner-sharing-client";
 
 export function MapSharingPanel() {
-  const [statusState, setStatusState] = useState<ShareStatusState>({
-    phase: "loading",
-  });
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const status =
-    statusState.phase === "loaded" ? statusState.value : null;
-  const shareUrl = status?.sharePath
-    ? resolveShareUrl(status.sharePath)
-    : null;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetchShareStatus(controller.signal)
-      .then((nextStatus) => {
-        setStatusState({ phase: "loaded", value: nextStatus });
-      })
-      .catch((requestError) => {
-        if (
-          requestError instanceof DOMException &&
-          requestError.name === "AbortError"
-        ) {
-          return;
-        }
-        setStatusState({ phase: "failed" });
-        setError("Sharing status could not be loaded.");
-      });
-    return () => controller.abort();
-  }, []);
-
-  async function retryStatus() {
-    setStatusState({ phase: "loading" });
-    setError("");
-    try {
-      const nextStatus = await fetchShareStatus();
-      setStatusState({ phase: "loaded", value: nextStatus });
-    } catch {
-      setStatusState({ phase: "failed" });
-      setError("Sharing status could not be loaded.");
-    }
-  }
-
-  async function toggleSharing() {
-    if (!status) return;
-    await updateSharing(
-      status.enabled ? "DELETE" : "POST",
-      status.enabled
-        ? "Sharing disabled."
-        : "Public map enabled. Copy the link to share it.",
-    );
-  }
-
-  async function republishSharing() {
-    await updateSharing(
-      "POST",
-      "Public map republished with the latest flights and airports.",
-    );
-  }
-
-  async function updateSharing(
-    method: "POST" | "DELETE",
-    successMessage: string,
-  ) {
-    setBusy(true);
-    setError("");
-    setMessage("");
-    try {
-      const response = await fetch("/api/account/sharing", {
-        method,
-      });
-      const body = await response.json();
-      if (!response.ok) throw new Error(apiErrorMessage(body));
-      setStatusState({ phase: "loaded", value: body.sharing });
-      setMessage(successMessage);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Sharing could not be updated.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copyLink() {
-    if (!shareUrl) return;
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setMessage("Public map link copied.");
-      setError("");
-    } catch {
-      setError("The link could not be copied. Select and copy it manually.");
-    }
-  }
+  const {
+    statusState,
+    status,
+    shareUrl,
+    busy,
+    message,
+    error,
+    retryStatus,
+    toggleSharing,
+    republishSharing,
+    copyLink,
+  } = useOwnerSharingStatus();
 
   return (
     <section
@@ -132,7 +25,9 @@ export function MapSharingPanel() {
     >
       <div className="sharing-heading">
         <div>
-          <h2 id="sharing-title">Public map</h2>
+          <h2 id="sharing-title" tabIndex={-1}>
+            Public map
+          </h2>
           <p
             className={`sharing-state ${
               status?.enabled
@@ -142,7 +37,7 @@ export function MapSharingPanel() {
                   : ""
             }`}
           >
-            {statusState.phase === "loading"
+            {statusState.phase === "loading" || statusState.phase === "idle"
               ? "Checking sharing status..."
               : statusState.phase === "failed"
                 ? "Sharing status unavailable"
@@ -227,7 +122,7 @@ export function MapSharingPanel() {
       )}
 
       {statusState.phase === "failed" && (
-        <button type="button" disabled={busy} onClick={() => void retryStatus()}>
+        <button type="button" disabled={busy} onClick={() => retryStatus()}>
           Retry sharing status
         </button>
       )}
@@ -241,24 +136,4 @@ export function MapSharingPanel() {
       </p>
     </section>
   );
-}
-
-function apiErrorMessage(body: unknown): string {
-  if (
-    typeof body === "object" &&
-    body !== null &&
-    "error" in body &&
-    typeof body.error === "object" &&
-    body.error !== null &&
-    "message" in body.error &&
-    typeof body.error.message === "string" &&
-    body.error.message
-  ) {
-    return body.error.message;
-  }
-  return "Sharing could not be updated.";
-}
-
-export function resolveShareUrl(sharePath: string): string {
-  return canonicalPublicUrl(sharePath);
 }

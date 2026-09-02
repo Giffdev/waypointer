@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { SessionSignOutButton } from "@/components/auth/session-sign-out-button";
 import {
   normalizeUsername,
@@ -30,6 +30,14 @@ export default function SettingsClient({
   const [deletionStatus, setDeletionStatus] = useState("");
   const [developmentCancellationUrl, setDevelopmentCancellationUrl] =
     useState("");
+
+  useEffect(() => {
+    if (window.location.hash !== "#sharing-title") return;
+    const target = document.getElementById("sharing-title");
+    if (!target) return;
+    target.scrollIntoView({ block: "start" });
+    target.focus();
+  }, []);
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -210,6 +210,28 @@ describe("route clients", () => {
     expect(screen.getByLabelText("Cartographic flight map")).toHaveAttribute("data-view-mode", "flat");
   });
 
+  it("shows the map-page Share control only for a real, persisted owner", () => {
+    const base = buildMapPageContract(getInitialFilters(), null, null);
+    expect(base.dataMode).toBe("representative");
+
+    const { rerender } = render(
+      <MapRouteClient data={{ ...base, dataMode: "representative" }} />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Share map" }),
+    ).not.toBeInTheDocument();
+
+    rerender(<MapRouteClient data={{ ...base, dataMode: "local-preview" }} />);
+    expect(
+      screen.queryByRole("button", { name: "Share map" }),
+    ).not.toBeInTheDocument();
+
+    rerender(<MapRouteClient data={{ ...base, dataMode: "persisted" }} />);
+    expect(
+      screen.getByRole("button", { name: "Share map" }),
+    ).toBeInTheDocument();
+  });
+
   it("keeps Flights distinct, URL-filtered, searchable, and editable", async () => {
     const user = userEvent.setup();
     pathname = "/flights";

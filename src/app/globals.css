@@ -468,7 +468,7 @@ h1 span {
   letter-spacing: .12em;
   text-transform: uppercase;
 }
-.icon-controls { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.icon-controls { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; position: relative; }
 .icon-controls button {
   align-items: center;
   background: rgba(255, 255, 255, .035);
@@ -494,6 +494,34 @@ h1 span {
 .icon-controls button:hover, .icon-controls button[aria-pressed="true"] {
   background: rgba(95, 224, 208, .13);
   color: var(--teal);
+}
+.map-share-popup {
+  background: #071f2b;
+  border: 1px solid rgba(156, 211, 216, .32);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, .42);
+  display: grid;
+  gap: 10px;
+  max-width: 100%;
+  padding: 16px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 280px;
+  z-index: 40;
+}
+.map-share-popup:focus { outline: 0; }
+.map-share-popup h2 { font-size: 14px; margin: 0; }
+.map-share-popup p { color: #9db3b8; font-size: 12px; line-height: 1.5; margin: 0; }
+.map-share-popup p.sharing-state { color: #9bb2b7; font-size: 12px; font-weight: 800; }
+.map-share-popup label { display: grid; font-size: 11px; gap: 6px; }
+.map-share-popup input { font-family: var(--font-geist-mono); font-size: 11px; }
+.map-share-popup .sharing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.map-share-manage-link {
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 700;
+  justify-self: start;
 }
 .map-view-control { display: grid; gap: 7px; margin-top: 14px; }
 .map-view-toggle {
@@ -1052,6 +1080,8 @@ h1 span {
 .sharing-panel { gap: 14px; }
 .sharing-heading { align-items: center; display: flex; justify-content: space-between; }
 .sharing-heading h2 { margin: 0; }
+.sharing-heading h2:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+#sharing-title { scroll-margin-top: 84px; }
 .sharing-state { color: #9bb2b7; font-size: 12px; font-weight: 800; margin: 5px 0 0; }
 .sharing-state.enabled { color: #87e0bc; }
 .sharing-warning { background: rgba(246,199,101,.08); border: 1px solid rgba(246,199,101,.3); border-radius: 10px; display: grid; gap: 3px; padding: 12px; }
@@ -2459,6 +2489,8 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   .filter-select-grid { grid-template-columns: 1fr; }
   .icon-controls { display: grid; grid-template-columns: repeat(3, minmax(44px, 1fr)); }
   .icon-controls .home-control { grid-column: 1 / -1; }
+  .icon-controls .map-share-control { grid-column: 1 / -1; }
+  .icon-controls .map-share-control button { width: 100%; }
   .map-actions .primary-button, .map-actions .secondary-button {
     flex-basis: 100%;
     width: 100%;

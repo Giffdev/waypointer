@@ -163,6 +163,28 @@ test("enables the entire public map and returns an absolute username link", asyn
   expect(writes).toEqual(["POST", "DELETE"]);
 });
 
+test("focuses and scrolls the sharing section on #sharing-title deep-link arrival", async ({
+  page,
+}) => {
+  await page.route(/\/api\/account\/sharing$/, (route) =>
+    route.fulfill({
+      json: {
+        sharing: {
+          enabled: false,
+          publicHandle: "readable-pilot",
+          sharePath: null,
+          publishedFlightCount: 0,
+        },
+      },
+    }),
+  );
+
+  await page.goto("/settings#sharing-title");
+
+  const heading = page.getByRole("heading", { name: "Public map" });
+  await expect(heading).toBeFocused();
+});
+
 test("opens a public username route with no key or token", async ({ page }) => {
   const requests: Array<{ method: string; body: string | null }> = [];
   await page.route(/\/api\/shared\/readable-pilot(\?|$)/, async (route) => {
