@@ -12,18 +12,13 @@ import {
   parseGenericCsvMapping,
 } from "@/lib/import/generic-mapping";
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
+import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
 
-// iOS Safari's Files picker reports "application/vnd.ms-excel" for .csv
-// files (Apple maps the .csv extension to the Excel/Numbers UTI instead of
-// text/csv) and sometimes omits a content type entirely. The filename
-// extension is already validated by cleanCsvName, so this allowlist only
-// needs to reject clearly unrelated content types, not every browser/OS
-// MIME-sniffing quirk.
-const ALLOWED_TYPES = new Set([
-  "text/csv",
-  "text/plain",
-  "application/vnd.ms-excel",
-]);
+// Shared with the client preview gate and the synchronous upload service;
+// see src/lib/import/csv-mime.ts for why this must stay in sync across all
+// three call sites. Blank declarations are normalized to "text/csv" below
+// before this allowlist is consulted, so "" doesn't need to appear here.
+const ALLOWED_TYPES = new Set<string>(CSV_MIME_TYPES);
 
 export type InitiateImportUpload = {
   batchId: string;

@@ -55,6 +55,7 @@ import {
   AirportSearchPicker,
   airportResultLabel,
 } from "@/components/airport-search-picker";
+import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
 
 const PAGE_SIZE = 25;
 const DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -1466,19 +1467,13 @@ type LocalImportPreview = {
 };
 
 const PREVIEW_ROW_LIMIT = 10;
-// Kept in sync with the server-side allowlists in
-// src/app/api/import/_lib/service.ts and src/lib/import/durable-service.ts.
-// iOS Safari's Files picker reports "application/vnd.ms-excel" for .csv
-// files (Apple maps the .csv extension to the Excel/Numbers UTI instead of
-// text/csv); this preview gate ran before any upload, so it was the first
-// place a mobile Safari user hit the mismatch.
-const PREVIEW_MIME_TYPES = new Set([
-  "",
-  "application/octet-stream",
-  "application/vnd.ms-excel",
-  "text/csv",
-  "text/plain",
-]);
+// Shared with the server-side allowlists in src/app/api/import/_lib/service.ts
+// and src/lib/import/durable-service.ts via src/lib/import/csv-mime.ts, which
+// documents why this must stay in sync across all three call sites. "" is
+// added locally because a blank file.type is accepted as-is here rather than
+// normalized to a fallback value; this preview gate runs before any upload,
+// so it was the first place a mobile Safari user hit the mismatch.
+const PREVIEW_MIME_TYPES = new Set<string>(["", ...CSV_MIME_TYPES]);
 
 const REQUIRED_GENERIC_COLUMNS: readonly {
   key: GenericCsvColumnKey;

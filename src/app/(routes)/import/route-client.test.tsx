@@ -205,6 +205,12 @@ describe("development import preview", () => {
     // upload bug where such files were rejected before any upload.
     ["application/vnd.ms-excel"],
     ["APPLICATION/VND.MS-EXCEL"],
+    // Some mobile pickers report this generic binary type instead of
+    // text/csv; regression coverage for the mobile CSV upload bug where
+    // the durable initiate path rejected such files even though this
+    // client-side preview gate accepted them. See
+    // src/lib/import/csv-mime.ts.
+    ["application/octet-stream"],
     // Some mobile browsers omit a content type entirely.
     [""],
   ])(
@@ -1190,6 +1196,107 @@ describe("development import preview", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/import/upload",
       expect.anything(),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Cancel import" }),
+    ).toBeInTheDocument();
+  });
+
+  it("forwards a mobile-reported application/octet-stream content type through durable initiate", async () => {
+    // Regression test: the durable initiate path (src/lib/import/
+    // durable-service.ts) previously rejected "application/octet-stream"
+    // even though the client preview gate and the synchronous upload
+    // service both accepted it, because the durable service's MIME
+    // allowlist had drifted out of sync. This client forwards
+    // selectedFile.type verbatim to /api/import/upload/initiate, so a
+    // valid mobile CSV declared this way must complete the full
+    // upload/finalize flow without error. See src/lib/import/csv-mime.ts.
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload/initiate") {
+        return jsonResponse({
+          batchId: "batch-octet-stream",
+          uploadUrl: "https://objects.example.test/octet-stream-signed-put",
+          headers: { "content-type": "application/octet-stream" },
+        });
+      }
+      if (url === "https://objects.example.test/octet-stream-signed-put") {
+        return new Response(null, { status: 200 });
+      }
+      if (url === "/api/import/upload/finalize") {
+        return jsonResponse({
+          batchId: "batch-octet-stream",
+          status: "queued",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-octet-stream")) {
+        return jsonResponse({
+          batch: {
+            contractVersion: 1,
+            id: "batch-octet-stream",
+            fileName: "flightdiary.csv",
+            status: "queued",
+            counts: {
+              totalRows: 0,
+              parsedRows: 0,
+              readyRows: 0,
+              acceptedRows: 0,
+              skippedRows: 0,
+              pendingRows: 0,
+              committedFlights: 0,
+              attachedSources: 0,
+            },
+            createdAt: "2026-08-11T00:00:00.000Z",
+            updatedAt: "2026-08-11T00:00:00.000Z",
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+        durableImportEnabled
+      />,
+    );
+    const file = new File([fr24Csv], "flightdiary.csv", {
+      type: "application/octet-stream",
+    });
+    await user.upload(screen.getByLabelText("Choose one supported CSV"), file);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/import/upload/initiate",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining(
+            '"contentType":"application/octet-stream"',
+          ),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://objects.example.test/octet-stream-signed-put",
+        expect.objectContaining({
+          method: "PUT",
+          headers: { "content-type": "application/octet-stream" },
+          body: file,
+        }),
+      ),
     );
     expect(
       await screen.findByRole("button", { name: "Cancel import" }),
