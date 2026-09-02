@@ -231,6 +231,98 @@ describe("development import preview", () => {
     );
   });
 
+  it("parses a Windows-1252-encoded CSV re-saved by a spreadsheet from a UTF-8 BOM export", async () => {
+    // 0xE9 is "é" in Windows-1252 but is not valid standalone UTF-8, so this
+    // exercises readPreviewCsv's fallback path, not just plain ASCII input.
+    const windows1252Bytes = new Uint8Array([
+      ...new TextEncoder().encode(`${fr24Csv.split("\n")[0]}\n2026-04-05,DL123,Seattle (SEA/KSEA),New York (JFK/KJFK),8:05,10:35,02:30,Delta,Airbus A321,N123AB,12A,Window,Economy,Leisure,Caf`),
+      0xe9,
+      ...new TextEncoder().encode(",101,202,DL,4512"),
+    ]);
+    const user = userEvent.setup();
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled={false}
+        developmentPreviewEnabled
+      />,
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+
+    await user.upload(
+      input,
+      new File([windows1252Bytes], "windows-1252.csv", { type: "text/csv" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "windows-1252.csv" }),
+    ).toBeInTheDocument();
+  });
+
+  it("rejects a corrupted upload that decodes as neither UTF-8 nor Windows-1252", async () => {
+    const user = userEvent.setup();
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled={false}
+        developmentPreviewEnabled
+      />,
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+
+    // Five bytes the WHATWG Windows-1252 index leaves unassigned; combined
+    // with the C1-range safeguard in decodeCsvBytes, these are rejected
+    // rather than silently accepted as corrupted text. Node's ICU-backed
+    // TextDecoder (used here under jsdom too, since jsdom does not
+    // implement its own TextDecoder) passes these through as literal C1
+    // control code points rather than the replacement character a
+    // spec-compliant browser would produce, so this is caught by the
+    // control-character safeguard ("binary-content") rather than the
+    // replacement-character check ("invalid-encoding"). Both paths reject
+    // the upload; see the comment on isControlOrUnmappedCharacter in
+    // csv-decode.ts for the full rationale.
+    await user.upload(
+      input,
+      new File(
+        [new Uint8Array([0x81, 0x8d, 0x8f, 0x90, 0x9d, 0x81, 0x8d])],
+        "corrupted.csv",
+        { type: "text/csv" },
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /contains binary data/i,
+    );
+  });
+
+  it("rejects a declared UTF-8 BOM that is not actually valid UTF-8 (no Windows-1252 fallback)", async () => {
+    const user = userEvent.setup();
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled={false}
+        developmentPreviewEnabled
+      />,
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+
+    // A UTF-8 BOM followed by a byte sequence that is not valid UTF-8. Since
+    // the file declares UTF-8 via its BOM, decodeCsvBytes must not silently
+    // fall back to Windows-1252 for it.
+    await user.upload(
+      input,
+      new File(
+        [new Uint8Array([0xef, 0xbb, 0xbf, 0x41, 0xff, 0xfe, 0x42])],
+        "corrupt-utf8-bom.csv",
+        { type: "text/csv" },
+      ),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /not valid UTF-8 or Windows-1252 text/i,
+    );
+  });
+
   it.each([
     ["text/csv"],
     ["text/plain"],

@@ -332,6 +332,80 @@ describe("durable import worker boundaries", () => {
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(originalKey);
   });
 
+  it("stages a Windows-1252-encoded upload after a clean scan (Excel-resaved MyFlightbook export)", async () => {
+    // 0xE9 is "é" in Windows-1252 but is not valid standalone UTF-8, so this
+    // exercises decodeCsv's fallback path end-to-end through the durable
+    // worker, not just the shared csv-decode module in isolation.
+    const windows1252Bytes = Buffer.from([
+      ...Buffer.from("Date,AircraftID,From,To,Notes\n2026-02-03,SYNTH,KAAA,KBBB,Caf"),
+      0xe9,
+      ...Buffer.from("\n"),
+    ]);
+    const queue = jobs();
+    const objects = storage({
+      get: vi.fn().mockResolvedValue({ key: originalKey, bytes: windows1252Bytes }),
+    });
+    state.batch.fileSizeBytes = windows1252Bytes.length;
+    const malware = scanner();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      malware,
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    expect(state.stage).toHaveBeenCalledWith(
+      userId,
+      batchId,
+      expect.objectContaining({
+        content: "Date,AircraftID,From,To,Notes\n2026-02-03,SYNTH,KAAA,KBBB,Café\n",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+    expect(queue.complete).toHaveBeenCalledWith(jobId, "worker-1");
+  });
+
+  it("fails the job as invalid-upload when the object cannot be decoded as UTF-8 or Windows-1252", async () => {
+    // A ZIP/xlsx signature: not valid UTF-8, and rejected outright as a
+    // known binary signature rather than attempting a Windows-1252 fallback.
+    const zipBytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
+    const queue = jobs();
+    const objects = storage({
+      get: vi.fn().mockResolvedValue({ key: originalKey, bytes: zipBytes }),
+    });
+    state.batch.fileSizeBytes = zipBytes.length;
+    const malware = scanner();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      malware,
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    expect(state.stage).not.toHaveBeenCalled();
+    expect(queue.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ id: jobId }),
+      "invalid-upload",
+      "The uploaded file did not match the expected CSV.",
+      false,
+    );
+    expect(consoleError).toHaveBeenCalledWith("durable-import-job-failed", {
+      jobId,
+      code: "invalid-upload",
+      attempt: 1,
+    });
+  });
+
   it("honors cancellation before reading or scanning the object", async () => {
     const queue = jobs({
       isCancellationRequested: vi.fn().mockResolvedValue(true),
