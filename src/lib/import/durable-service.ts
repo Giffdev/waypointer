@@ -12,8 +12,13 @@ import {
   parseGenericCsvMapping,
 } from "@/lib/import/generic-mapping";
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
+import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
 
-const ALLOWED_TYPES = new Set(["text/csv", "text/plain"]);
+// Shared with the client preview gate and the synchronous upload service;
+// see src/lib/import/csv-mime.ts for why this must stay in sync across all
+// three call sites. Blank declarations are normalized to "text/csv" below
+// before this allowlist is consulted, so "" doesn't need to appear here.
+const ALLOWED_TYPES = new Set<string>(CSV_MIME_TYPES);
 
 export type InitiateImportUpload = {
   batchId: string;
@@ -43,7 +48,10 @@ export async function initiateDurableImport(
 ): Promise<InitiateImportUpload> {
   assertDurableImportsEnabled();
   const fileName = cleanCsvName(input.fileName);
-  const contentType = input.contentType.trim().toLowerCase();
+  // Mirror the client's own fallback (selectedFile.type || "text/csv") so a
+  // blank content type reported by a browser's file picker is treated as a
+  // CSV rather than rejected.
+  const contentType = (input.contentType.trim() || "text/csv").toLowerCase();
   const maxBytes = configuredMaxBytes();
   if (!ALLOWED_TYPES.has(contentType)) {
     throw new ImportServiceError(

@@ -40,15 +40,15 @@ import {
 } from "@/lib/import/worker";
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
 import { getPrivateObjectStorage } from "@/lib/storage";
+import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ALLOWED_MIME_TYPES = new Set([
-  "text/csv",
-  "text/plain",
-  "application/octet-stream",
-  "",
-]);
+// Shared with the client preview gate and the durable upload service; see
+// src/lib/import/csv-mime.ts for why this must stay in sync across all
+// three call sites. "" is added locally because a blank file.type is
+// accepted as-is here rather than normalized to a fallback value.
+const ALLOWED_MIME_TYPES = new Set<string>([...CSV_MIME_TYPES, ""]);
 
 export class ImportServiceError extends Error {
   constructor(
@@ -119,7 +119,10 @@ function retentionDays(): number {
   return configured;
 }
 
-function decodeUpload(file: File, bytes: Uint8Array): string {
+// Exported for direct unit testing of the mobile-safe content-type
+// allowlist without needing to mock the database/storage dependencies of
+// createUpload.
+export function decodeUpload(file: File, bytes: Uint8Array): string {
   if (file.size === 0) {
     throw new ImportServiceError(400, "empty-file", "The upload is empty.");
   }

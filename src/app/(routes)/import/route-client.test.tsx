@@ -197,6 +197,67 @@ describe("development import preview", () => {
     );
   });
 
+  it.each([
+    ["text/csv"],
+    ["text/plain"],
+    // iOS Safari's Files picker reports this MIME type for .csv files
+    // instead of "text/csv"; regression coverage for the mobile CSV
+    // upload bug where such files were rejected before any upload.
+    ["application/vnd.ms-excel"],
+    ["APPLICATION/VND.MS-EXCEL"],
+    // Some mobile pickers report this generic binary type instead of
+    // text/csv; regression coverage for the mobile CSV upload bug where
+    // the durable initiate path rejected such files even though this
+    // client-side preview gate accepted them. See
+    // src/lib/import/csv-mime.ts.
+    ["application/octet-stream"],
+    // Some mobile browsers omit a content type entirely.
+    [""],
+  ])(
+    "parses a supported CSV declared with the mobile-safe content type %s",
+    async (type) => {
+      const user = userEvent.setup();
+      render(
+        <ImportRouteClientView
+          data={data}
+          apiEnabled={false}
+          developmentPreviewEnabled
+        />,
+      );
+      const input = screen.getByLabelText("Choose one supported CSV");
+
+      await user.upload(
+        input,
+        new File([fr24Csv], "flightdiary.csv", { type }),
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: "flightdiary.csv" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("rejects a content type unrelated to CSV, even with a .csv name", async () => {
+    const user = userEvent.setup();
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled={false}
+        developmentPreviewEnabled
+      />,
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+
+    await user.upload(
+      input,
+      new File([fr24Csv], "flightdiary.csv", { type: "text/html" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /not reported as CSV or plain-text content/i,
+    );
+  });
+
   it("auto-starts the configured authenticated upload flow", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -258,6 +319,47 @@ describe("development import preview", () => {
     await user.upload(
       input,
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
+    );
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/import/upload",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.any(FormData),
+        }),
+      ),
+    );
+  });
+
+  it("auto-starts the authenticated upload flow for a mobile-reported vnd.ms-excel CSV", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/import/upload" && init?.method === "POST") {
+        return jsonResponse({
+          batchId: "batch-1",
+          status: "processing",
+          reused: false,
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView data={data} apiEnabled developmentPreviewEnabled />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    // iOS Safari's Files picker reports this MIME type for .csv files
+    // instead of "text/csv"; this is the exact defect the mobile upload
+    // bug report described.
+    await user.upload(
+      input,
+      new File([fr24Csv], "flightdiary.csv", {
+        type: "application/vnd.ms-excel",
+      }),
     );
 
     await waitFor(() =>
@@ -1094,6 +1196,107 @@ describe("development import preview", () => {
     expect(fetchMock).not.toHaveBeenCalledWith(
       "/api/import/upload",
       expect.anything(),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Cancel import" }),
+    ).toBeInTheDocument();
+  });
+
+  it("forwards a mobile-reported application/octet-stream content type through durable initiate", async () => {
+    // Regression test: the durable initiate path (src/lib/import/
+    // durable-service.ts) previously rejected "application/octet-stream"
+    // even though the client preview gate and the synchronous upload
+    // service both accepted it, because the durable service's MIME
+    // allowlist had drifted out of sync. This client forwards
+    // selectedFile.type verbatim to /api/import/upload/initiate, so a
+    // valid mobile CSV declared this way must complete the full
+    // upload/finalize flow without error. See src/lib/import/csv-mime.ts.
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload/initiate") {
+        return jsonResponse({
+          batchId: "batch-octet-stream",
+          uploadUrl: "https://objects.example.test/octet-stream-signed-put",
+          headers: { "content-type": "application/octet-stream" },
+        });
+      }
+      if (url === "https://objects.example.test/octet-stream-signed-put") {
+        return new Response(null, { status: 200 });
+      }
+      if (url === "/api/import/upload/finalize") {
+        return jsonResponse({
+          batchId: "batch-octet-stream",
+          status: "queued",
+          reused: false,
+        });
+      }
+      if (url.startsWith("/api/import/batches/batch-octet-stream")) {
+        return jsonResponse({
+          batch: {
+            contractVersion: 1,
+            id: "batch-octet-stream",
+            fileName: "flightdiary.csv",
+            status: "queued",
+            counts: {
+              totalRows: 0,
+              parsedRows: 0,
+              readyRows: 0,
+              acceptedRows: 0,
+              skippedRows: 0,
+              pendingRows: 0,
+              committedFlights: 0,
+              attachedSources: 0,
+            },
+            createdAt: "2026-08-11T00:00:00.000Z",
+            updatedAt: "2026-08-11T00:00:00.000Z",
+            rows: {
+              page: 1,
+              pageSize: 25,
+              totalRows: 0,
+              totalPages: 1,
+              rows: [],
+            },
+          },
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+        durableImportEnabled
+      />,
+    );
+    const file = new File([fr24Csv], "flightdiary.csv", {
+      type: "application/octet-stream",
+    });
+    await user.upload(screen.getByLabelText("Choose one supported CSV"), file);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/import/upload/initiate",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining(
+            '"contentType":"application/octet-stream"',
+          ),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://objects.example.test/octet-stream-signed-put",
+        expect.objectContaining({
+          method: "PUT",
+          headers: { "content-type": "application/octet-stream" },
+          body: file,
+        }),
+      ),
     );
     expect(
       await screen.findByRole("button", { name: "Cancel import" }),
