@@ -1466,9 +1466,16 @@ type LocalImportPreview = {
 };
 
 const PREVIEW_ROW_LIMIT = 10;
+// Kept in sync with the server-side allowlists in
+// src/app/api/import/_lib/service.ts and src/lib/import/durable-service.ts.
+// iOS Safari's Files picker reports "application/vnd.ms-excel" for .csv
+// files (Apple maps the .csv extension to the Excel/Numbers UTI instead of
+// text/csv); this preview gate ran before any upload, so it was the first
+// place a mobile Safari user hit the mismatch.
 const PREVIEW_MIME_TYPES = new Set([
   "",
   "application/octet-stream",
+  "application/vnd.ms-excel",
   "text/csv",
   "text/plain",
 ]);

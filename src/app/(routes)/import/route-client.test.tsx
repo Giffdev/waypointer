@@ -197,6 +197,61 @@ describe("development import preview", () => {
     );
   });
 
+  it.each([
+    ["text/csv"],
+    ["text/plain"],
+    // iOS Safari's Files picker reports this MIME type for .csv files
+    // instead of "text/csv"; regression coverage for the mobile CSV
+    // upload bug where such files were rejected before any upload.
+    ["application/vnd.ms-excel"],
+    ["APPLICATION/VND.MS-EXCEL"],
+    // Some mobile browsers omit a content type entirely.
+    [""],
+  ])(
+    "parses a supported CSV declared with the mobile-safe content type %s",
+    async (type) => {
+      const user = userEvent.setup();
+      render(
+        <ImportRouteClientView
+          data={data}
+          apiEnabled={false}
+          developmentPreviewEnabled
+        />,
+      );
+      const input = screen.getByLabelText("Choose one supported CSV");
+
+      await user.upload(
+        input,
+        new File([fr24Csv], "flightdiary.csv", { type }),
+      );
+
+      expect(
+        await screen.findByRole("heading", { name: "flightdiary.csv" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("rejects a content type unrelated to CSV, even with a .csv name", async () => {
+    const user = userEvent.setup();
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled={false}
+        developmentPreviewEnabled
+      />,
+    );
+    const input = screen.getByLabelText("Choose one supported CSV");
+
+    await user.upload(
+      input,
+      new File([fr24Csv], "flightdiary.csv", { type: "text/html" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /not reported as CSV or plain-text content/i,
+    );
+  });
+
   it("auto-starts the configured authenticated upload flow", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -258,6 +313,47 @@ describe("development import preview", () => {
     await user.upload(
       input,
       new File([fr24Csv], "flightdiary.csv", { type: "text/csv" }),
+    );
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/import/upload",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.any(FormData),
+        }),
+      ),
+    );
+  });
+
+  it("auto-starts the authenticated upload flow for a mobile-reported vnd.ms-excel CSV", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/import/upload" && init?.method === "POST") {
+        return jsonResponse({
+          batchId: "batch-1",
+          status: "processing",
+          reused: false,
+        });
+      }
+      return jsonResponse({ batches: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView data={data} apiEnabled developmentPreviewEnabled />,
+    );
+
+    const input = screen.getByLabelText("Choose one supported CSV");
+    // iOS Safari's Files picker reports this MIME type for .csv files
+    // instead of "text/csv"; this is the exact defect the mobile upload
+    // bug report described.
+    await user.upload(
+      input,
+      new File([fr24Csv], "flightdiary.csv", {
+        type: "application/vnd.ms-excel",
+      }),
     );
 
     await waitFor(() =>
