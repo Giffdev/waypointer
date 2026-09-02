@@ -534,34 +534,45 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   }, [props.autoRotate, props.viewMode]);
 
   return (
-    <div
-      className="globe-shell cartographic-map"
-      role="region"
-      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
-      aria-busy={!mapReady}
-      data-airport-count={props.airports.length}
-      data-map-ready={mapReady}
-      data-route-count={props.routes.length}
-      data-view-mode={props.viewMode}
-    >
-      <div className="maplibre-container" ref={containerRef} />
-      {initializationError && (
-        <div className="map-layer-status error" role="alert">
-          Interactive globe failed to initialize · {initializationError}
-        </div>
-      )}
-      {terrainError && (
-        <div className="map-layer-status error" role="alert">
-          {terrainError}
-        </div>
-      )}
-      {(basemapMode === "loading" || basemapMode === "fallback") && (
-        <div className={`map-layer-status ${basemapMode}`}>
-          {basemapMode === "loading"
-            ? "Loading open cartography…"
-            : "Basemap unavailable · routes remain local"}
-        </div>
-      )}
+    <div className="globe-frame">
+      <div
+        className="globe-shell cartographic-map"
+        role="region"
+        aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
+        aria-busy={!mapReady}
+        data-airport-count={props.airports.length}
+        data-map-ready={mapReady}
+        data-route-count={props.routes.length}
+        data-view-mode={props.viewMode}
+      >
+        <div className="maplibre-container" ref={containerRef} />
+        {initializationError && (
+          <div className="map-layer-status error" role="alert">
+            Interactive globe failed to initialize · {initializationError}
+          </div>
+        )}
+        {terrainError && (
+          <div className="map-layer-status error" role="alert">
+            {terrainError}
+          </div>
+        )}
+        {(basemapMode === "loading" || basemapMode === "fallback") && (
+          <div className={`map-layer-status ${basemapMode}`}>
+            {basemapMode === "loading"
+              ? "Loading open cartography…"
+              : "Basemap unavailable · routes remain local"}
+          </div>
+        )}
+        <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
+      </div>
+      {/*
+        Rendered as a sibling of `.globe-shell` inside the `.globe-frame`
+        wrapper (not a descendant of `.globe-shell` itself) so the mobile
+        breakpoint can move it out of the fixed-height map viewport into
+        normal document flow below the map, purely via CSS `position`,
+        without reordering it relative to any other DOM node or duplicating
+        this focusable `<details>` control for a second breakpoint.
+      */}
       {terrainActive && (
         <div className="terrain-attribution">
           <details>
@@ -627,7 +638,6 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           </details>
         </div>
       )}
-      <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
 }

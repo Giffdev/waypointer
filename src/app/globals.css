@@ -197,12 +197,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 body:has(.runtime-mode) .map-stage {
   height: calc(100svh - 102px);
 }
+.globe-frame {
+  grid-column: 2;
+  grid-row: 1;
+  height: 100%;
+  min-width: 0;
+  position: relative;
+  width: 100%;
+}
 .globe-shell {
   background:
     radial-gradient(circle at 51% 48%, rgba(19, 79, 104, .26), transparent 28%),
     linear-gradient(180deg, #03101a, #061723);
-  grid-column: 2;
-  grid-row: 1;
   height: 100%;
   min-width: 0;
   position: relative;
@@ -2295,8 +2301,18 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
   }
   body { padding-bottom: calc(58px + env(safe-area-inset-bottom)); }
   .map-stage { display: block; height: auto; min-height: 0; }
+  .globe-frame { height: auto; }
   .globe-shell {
-    height: min(68svh, 620px);
+    /*
+     * The terrain credits control now renders in flow directly below the
+     * map (see `.terrain-attribution` below) instead of overlaying it, so
+     * its ~40px footprint (compact closed <details> bar + top margin) is
+     * subtracted here. This keeps the combined map + credits height equal
+     * to the map's previous overlay-only height, so the control panel and
+     * filters below aren't pushed further down the page (see the e2e
+     * "exposes filters in the first viewport" assertion).
+     */
+    height: calc(min(68svh, 620px) - 40px);
     min-height: 480px;
     position: relative;
   }
@@ -2322,9 +2338,22 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
     max-width: calc(100% - 120px);
   }
   .terrain-attribution {
+    /*
+     * On mobile the box overlaid the map viewport and ate into already
+     * limited screen space. Moving it out of `.globe-shell`'s absolute
+     * overlay (see the base rule) into normal document flow, as a sibling
+     * of `.globe-shell` inside `.globe-frame` (see globe-frame's own
+     * `height: auto` above), keeps the same single `<details>` control —
+     * nothing is duplicated in the a11y tree — and renders it as a
+     * compact, discoverable bar directly below the map, in its existing
+     * DOM position (no visual/tab-order reordering).
+     */
     bottom: auto;
-    max-width: calc(100% - 16px);
-    top: 44px;
+    margin: 10px 12px 0;
+    max-width: none;
+    position: static;
+    right: auto;
+    width: auto;
   }
   .record-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
   .section-heading.record-heading > p { flex-basis: auto; }
@@ -2334,7 +2363,8 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
 @media (max-width: 580px) {
   .profile-button span { display: none; }
   .profile-button { min-width: 44px; padding: 0; }
-  .globe-shell { height: 50svh; min-height: 360px; }
+  /* Same in-flow terrain-credits compensation as the 800px breakpoint. */
+  .globe-shell { height: calc(50svh - 40px); min-height: 360px; }
   .map-overlay { gap: 12px; grid-template-columns: 1fr; padding: 12px; }
   .map-intro { border-radius: 14px; padding: 18px; }
   .map-intro, .map-control-panel, .map-legend, .map-actions { grid-column: 1; }

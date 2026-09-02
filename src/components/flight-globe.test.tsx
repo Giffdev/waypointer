@@ -281,6 +281,26 @@ describe("FlightGlobe reduced motion", () => {
     );
   });
 
+  it("renders the terrain credits control once, as a sibling of the map region rather than a nested overlay-only duplicate", async () => {
+    // Regression guard for the mobile "credits box overlays the map" fix.
+    // The control must be a single DOM node so no breakpoint-specific
+    // duplicate can appear twice in the accessibility tree: it lives
+    // alongside `.globe-shell` (both children of `.globe-frame`), not
+    // nested inside the map region, so a mobile-only CSS `position` change
+    // can move it out of the map viewport into normal document flow
+    // without ever touching the DOM or reading/tab order.
+    installMatchMedia(false);
+    const view = render(<FlightGlobe {...defaultProps()} />);
+    await readyMap();
+
+    const credits = view.container.querySelectorAll(".terrain-attribution");
+    expect(credits).toHaveLength(1);
+    const region = view.container.querySelector(".globe-shell");
+    expect(region?.querySelector(".terrain-attribution")).toBeNull();
+    expect(credits[0].parentElement).toHaveClass("globe-frame");
+    expect(region?.parentElement).toBe(credits[0].parentElement);
+  });
+
   it("omits the shaded-relief terrain source and the full required upstream terrain attribution when starting in flat map mode (no DEM in use)", async () => {
     installMatchMedia(false);
 
