@@ -252,6 +252,33 @@ export function SharedMapProjectionView({
         </p>
         <MapViewToggle value={viewMode} onChange={setViewMode} />
       </header>
+      <section className="shared-map-canvas" aria-label="Shared Waypointer map">
+        <GlobePanel
+          airports={mapData.airports}
+          routes={mapData.routes}
+          visibleKind="all"
+          zoom={mapData.homeFrame.zoom}
+          zoomCommandToken={0}
+          focusAirportCode={focusedAirportIdentity}
+          selectedRouteId=""
+          resetToken={0}
+          homeFrame={mapData.homeFrame}
+          autoRotate={false}
+          viewMode={viewMode}
+          onSelectAirport={() => {}}
+          onSelectRoute={() => {}}
+          onZoomChange={() => {}}
+        />
+        <MapLegend
+          airports={mapData.airports}
+          routes={mapData.routes}
+          selectedRouteId=""
+        />
+        <p className="shared-map-airport-label-note">
+          Airport labels and route details use published airport codes and
+          names.
+        </p>
+      </section>
       <section
         className="shared-map-controls panel-surface"
         aria-labelledby="shared-map-filters-title"
@@ -393,33 +420,6 @@ export function SharedMapProjectionView({
             {busiestRoute.flightCount === 1 ? "flight" : "flights"}
           </p>
         )}
-      </section>
-      <section className="shared-map-canvas" aria-label="Shared Waypointer map">
-        <GlobePanel
-          airports={mapData.airports}
-          routes={mapData.routes}
-          visibleKind="all"
-          zoom={mapData.homeFrame.zoom}
-          zoomCommandToken={0}
-          focusAirportCode={focusedAirportIdentity}
-          selectedRouteId=""
-          resetToken={0}
-          homeFrame={mapData.homeFrame}
-          autoRotate={false}
-          viewMode={viewMode}
-          onSelectAirport={() => {}}
-          onSelectRoute={() => {}}
-          onZoomChange={() => {}}
-        />
-        <MapLegend
-          airports={mapData.airports}
-          routes={mapData.routes}
-          selectedRouteId=""
-        />
-        <p className="shared-map-airport-label-note">
-          Airport labels and route details use published airport codes and
-          names.
-        </p>
       </section>
       <p className="shared-map-privacy">
         Airport names, codes, and public map locations are shared. This public

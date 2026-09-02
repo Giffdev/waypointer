@@ -476,11 +476,11 @@ describe("SharedMapView", () => {
     expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
 
-  it("keeps the shared page's DOM order unchanged from header through privacy notice", async () => {
-    // The mobile map-first layout (see src/app/map-layout.test.ts) is CSS
-    // `order` only; the underlying DOM order must stay
-    // header -> controls -> statistics -> canvas -> privacy so tab order,
-    // screen-reader reading order, and desktop layout are all unaffected.
+  it("renders the header (with the Flat/3D toggle), then the map, then filters and statistics, then privacy", async () => {
+    // Accessibility fix: the rendered DOM order drives both the visual
+    // reading order and the keyboard/screen-reader focus order (no CSS
+    // `order` or `display: contents` involved), so this must be a real
+    // rendered-DOM assertion rather than a source-text/regex check.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
 
     const { container } = render(<SharedMapView handle="public-handle" />);
@@ -493,11 +493,16 @@ describe("SharedMapView", () => {
     );
     expect(sectionClasses).toEqual([
       "shared-map-header",
+      "shared-map-canvas",
       "shared-map-controls",
       "shared-map-statistics",
-      "shared-map-canvas",
       "shared-map-privacy",
     ]);
+
+    // The Flat/3D toggle lives inside the header, ahead of the map in
+    // document order.
+    const header = page!.querySelector(".shared-map-header");
+    expect(header?.querySelector(".map-view-toggle")).not.toBeNull();
   });
 });
 
