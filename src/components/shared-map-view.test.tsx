@@ -475,6 +475,30 @@ describe("SharedMapView", () => {
     ).toBeVisible();
     expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
+
+  it("keeps the shared page's DOM order unchanged from header through privacy notice", async () => {
+    // The mobile map-first layout (see src/app/map-layout.test.ts) is CSS
+    // `order` only; the underlying DOM order must stay
+    // header -> controls -> statistics -> canvas -> privacy so tab order,
+    // screen-reader reading order, and desktop layout are all unaffected.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
+
+    const { container } = render(<SharedMapView handle="public-handle" />);
+    await screen.findByRole("heading", { name: "Shared Waypointer map" });
+
+    const page = container.querySelector(".shared-map-page");
+    expect(page).not.toBeNull();
+    const sectionClasses = Array.from(page!.children).map(
+      (child) => child.className.split(" ")[0],
+    );
+    expect(sectionClasses).toEqual([
+      "shared-map-header",
+      "shared-map-controls",
+      "shared-map-statistics",
+      "shared-map-canvas",
+      "shared-map-privacy",
+    ]);
+  });
 });
 
 function sharedMap() {
