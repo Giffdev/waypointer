@@ -113,7 +113,60 @@ describe("MapSharingPanel", () => {
       cache: "no-store",
     });
   });
+
+  it("clears the stale error immediately on retry, before the retry request resolves", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down")),
+    );
+    const user = userEvent.setup();
+    render(<MapSharingPanel />);
+    expect(
+      await screen.findByText("Sharing status unavailable"),
+    ).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Sharing status could not be loaded.",
+    );
+
+    const deferred = createDeferred();
+    vi.stubGlobal("fetch", vi.fn(() => deferred.promise));
+    await user.click(
+      screen.getByRole("button", { name: "Retry sharing status" }),
+    );
+
+    // Parity with the pre-refactor behavior: retryStatus clears `error`
+    // synchronously, so the stale alert must already be gone even though
+    // the retry request itself has not resolved yet.
+    expect(screen.getByText("Checking sharing status...")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Sharing status could not be loaded."),
+    ).not.toBeInTheDocument();
+
+    deferred.resolve(
+      new Response(
+        JSON.stringify({
+          sharing: {
+            enabled: false,
+            publicHandle: "test-pilot",
+            sharePath: null,
+            publishedFlightCount: 0,
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    expect(await screen.findByText("Private - sharing is off")).toBeVisible();
+  });
 });
+
+function createDeferred() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function json(body: unknown) {
   return Promise.resolve(

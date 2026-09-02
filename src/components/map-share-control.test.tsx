@@ -154,7 +154,83 @@ describe("MapShareControl", () => {
     await user.click(retry);
     expect(await screen.findByText("Not shared")).toBeVisible();
   });
+
+  it("clears the stale error immediately on retry, before the retry request resolves", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down")),
+    );
+    const user = userEvent.setup();
+    render(<MapShareControl />);
+    await user.click(screen.getByRole("button", { name: "Share map" }));
+    expect(
+      await screen.findByText("Sharing status unavailable"),
+    ).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Sharing status could not be loaded.",
+    );
+
+    const deferred = createDeferred();
+    vi.stubGlobal("fetch", vi.fn(() => deferred.promise));
+    await user.click(
+      screen.getByRole("button", { name: "Retry sharing status" }),
+    );
+
+    // Parity with the pre-refactor Settings behavior: retryStatus clears
+    // `error` synchronously, so the stale alert must already be gone even
+    // though the retry request itself has not resolved yet.
+    expect(screen.getByText("Checking sharing status...")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Sharing status could not be loaded."),
+    ).not.toBeInTheDocument();
+
+    deferred.resolve(
+      new Response(
+        JSON.stringify({
+          sharing: {
+            enabled: false,
+            publicHandle: "test-pilot",
+            sharePath: null,
+            publishedFlightCount: 0,
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+    );
+    expect(await screen.findByText("Not shared")).toBeVisible();
+  });
+
+  it("aborts the in-flight status fetch when the component unmounts", async () => {
+    const deferred = createDeferred();
+    let capturedSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        capturedSignal = init?.signal ?? undefined;
+        return deferred.promise;
+      }),
+    );
+    const user = userEvent.setup();
+    const { unmount } = render(<MapShareControl />);
+    await user.click(screen.getByRole("button", { name: "Share map" }));
+
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    expect(capturedSignal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });
+
+function createDeferred() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 function json(body: unknown) {
   return Promise.resolve(

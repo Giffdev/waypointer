@@ -495,6 +495,20 @@ h1 span {
   background: rgba(95, 224, 208, .13);
   color: var(--teal);
 }
+/*
+ * `.icon-controls` (not `.map-share-control`) is intentionally the sole
+ * positioned ancestor/containing block for `.map-share-popup` below. This
+ * was verified deliberately: giving `.map-share-control` its own
+ * `position: relative` instead (with the popup's containing block being
+ * just the ~44px trigger button) reintroduces the max-width collapse bug
+ * this file previously fixed at >360px widths. Switching to a
+ * viewport-relative `max-width` to compensate does not work either — at
+ * the <=360px breakpoint below, `.map-share-control` legitimately spans
+ * the full (narrower-than-viewport) icon row width, and a viewport-based
+ * cap lets the popup overflow past that row's left edge instead of
+ * shrinking to fit it. Anchoring to `.icon-controls`'s actual rendered
+ * width correctly handles both cases with one rule.
+ */
 .map-share-popup {
   background: #071f2b;
   border: 1px solid rgba(156, 211, 216, .32);

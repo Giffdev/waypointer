@@ -85,76 +85,119 @@ export function useOwnerSharingStatus(
   const [error, setError] = useState("");
   const hasRequestedRef = useRef(false);
 
+  // Every state-affecting request (status fetch or enable/disable/
+  // republish) is tagged with a monotonically increasing id and aborts
+  // whatever request was previously in flight. A resolving request only
+  // applies its result if it is still the most recent one, so a slow,
+  // superseded response (e.g. a stale retry resolving after a newer
+  // enable call, or vice versa) can never clobber fresher state. The
+  // controller is also aborted on unmount to avoid setting state on an
+  // unmounted component.
+  const requestIdRef = useRef(0);
+  const activeControllerRef = useRef<AbortController | null>(null);
+
+  const beginRequest = useCallback(() => {
+    activeControllerRef.current?.abort();
+    const controller = new AbortController();
+    activeControllerRef.current = controller;
+    const id = ++requestIdRef.current;
+    return { id, controller };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeControllerRef.current?.abort();
+    };
+  }, []);
+
   const status = statusState.phase === "loaded" ? statusState.value : null;
   const shareUrl = status?.sharePath ? resolveShareUrl(status.sharePath) : null;
 
   // Only resolves the request and applies the result; never sets state
   // synchronously so it stays safe to call directly from an effect (the
   // "idle"/"loading" phases already cover the in-flight UI state).
-  const fetchAndApplyStatus = useCallback((signal?: AbortSignal) => {
-    void fetchShareStatus(signal)
-      .then((nextStatus) => {
-        setStatusState({ phase: "loaded", value: nextStatus });
-        setError("");
-      })
-      .catch((requestError) => {
-        if (
-          requestError instanceof DOMException &&
-          requestError.name === "AbortError"
-        ) {
-          return;
-        }
-        setStatusState({ phase: "failed" });
-        setError(STATUS_LOAD_FAILED_MESSAGE);
-      });
-  }, []);
+  const fetchAndApplyStatus = useCallback(
+    (signal: AbortSignal, requestId: number) => {
+      void fetchShareStatus(signal)
+        .then((nextStatus) => {
+          if (requestIdRef.current !== requestId) return;
+          setStatusState({ phase: "loaded", value: nextStatus });
+          setError("");
+        })
+        .catch((requestError) => {
+          if (
+            requestError instanceof DOMException &&
+            requestError.name === "AbortError"
+          ) {
+            return;
+          }
+          if (requestIdRef.current !== requestId) return;
+          setStatusState({ phase: "failed" });
+          setError(STATUS_LOAD_FAILED_MESSAGE);
+        });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!autoLoad) return;
     hasRequestedRef.current = true;
-    const controller = new AbortController();
-    fetchAndApplyStatus(controller.signal);
+    const { id, controller } = beginRequest();
+    fetchAndApplyStatus(controller.signal, id);
     return () => controller.abort();
-    // Deliberately runs once per mount; `fetchAndApplyStatus` is stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoLoad]);
+  }, [autoLoad, beginRequest, fetchAndApplyStatus]);
 
   const ensureLoaded = useCallback(() => {
     if (hasRequestedRef.current) return;
     hasRequestedRef.current = true;
-    fetchAndApplyStatus();
-  }, [fetchAndApplyStatus]);
+    const { id, controller } = beginRequest();
+    fetchAndApplyStatus(controller.signal, id);
+  }, [beginRequest, fetchAndApplyStatus]);
 
   // Safe to call only from event handlers (never from an effect body):
-  // resets the visible phase to "loading" before re-fetching.
+  // resets the visible phase to "loading" and clears any stale error
+  // before re-fetching, matching the pre-extraction Settings behavior.
   const retryStatus = useCallback(() => {
     hasRequestedRef.current = true;
     setStatusState({ phase: "loading" });
-    fetchAndApplyStatus();
-  }, [fetchAndApplyStatus]);
+    setError("");
+    const { id, controller } = beginRequest();
+    fetchAndApplyStatus(controller.signal, id);
+  }, [beginRequest, fetchAndApplyStatus]);
 
   const updateSharing = useCallback(
     (method: "POST" | "DELETE", successMessage: string) => {
       setBusy(true);
       setError("");
       setMessage("");
+      // Only the request id is used here (not its controller/signal): an
+      // enable/disable/republish mutation that's already in flight should
+      // still complete server-side even if superseded by a newer request,
+      // so we only need to ignore a stale *result*, not cancel the call.
+      const { id } = beginRequest();
       void fetch("/api/account/sharing", { method })
         .then(async (response) => {
           const body = await response.json();
           if (!response.ok) throw new Error(sharingErrorMessage(body));
+          if (requestIdRef.current !== id) return;
           setStatusState({ phase: "loaded", value: body.sharing });
           setMessage(successMessage);
         })
         .catch((requestError) => {
+          if (requestIdRef.current !== id) return;
           setError(
             requestError instanceof Error && requestError.message
               ? requestError.message
               : SHARING_UPDATE_FAILED_MESSAGE,
           );
         })
+        // Always clears busy, even if this request was superseded: the
+        // guarded `.then`/`.catch` above already prevent a stale response
+        // from overwriting fresher status/error/message state, so it is
+        // only the loading indicator being released here.
         .finally(() => setBusy(false));
     },
-    [],
+    [beginRequest],
   );
 
   const toggleSharing = useCallback(() => {
