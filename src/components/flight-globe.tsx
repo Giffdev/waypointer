@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
@@ -111,6 +111,10 @@ const DIRECTION_ICON_ERROR =
 
 export default function FlightGlobe(props: FlightGlobeProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
+  // Stable id linking the map region back to the terrain-attribution
+  // control once it renders outside that region (see the `aria-describedby`
+  // usage below, and the comment on `.terrain-attribution`'s placement).
+  const terrainAttributionId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const loadedRef = useRef(false);
@@ -534,36 +538,64 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   }, [props.autoRotate, props.viewMode]);
 
   return (
-    <div
-      className="globe-shell cartographic-map"
-      role="region"
-      aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
-      aria-busy={!mapReady}
-      data-airport-count={props.airports.length}
-      data-map-ready={mapReady}
-      data-route-count={props.routes.length}
-      data-view-mode={props.viewMode}
-    >
-      <div className="maplibre-container" ref={containerRef} />
-      {initializationError && (
-        <div className="map-layer-status error" role="alert">
-          Interactive globe failed to initialize · {initializationError}
-        </div>
-      )}
-      {terrainError && (
-        <div className="map-layer-status error" role="alert">
-          {terrainError}
-        </div>
-      )}
-      {(basemapMode === "loading" || basemapMode === "fallback") && (
-        <div className={`map-layer-status ${basemapMode}`}>
-          {basemapMode === "loading"
-            ? "Loading open cartography…"
-            : "Basemap unavailable · routes remain local"}
-        </div>
-      )}
+    <div className="globe-frame">
+      <div
+        className="globe-shell cartographic-map"
+        role="region"
+        aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
+        aria-busy={!mapReady}
+        aria-describedby={terrainActive ? terrainAttributionId : undefined}
+        data-airport-count={props.airports.length}
+        data-map-ready={mapReady}
+        data-route-count={props.routes.length}
+        data-view-mode={props.viewMode}
+      >
+        <div className="maplibre-container" ref={containerRef} />
+        {initializationError && (
+          <div className="map-layer-status error" role="alert">
+            Interactive globe failed to initialize · {initializationError}
+          </div>
+        )}
+        {terrainError && (
+          <div className="map-layer-status error" role="alert">
+            {terrainError}
+          </div>
+        )}
+        {(basemapMode === "loading" || basemapMode === "fallback") && (
+          <div className={`map-layer-status ${basemapMode}`}>
+            {basemapMode === "loading"
+              ? "Loading open cartography…"
+              : "Basemap unavailable · routes remain local"}
+          </div>
+        )}
+        <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
+      </div>
+      {/*
+        `.terrain-attribution` renders as a sibling of `.globe-shell` under
+        `.globe-frame`, not nested inside `.globe-shell` as it was before
+        this fix. Two structural changes follow from that, versus the
+        pre-fix markup:
+          1. It now comes *after* `.globe-hint` in DOM/reading order
+             (previously it was nested inside `.globe-shell`, before
+             `.globe-hint`).
+          2. It is no longer inside the `role="region"` map element, since
+             it lives outside `.globe-shell` entirely.
+        Both are one-time structural changes made by this fix, not
+        per-breakpoint reordering: the same DOM position is used on both
+        desktop and mobile, and only the CSS `position` differs between
+        them (`.terrain-attribution` stays absolute on desktop, in-flow on
+        mobile — see globals.css). This is what keeps a single focusable
+        `<details>` control from ever being duplicated in the a11y tree,
+        and avoids the focus/read-order mismatch a prior *visual-only*
+        CSS `order` reorder caused (see PR #40 / commit 67b92e3).
+        Since the control is no longer a descendant of the region, the
+        region carries `aria-describedby={terrainAttributionId}` (above)
+        pointing at this element's `id` so assistive tech still gets an
+        explicit, programmatic association between the map and its
+        terrain-data attribution.
+      */}
       {terrainActive && (
-        <div className="terrain-attribution">
+        <div className="terrain-attribution" id={terrainAttributionId}>
           <details>
             <summary>Terrain data credits</summary>
             <div className="terrain-attribution-content">
@@ -627,7 +659,6 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           </details>
         </div>
       )}
-      <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
     </div>
   );
 }

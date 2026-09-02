@@ -281,6 +281,53 @@ describe("FlightGlobe reduced motion", () => {
     );
   });
 
+  it("renders the terrain credits control once, as a sibling of the map region rather than a nested overlay-only duplicate", async () => {
+    // Regression guard for the mobile "credits box overlays the map" fix.
+    // The control must be a single DOM node so no breakpoint-specific
+    // duplicate can appear twice in the accessibility tree: it lives
+    // alongside `.globe-shell` (both children of `.globe-frame`), not
+    // nested inside the map region. Only its CSS `position` differs by
+    // breakpoint (absolute overlay on desktop, static/in-flow on mobile);
+    // its DOM location relative to its siblings never changes between
+    // breakpoints, so tab/reading order always matches what's visually
+    // rendered at any given width.
+    //
+    // That DOM location *is* different from the pre-fix markup, though:
+    // the control used to be nested inside `.globe-shell` (the
+    // `role="region"` map), before `.globe-hint`. It's now a sibling of
+    // `.globe-shell`, rendered after it (and so after `.globe-hint`) —
+    // and therefore no longer a descendant of the region. This test
+    // pins down that actual contract: single node, after `.globe-hint`,
+    // outside the region, with `aria-describedby` reconnecting the two.
+    installMatchMedia(false);
+    const view = render(<FlightGlobe {...defaultProps()} />);
+    await readyMap();
+
+    const credits = view.container.querySelectorAll(".terrain-attribution");
+    expect(credits).toHaveLength(1);
+    const region = view.container.querySelector(".globe-shell");
+    expect(region?.querySelector(".terrain-attribution")).toBeNull();
+    expect(credits[0].parentElement).toHaveClass("globe-frame");
+    expect(region?.parentElement).toBe(credits[0].parentElement);
+
+    // The control now sits after `.globe-hint` in DOM order, and outside
+    // the `role="region"` map element entirely.
+    const hint = view.container.querySelector(".globe-hint");
+    expect(hint).not.toBeNull();
+    expect(
+      hint!.compareDocumentPosition(credits[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(region?.contains(credits[0])).toBe(false);
+
+    // Since the control is no longer inside the region, the region must
+    // carry `aria-describedby` pointing at the control's `id` so
+    // assistive tech still gets an explicit, programmatic association
+    // between the map and its terrain-data attribution.
+    const creditsId = credits[0].getAttribute("id");
+    expect(creditsId).toBeTruthy();
+    expect(region).toHaveAttribute("aria-describedby", creditsId);
+  });
+
   it("omits the shaded-relief terrain source and the full required upstream terrain attribution when starting in flat map mode (no DEM in use)", async () => {
     installMatchMedia(false);
 

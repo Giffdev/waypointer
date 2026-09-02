@@ -25,8 +25,52 @@ describe("route split layout", () => {
     const css = fs.readFileSync(path.join(process.cwd(), "src", "app", "globals.css"), "utf8");
     const desktopRules = css.slice(0, css.indexOf("@media (max-width: 1000px)"));
     expect(desktopRules).toMatch(/\.map-stage\s*\{[^}]*display:\s*grid/);
-    expect(desktopRules).toMatch(/\.globe-shell\s*\{[^}]*grid-column:\s*2/);
+    // `.globe-frame` (not `.globe-shell`) carries the grid placement: it
+    // wraps `.globe-shell` plus the sibling `.terrain-attribution` control,
+    // so the credits box can be repositioned out of the map overlay at the
+    // mobile breakpoint without moving it in the DOM.
+    expect(desktopRules).toMatch(/\.globe-frame\s*\{[^}]*grid-column:\s*2/);
     expect(desktopRules).toMatch(/\.map-overlay\s*\{[^}]*grid-column:\s*1/);
+  });
+
+  it("keeps the terrain credits box as a desktop overlay but an in-flow bar below the map on mobile", () => {
+    // Regression guard for the mobile "credits box eats the viewport" fix.
+    // The control must stay a *single* `.terrain-attribution` node (no
+    // breakpoint-specific duplicate in the a11y tree): the desktop rule
+    // keeps it an absolutely positioned overlay in the map's corner, and
+    // only the `@media (max-width: 800px)` rule swaps it to `position:
+    // static` so the exact same DOM node instead renders in normal
+    // document flow, directly below the map.
+    const css = fs.readFileSync(path.join(process.cwd(), "src", "app", "globals.css"), "utf8");
+    const desktopRules = css.slice(0, css.indexOf("@media (max-width: 1000px)"));
+    expect(desktopRules).toMatch(/\.terrain-attribution\s*\{[^}]*position:\s*absolute/);
+
+    const mobileBlockStart = css.indexOf("@media (max-width: 800px)");
+    const mobileBlockEnd = css.indexOf("@media (max-width: 580px)");
+    expect(mobileBlockStart).toBeGreaterThan(-1);
+    expect(mobileBlockEnd).toBeGreaterThan(mobileBlockStart);
+    const mobileRules = css.slice(mobileBlockStart, mobileBlockEnd);
+    expect(mobileRules).toMatch(/\.terrain-attribution\s*\{[^}]*position:\s*static/);
+
+    // The wrapper's height must collapse to `auto` on mobile so the
+    // now-in-flow credits bar can grow the section instead of being
+    // clipped. `.globe-shell` keeps the same explicit mobile height
+    // *formula* it always had, minus a fixed offset sized to the in-flow
+    // credits bar's own footprint (closed <details> row + its top
+    // margin), so the map + credits together occupy the same total
+    // height the map alone used to. That keeps the control panel and
+    // filters from being pushed further down the page than before (see
+    // the "exposes filters in the first viewport" e2e assertion in
+    // e2e/flight-filters.spec.ts, which regressed without this offset).
+    expect(mobileRules).toMatch(/\.globe-frame\s*\{[^}]*height:\s*auto/);
+    expect(mobileRules).toMatch(
+      /\.globe-shell\s*\{[^}]*height:\s*calc\(min\(68svh,\s*620px\)\s*-\s*40px\)/,
+    );
+
+    const narrowBlockStart = css.indexOf("@media (max-width: 580px)");
+    expect(narrowBlockStart).toBeGreaterThan(-1);
+    const narrowRules = css.slice(narrowBlockStart);
+    expect(narrowRules).toMatch(/\.globe-shell\s*\{[^}]*height:\s*calc\(50svh\s*-\s*40px\)/);
   });
 
   it("keeps the flown-airport legend token decoupled from the unrelated private-route literal", () => {
