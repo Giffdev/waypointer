@@ -1474,6 +1474,15 @@ const PREVIEW_ROW_LIMIT = 10;
 // normalized to a fallback value; this preview gate runs before any upload,
 // so it was the first place a mobile Safari user hit the mismatch.
 const PREVIEW_MIME_TYPES = new Set<string>(["", ...CSV_MIME_TYPES]);
+// Android Chrome's native file picker (Storage Access Framework) filters
+// documents by MIME type rather than extension, and document providers
+// label CSVs inconsistently (text/csv, text/plain,
+// application/vnd.ms-excel, or application/octet-stream). An accept value
+// of only ".csv" causes SAF to grey out valid CSVs on some devices/
+// providers. Advertising the extension plus every MIME type already
+// trusted by CSV_MIME_TYPES keeps the picker permissive without resorting
+// to a "*/*" wildcard that would defeat filtering entirely.
+const FILE_INPUT_ACCEPT = [".csv", ...CSV_MIME_TYPES].join(",");
 
 const REQUIRED_GENERIC_COLUMNS: readonly {
   key: GenericCsvColumnKey;
@@ -1896,7 +1905,7 @@ function FileDropzone({
         id={id}
         className="visually-hidden-file-input"
         type="file"
-        accept=".csv"
+        accept={FILE_INPUT_ACCEPT}
         disabled={disabled}
         aria-label="Choose one supported CSV"
         aria-describedby={ariaDescribedBy}
