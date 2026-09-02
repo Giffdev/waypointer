@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -75,6 +75,20 @@ describe("application navigation", () => {
     expect(
       screen.getByRole("navigation", { name: "Mobile primary navigation" }),
     ).toBeInTheDocument();
+  });
+
+  it("renders all four primary destinations in the mobile nav without hiding any", () => {
+    render(<AppNavigation onOpenAuth={() => undefined} />);
+    const mobileNav = screen.getByRole("navigation", {
+      name: "Mobile primary navigation",
+    });
+    const mobileLinks = within(mobileNav).getAllByRole("link");
+    expect(mobileLinks.map((link) => link.textContent)).toEqual([
+      "Map",
+      "Flights",
+      "Import",
+      "Settings",
+    ]);
   });
 
   it("moves focus to the main region from the skip link", () => {
