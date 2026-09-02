@@ -165,4 +165,97 @@ describe("private settings UI", () => {
       screen.queryByRole("button", { name: "Delete my account" }),
     ).not.toBeInTheDocument();
   });
+
+  it("omits the sharing panel unless sharing is available and configured", () => {
+    render(
+      <SettingsClient
+        initialProfile={profile}
+        configured
+        deletionEnabled
+        sharingAvailable={false}
+      />,
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Public map" }),
+    ).not.toBeInTheDocument();
+
+    cleanup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            sharing: {
+              enabled: false,
+              publicHandle: "pilot",
+              sharePath: null,
+              publishedFlightCount: 0,
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    render(
+      <SettingsClient
+        initialProfile={profile}
+        configured
+        deletionEnabled
+        sharingAvailable
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { name: "Public map" }),
+    ).toBeInTheDocument();
+  });
+
+  it("focuses and scrolls the sharing panel heading on #sharing-title arrival", async () => {
+    window.history.replaceState(null, "", "/settings#sharing-title");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            sharing: {
+              enabled: false,
+              publicHandle: "pilot",
+              sharePath: null,
+              publishedFlightCount: 0,
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    render(
+      <SettingsClient
+        initialProfile={profile}
+        configured
+        deletionEnabled
+        sharingAvailable
+      />,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Public map" });
+    expect(heading).toHaveFocus();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "start" });
+
+    window.history.replaceState(null, "", "/settings");
+  });
+
+  it("does not move focus when arriving without the sharing hash", () => {
+    window.history.replaceState(null, "", "/settings");
+    render(
+      <SettingsClient
+        initialProfile={profile}
+        configured
+        deletionEnabled
+        sharingAvailable={false}
+      />,
+    );
+    expect(document.body).toHaveFocus();
+  });
 });
