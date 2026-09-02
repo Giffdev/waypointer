@@ -475,6 +475,35 @@ describe("SharedMapView", () => {
     ).toBeVisible();
     expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
+
+  it("renders the header (with the Flat/3D toggle), then the map, then filters and statistics, then privacy", async () => {
+    // Accessibility fix: the rendered DOM order drives both the visual
+    // reading order and the keyboard/screen-reader focus order (no CSS
+    // `order` or `display: contents` involved), so this must be a real
+    // rendered-DOM assertion rather than a source-text/regex check.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
+
+    const { container } = render(<SharedMapView handle="public-handle" />);
+    await screen.findByRole("heading", { name: "Shared Waypointer map" });
+
+    const page = container.querySelector(".shared-map-page");
+    expect(page).not.toBeNull();
+    const sectionClasses = Array.from(page!.children).map(
+      (child) => child.className.split(" ")[0],
+    );
+    expect(sectionClasses).toEqual([
+      "shared-map-header",
+      "shared-map-canvas",
+      "shared-map-controls",
+      "shared-map-statistics",
+      "shared-map-privacy",
+    ]);
+
+    // The Flat/3D toggle lives inside the header, ahead of the map in
+    // document order.
+    const header = page!.querySelector(".shared-map-header");
+    expect(header?.querySelector(".map-view-toggle")).not.toBeNull();
+  });
 });
 
 function sharedMap() {

@@ -10,6 +10,11 @@
   --panel: rgba(7, 27, 39, 0.82);
   --field: #092431;
   --field-option: #0b2b39;
+  /* Must stay equal to AIRPORT_MARKER_COLORS.active in src/lib/map-style.ts
+     (the real MapLibre circle-color for a flown airport). This token is the
+     CSS-side half of that shared source of truth: JS reads the TS constant
+     directly (inline style), while this var backs the CSS-only fallback. */
+  --airport-marker-active: #087b8f;
 }
 
 * { box-sizing: border-box; }
@@ -927,8 +932,15 @@ h1 span {
   line-height: 1;
 }
 .legend-airport {
-  background: #f0c56b;
-  border: 2px solid rgba(240,197,107,.28);
+  /* Base swatch shape; the active variant's fill/halo are set inline from
+     AIRPORT_MARKER_COLORS (src/lib/map-style.ts) so this never drifts from
+     the actual on-map circle-color paint expression. The var() fallback
+     below is a CSS-only backstop kept in sync via --airport-marker-active,
+     and is intentionally decoupled from .legend-route.private's unrelated
+     literal (both happened to share the old wrong yellow value only by
+     coincidence, never by shared selector or token). */
+  background: var(--airport-marker-active);
+  border: 2px solid rgba(8, 123, 143, .28);
   border-radius: 50%;
   box-sizing: content-box;
   display: inline-block;
