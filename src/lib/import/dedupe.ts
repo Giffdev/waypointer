@@ -111,19 +111,32 @@ function assessCandidate(
       detail: "The versioned canonical fingerprint is identical.",
     });
   } else {
+    // Route agreement is a hard gate, not one weighted signal among many.
+    // Temporal and identity similarity alone (same-date .30 + near-time .10 +
+    // same-tail .15 + same-aircraft/kind/role .05 x3) reaches the .70
+    // duplicate threshold, so sequential same-day, same-tail legs to
+    // *different* destinations (an S05 -> KRBG -> ... day) were withheld from
+    // commit as ambiguous duplicates. Two flights that did not fly the same
+    // ordered sequence of airports are never the same flight.
+    //
+    // Intended semantics of the gate (see route-dedupe.test.ts):
+    // - the ordered stop sequences must match position for position, so a
+    //   reversed route (A->B vs B->A) is not a duplicate;
+    // - leg counts must match, so A->B is not a duplicate of A->B->C;
+    // - a route that cannot be resolved to at least two airports never
+    //   matches anything, including another unresolved route.
+    if (!sameRoute(flight, candidate.flight)) return undefined;
+    signals.push({
+      code: "same-route",
+      weight: 0.25,
+      detail: "Origin and destination match.",
+    });
     addSignal(
       signals,
       sameDay(flight.date, candidate.flight.date),
       "same-date",
       0.3,
       "Departure date matches.",
-    );
-    addSignal(
-      signals,
-      sameRoute(flight, candidate.flight),
-      "same-route",
-      0.25,
-      "Origin and destination match.",
     );
     const timeDifference = minutesApart(
       flight.departureTime,
@@ -230,24 +243,28 @@ function sameRoute(
   left: ProposedImportFlight,
   right: ProposedImportFlight,
 ): boolean {
-  const leftMatches =
-    left.airportMatches && left.airportMatches.length >= 2
-      ? left.airportMatches
-      : left.origin && left.destination
-        ? [left.origin, left.destination]
-        : [];
-  const rightMatches =
-    right.airportMatches && right.airportMatches.length >= 2
-      ? right.airportMatches
-      : right.origin && right.destination
-        ? [right.origin, right.destination]
-        : [];
+  const leftMatches = routeStops(left);
+  const rightMatches = routeStops(right);
+  // Fewer than two resolved stops is not a route: without this guard two
+  // unresolved flights compare as equal empty sequences and every other
+  // signal decides the outcome.
+  if (leftMatches.length < 2 || rightMatches.length < 2) return false;
   return (
     leftMatches.length === rightMatches.length &&
     leftMatches.every((match, index) =>
       sameAirport(match, rightMatches[index]),
     )
   );
+}
+
+function routeStops(
+  flight: ProposedImportFlight,
+): Array<ProposedImportFlight["origin"]> {
+  return flight.airportMatches && flight.airportMatches.length >= 2
+    ? flight.airportMatches
+    : flight.origin && flight.destination
+      ? [flight.origin, flight.destination]
+      : [];
 }
 
 function sameIdentity(

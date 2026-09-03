@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (disable/republish). (#44)
 
 ### Fixed
+- Airport display codes: unscheduled small airports now prefer their local/FAA
+  identifier over a stale IATA code, so Bandon State (`KS05`) displays and
+  canonicalizes as `S05` instead of `BDY`, while every alias (`BDY`, `S05`,
+  `KS05`) stays resolvable on import and search. The rule is decided once when
+  the airport catalog is built, gated on the OurAirports facility type and an
+  explicit `scheduled_service = false`, so scheduled, medium, large, heliport,
+  seaplane and closed facilities keep their published IATA codes — 702 small
+  airports change, versus 3,554 (including 917 medium/large airports such as
+  PNH, ODS, ULN and ISL) under a scheduled-service-only rule. Import
+  canonicalization and the public map selector share one policy module, and
+  already-published maps are relabelled at read time, so no republish is
+  required.
+- Import duplicate detection: same-day flights on the same tail are no longer
+  flagged as duplicates when they fly different routes. Route agreement is now
+  a hard gate rather than one signal among several, so a multi-leg day (for
+  example `S05 → KRBG → …`) commits every leg. Genuine same-route re-imports
+  are still detected, reversed routes and differing leg counts are explicitly
+  not duplicates, and routes with fewer than two resolved stops never match.
 - Release workflow restored to owner-only: the production release-approval
   workflow's distinct-second-approver check (introduced in error) is
   replaced with a check that both the requester and the independent

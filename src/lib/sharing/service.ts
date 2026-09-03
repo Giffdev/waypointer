@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { asc, count, eq, sql } from "drizzle-orm";
 import { getDb, withUserDb, type DatabaseTransaction } from "@/lib/db";
 import {
+  airportAliases,
   airports,
   flightStops,
   flights,
@@ -39,6 +40,24 @@ type PublicAirport = Pick<
   Airport,
   "code" | "name" | "city" | "country" | "lat" | "lon" | "facility"
 >;
+
+/**
+ * Exact row shape the public projection reads an airport from. Declared once
+ * so the snapshot query, the display-code selector, and its tests cannot drift
+ * into passing `undefined` for an identifier field.
+ */
+export type PublicAirportRow = {
+  sourceIdent: string | null;
+  icao: string | null;
+  iata: string | null;
+  localCode: string | null;
+  name: string;
+  city: string | null;
+  latitude: number;
+  longitude: number;
+  country: string;
+  facility: string;
+};
 
 export type OwnerShareStatus = {
   enabled: boolean;
@@ -247,12 +266,13 @@ export async function getPublicMapProjection(
   ) {
     throw new ShareRepublishRequiredError();
   }
-  const { routes: publicRoutes, flights: publicFlights } =
+  const { routes: storedRoutes, flights: publicFlights } =
     normalizeStoredPublicProjection(
       Reflect.get(projection, "canonicalRoutes") ??
         Reflect.get(projection, "routes"),
       Reflect.get(projection, "flights"),
     );
+  const publicRoutes = await relabelledPublicRoutes(storedRoutes);
   const owner = Reflect.get(projection, "owner");
   const summary = Reflect.get(projection, "summary");
   return validatePublicMapProjection({
@@ -278,6 +298,95 @@ export async function getPublicMapProjection(
 
 export function publicHandleRateLimitKey(identifier: string): string {
   return normalizeUsername(identifier);
+}
+
+type AirportLabelRow = Pick<
+  PublicAirportRow,
+  "sourceIdent" | "icao" | "iata" | "localCode"
+> & {
+  aliasCode: string;
+  id: string;
+  latitude: number;
+  longitude: number;
+};
+
+/**
+ * A published projection is frozen JSON: every airport's display code was
+ * captured at publish time. Airport codes are labels rather than identities,
+ * so the public read re-derives them from the live airport catalog and
+ * substitutes the ones that have changed. Already-published maps therefore
+ * pick up a display-code correction (Bandon State's `BDY` becoming `S05`)
+ * without the owner republishing, without rewriting stored snapshots, and
+ * without invalidating the schema-v2 rollback view.
+ *
+ * A stored airport is only relabelled when exactly one catalog airport carries
+ * the published code as an identifier alias *at the published coordinates*.
+ * Unknown, ambiguous, or moved airports keep their published label, so this can
+ * never invent or cross-assign a code.
+ */
+async function relabelledPublicRoutes(
+  routes: PublicMapProjection["routes"],
+): Promise<PublicMapProjection["routes"]> {
+  const codes = [
+    ...new Set(
+      routes.flatMap((route) => [
+        route.origin.code.toUpperCase(),
+        route.destination.code.toUpperCase(),
+      ]),
+    ),
+  ];
+  if (codes.length === 0) return routes;
+  const rows = await getDb().execute<AirportLabelRow>(sql`
+    select
+      upper(${airportAliases.code}) as "aliasCode",
+      ${airports.id} as id,
+      ${airports.sourceIdent} as "sourceIdent",
+      ${airports.icao} as icao,
+      ${airports.iata} as iata,
+      ${airports.localCode} as "localCode",
+      ${airports.latitude} as latitude,
+      ${airports.longitude} as longitude
+    from ${airports}
+    join ${airportAliases}
+      on ${airportAliases.airportId} = ${airports.id}
+    where upper(${airportAliases.code}) in (${sql.join(
+      codes.map((code) => sql`${code}`),
+      sql`, `,
+    )})
+  `);
+  const byCode = new Map<string, AirportLabelRow[]>();
+  for (const row of rows) {
+    if (
+      typeof row?.aliasCode !== "string" ||
+      typeof row.latitude !== "number" ||
+      typeof row.longitude !== "number"
+    ) {
+      continue;
+    }
+    const matches = byCode.get(row.aliasCode) ?? [];
+    matches.push(row);
+    byCode.set(row.aliasCode, matches);
+  }
+  if (byCode.size === 0) return routes;
+  return routes.map((route) => ({
+    ...route,
+    origin: relabelledPublicAirport(route.origin, byCode),
+    destination: relabelledPublicAirport(route.destination, byCode),
+  }));
+}
+
+function relabelledPublicAirport(
+  airport: PublicAirport,
+  byCode: Map<string, AirportLabelRow[]>,
+): PublicAirport {
+  const candidates = (byCode.get(airport.code.toUpperCase()) ?? []).filter(
+    (row) =>
+      normalizePublicZero(row.latitude) === airport.lat &&
+      normalizePublicZero(row.longitude) === airport.lon,
+  );
+  if (new Set(candidates.map(({ id }) => id)).size !== 1) return airport;
+  const code = preferredAirportCode(candidates[0]!);
+  return code && code !== airport.code ? { ...airport, code } : airport;
 }
 
 export function toLegacyPublicMapProjection(
@@ -389,19 +498,7 @@ async function createSnapshot(
     stops.push(stop);
     stopsByFlight.set(stop.flightId, stops);
   }
-  const airportRows = await tx.execute<{
-    id: string;
-    sourceIdent: string | null;
-    icao: string | null;
-    iata: string | null;
-    localCode: string | null;
-    name: string;
-    city: string | null;
-    latitude: number;
-    longitude: number;
-    country: string;
-    facility: string;
-  }>(sql`
+  const airportRows = await tx.execute<PublicAirportRow & { id: string }>(sql`
     select
       ${airports.id} as id,
       ${airports.sourceIdent} as "sourceIdent",
@@ -899,23 +996,15 @@ function sanitizeStoredPublicPlace(
   };
 }
 
-function publicAirportFromRow(
-  row: {
-    sourceIdent: string | null;
-    icao: string | null;
-    iata: string | null;
-    localCode: string | null;
-    name: string;
-    city: string | null;
-    latitude: number;
-    longitude: number;
-    country: string;
-    facility: string;
-  },
-): PublicAirport {
+export function publicAirportFromRow(row: PublicAirportRow): PublicAirport {
   try {
     return sanitizeStoredPublicPlace({
-      code: preferredAirportCode(row),
+      code: preferredAirportCode({
+        iata: row.iata,
+        localCode: row.localCode,
+        icao: row.icao,
+        sourceIdent: row.sourceIdent,
+      }),
       name: normalizePublicMetadata(row.name),
       city: normalizePublicMetadata(row.city ?? row.name),
       country: row.country,

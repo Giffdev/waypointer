@@ -13,11 +13,13 @@ vi.mock("@/lib/db", () => ({
 import {
   formatHandleSharePath,
   getPublicMapProjection,
+  publicAirportFromRow,
   publicHandleRateLimitKey,
   rollbackCompatibleStoredProjection,
   ShareRepublishRequiredError,
   ShareValidationError,
   toLegacyPublicMapProjection,
+  type PublicAirportRow,
   type PublicMapProjection,
 } from "./service";
 
@@ -286,7 +288,8 @@ describe("public map sharing contracts", () => {
         },
       ],
     });
-    expect(execute).toHaveBeenCalledOnce();
+    // The stored projection read, then the live-catalog label refresh.
+    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("returns only the approved viewer-filter flight facts", async () => {
@@ -632,5 +635,189 @@ describe("public map sharing contracts", () => {
       getPublicMapProjection("00000000-0000-4000-8000-000000000010"),
     ).rejects.toBeInstanceOf(Error);
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+const BANDON_LAT = 43.0895;
+const BANDON_LON = -124.4158;
+
+function storedBandonProjection() {
+  return {
+    projection: {
+      schemaVersion: 2,
+      owner: { displayName: "Pilot" },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [
+        {
+          id: "route-1",
+          kind: "private",
+          flightCount: 1,
+          forwardFlightCount: 1,
+          reverseFlightCount: 0,
+          directionMode: "one-way",
+          origin: {
+            code: "BDY",
+            name: "Bandon State Airport",
+            city: "Bandon",
+            country: "US",
+            lat: BANDON_LAT,
+            lon: BANDON_LON,
+            facility: "general-aviation",
+          },
+          destination: {
+            code: "SEA",
+            name: "Seattle-Tacoma International Airport",
+            city: "Seattle",
+            country: "US",
+            lat: 47.456,
+            lon: -122.349,
+            facility: "commercial",
+          },
+          flightIds: ["flight-1"],
+        },
+      ],
+      flights: [
+        {
+          id: "flight-1",
+          date: "2026-08-01",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routeLegs: [{ routeId: "route-1", direction: "forward" }],
+        },
+      ],
+    },
+  };
+}
+
+function catalogLabelRow(overrides: Record<string, unknown> = {}) {
+  return {
+    aliasCode: "BDY",
+    id: "airport-bandon",
+    sourceIdent: "KS05",
+    icao: null,
+    // The airport catalog release withheld the unused IATA code, which is what
+    // an already-published projection must pick up on the next read.
+    iata: null,
+    localCode: "S05",
+    latitude: BANDON_LAT,
+    longitude: BANDON_LON,
+    ...overrides,
+  };
+}
+
+describe("published airport labels refresh from the live catalog", () => {
+  it("relabels an already-published projection without requiring a republish", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([storedBandonProjection()])
+      .mockResolvedValueOnce([
+        catalogLabelRow(),
+        {
+          aliasCode: "SEA",
+          id: "airport-sea",
+          sourceIdent: "KSEA",
+          icao: "KSEA",
+          iata: "SEA",
+          localCode: "SEA",
+          latitude: 47.456,
+          longitude: -122.349,
+        },
+      ]);
+    mocks.getDb.mockReturnValue({ execute });
+
+    const result = await getPublicMapProjection("devsin");
+    expect(result.routes[0]!.origin.code).toBe("S05");
+    expect(result.routes[0]!.destination.code).toBe("SEA");
+    // The stored snapshot itself is never rewritten: only the read is relabelled.
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the published label when the catalog cannot identify the airport", async () => {
+    const cases: Array<{ reason: string; rows: unknown[] }> = [
+      { reason: "no catalog match", rows: [] },
+      {
+        reason: "coordinates moved",
+        rows: [catalogLabelRow({ latitude: 40, longitude: -100 })],
+      },
+      {
+        reason: "ambiguous code shared by two airports",
+        rows: [catalogLabelRow(), catalogLabelRow({ id: "airport-other" })],
+      },
+      {
+        reason: "unusable row shape",
+        rows: [catalogLabelRow({ latitude: null, longitude: null })],
+      },
+    ];
+    for (const { reason, rows } of cases) {
+      const execute = vi
+        .fn()
+        .mockResolvedValueOnce([storedBandonProjection()])
+        .mockResolvedValueOnce(rows);
+      mocks.getDb.mockReturnValue({ execute });
+      const result = await getPublicMapProjection("devsin");
+      expect(result.routes[0]!.origin.code, reason).toBe("BDY");
+    }
+  });
+});
+
+describe("publicAirportFromRow display codes", () => {
+  function row(overrides: Partial<PublicAirportRow> = {}): PublicAirportRow {
+    return {
+      sourceIdent: "KSEA",
+      icao: "KSEA",
+      iata: "SEA",
+      localCode: "SEA",
+      name: "Seattle-Tacoma International Airport",
+      city: "Seattle",
+      latitude: 47.456,
+      longitude: -122.349,
+      country: "US",
+      facility: "commercial",
+      ...overrides,
+    };
+  }
+
+  it("keeps the IATA code of a row that carries one", () => {
+    expect(publicAirportFromRow(row()).code).toBe("SEA");
+    expect(
+      publicAirportFromRow(
+        row({
+          sourceIdent: "VDPP",
+          icao: "VDPP",
+          iata: "PNH",
+          localCode: null,
+        }),
+      ).code,
+    ).toBe("PNH");
+  });
+
+  it("falls through to the local code when the catalog withheld IATA", () => {
+    expect(
+      publicAirportFromRow(
+        row({
+          sourceIdent: "KS05",
+          icao: null,
+          iata: null,
+          localCode: "S05",
+          name: "Bandon State Airport",
+          city: "Bandon",
+          latitude: BANDON_LAT,
+          longitude: BANDON_LON,
+          facility: "general-aviation",
+        }),
+      ).code,
+    ).toBe("S05");
+  });
+
+  it("rejects a row with no usable identifier rather than inventing one", () => {
+    // A row whose identifier columns are all absent must never surface an
+    // internal identifier; the projection is rejected instead.
+    expect(() =>
+      publicAirportFromRow(
+        row({ sourceIdent: null, icao: null, iata: null, localCode: null }),
+      ),
+    ).toThrow(ShareValidationError);
   });
 });

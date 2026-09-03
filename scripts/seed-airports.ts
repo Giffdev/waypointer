@@ -7,6 +7,7 @@ import { inArray, sql as drizzleSql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { airportAliases, airports } from "../src/lib/db/schema.ts";
+import { prefersLocalAirportCode } from "../src/lib/airport-preferred-code.ts";
 import {
   airportIdentifierAliases,
   airportSearchKey,
@@ -173,7 +174,14 @@ export async function applyAirportCatalogRefresh(
         });
       }
       const icao = proposedIcao(reference) ?? null;
-      const iata = proposedIata(reference) ?? null;
+      // `proposedIata` stays the identity-matching code so an existing airport
+      // is still recognised by its IATA assignment. What gets *persisted* runs
+      // through the shared display policy, which demotes the stale IATA codes
+      // OurAirports attaches to unscheduled small fields. The code itself is
+      // still written to `airport_aliases`, so it remains resolvable.
+      const iata = prefersLocalAirportCode(reference)
+        ? null
+        : proposedIata(reference) ?? null;
       return {
         id: assignment.ids[index],
         sourceIdent: reference.ident,

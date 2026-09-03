@@ -59,7 +59,9 @@ projection:
   only) `forwardFlightCount`/`reverseFlightCount` plus a route-level
   `directionMode`;
 - each airport's preferred public identifier (IATA, local, ICAO, then source
-  identifier), name, city, country, facility type, and reference coordinates;
+  identifier — with unscheduled small airports preferring their local/FAA code,
+  so Bandon State publishes as `S05` rather than `BDY`), name, city, country,
+  facility type, and reference coordinates;
 - the minimum per-flight facts needed for viewer-local filtering: calendar
   date, commercial/private kind, passenger/pilot role, normalized aircraft
   labels, registration/tail number when present, and route references — v2
@@ -79,6 +81,18 @@ exact times, notes, source/provenance data, import fields, email, session or
 authentication data, or internal account identifiers. Airport display codes
 are labels rather than identities; coordinate-based identities keep distinct
 airports with the same code separate.
+
+Because display codes are labels, the public read re-derives them from the
+live airport catalog instead of trusting the frozen snapshot. An airport is
+relabelled only when exactly one catalog airport carries the published code as
+an identifier alias at the published coordinates; unknown, moved, or ambiguous
+airports keep whatever label was published. Already-published maps therefore
+pick up identifier corrections on the next read — no republish, no snapshot
+rewrite, and no change to the stored schema version, so the v2 rollback view
+stays valid. Corrections land only once an airport catalog release
+(`npm run db:airport-release`) rewrites the affected `airports.iata` values;
+until then the catalog still carries the old code and every map keeps its
+current label.
 
 Pre-v2 snapshots are not reconstructed into synthetic `R<number>` regions.
 They return `409 republish-required` until the owner uses the authenticated

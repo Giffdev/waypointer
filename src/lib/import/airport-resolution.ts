@@ -1,4 +1,5 @@
 import type { Airport, AirportFacility } from "../flight-data.ts";
+import { preferredAirportCode, prefersLocalAirportCode, type AirportIdentifierFields } from "../airport-preferred-code.ts";
 import { parseCsv } from "./csv.ts";
 
 export const OURAIRPORTS_SOURCE_URL =
@@ -164,6 +165,16 @@ const REQUIRED_COLUMNS = [
   "local_code",
 ] as const;
 
+/**
+ * `facility` is the map's *rendering* class, not an identifier policy. It
+ * stays keyed off the raw `iataCode` field on purpose: an IATA assignment is
+ * how the dataset distinguishes a named field from an unnamed strip, and
+ * changing that classification would repaint existing maps and legends for
+ * reasons unrelated to the display-code bug. The identifier policy keys off
+ * `type`/`scheduledService` instead of `facility`, and the two are
+ * deliberately allowed to disagree (Bandon State keeps its `general-aviation`
+ * marker while its label becomes `S05`).
+ */
 function facilityFor(reference: AirportReference): AirportFacility {
   if (
     reference.scheduledService &&
@@ -175,13 +186,31 @@ function facilityFor(reference: AirportReference): AirportFacility {
   return "general-aviation";
 }
 
+/**
+ * The identifier columns a catalog reference is persisted as, and the exact
+ * shape `preferredAirportCode` later reads back from the database. The
+ * IATA-demotion policy is applied here, once, so import-time canonical codes
+ * and stored rows cannot drift apart. Callers that persist a row must use this
+ * adapter rather than reading `preferredAirportIataCode` directly.
+ */
+export function canonicalAirportIdentifierFields(
+  reference: AirportReference,
+): AirportIdentifierFields {
+  return {
+    iata: prefersLocalAirportCode(reference)
+      ? null
+      : preferredAirportIataCode(reference) ?? null,
+    localCode: reference.localCode ?? null,
+    icao: reference.gpsCode ?? null,
+    sourceIdent: reference.ident,
+  };
+}
+
 function canonicalCode(reference: AirportReference): string {
-  return (
-    preferredAirportIataCode(reference) ||
-    reference.localCode ||
-    reference.gpsCode ||
-    reference.ident
-  ).toUpperCase();
+  const code = preferredAirportCode(
+    canonicalAirportIdentifierFields(reference),
+  );
+  return (code ?? reference.ident).toUpperCase();
 }
 
 export function airportIdentifierAliases(
