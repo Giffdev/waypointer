@@ -292,5 +292,7 @@ See [`DEPLOYMENT.md`](DEPLOYMENT.md) for the normal giffdev/Vercel deployment pa
 
 The explicit development preview still uses representative/local data. The
 persisted path uses authenticated, per-user PostgreSQL records and private
-storage. No remote repository has been initialized; eventual GitHub ownership
-must be `giffdev`.
+storage. The repository is hosted publicly on GitHub under the `giffdev`
+persona (`github.com/Giffdev/waypointer`); secret scanning with push
+protection and Dependabot security updates are enabled, and `main` requires
+passing `test` and `validate` checks before merge.
