@@ -166,6 +166,60 @@ describe("route-gated duplicate detection", () => {
     expect(second.duplicateCandidate).toBeUndefined();
   });
 
+  it("never matches two flights that carry no route at all", () => {
+    // Built without `leg()` on purpose: `leg()` always populates origin and
+    // destination, so it cannot reach the case where a flight resolves to zero
+    // stops. Every other signal agrees here (same date, minutes apart, same
+    // tail, same aircraft/kind/role), which sums past the duplicate threshold,
+    // so only the fewer-than-two-stops guard in `sameRoute` keeps these apart.
+    const routeless = (
+      overrides: Partial<ProposedImportFlight> = {},
+    ): ProposedImportFlight => ({
+      date: "2026-08-01",
+      departureTime: "09:00",
+      kind: "private",
+      role: "pilot",
+      registration: "N12345",
+      aircraft: "Cessna 172",
+      source: "CSV",
+      ...overrides,
+    });
+
+    const first = routeless();
+    const second = routeless({ departureTime: "09:30" });
+    expect(first.origin).toBeUndefined();
+    expect(first.destination).toBeUndefined();
+    expect(first.airportMatches).toBeUndefined();
+
+    const staged = applyDuplicateCandidates(
+      [row("row-1", first), row("row-2", second)],
+      [],
+    );
+
+    expect(staged.map(({ duplicateCandidate }) => duplicateCandidate)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(staged.map(({ validationState }) => validationState)).toEqual([
+      "ready",
+      "ready",
+    ]);
+
+    const [againstExisting] = applyDuplicateCandidates(
+      [row("row-3", first)],
+      [
+        {
+          flightId: "flight-a",
+          fingerprint: createRowFingerprint("user-a", second),
+          flight: second,
+        },
+      ],
+    );
+
+    expect(againstExisting.duplicateCandidate).toBeUndefined();
+    expect(againstExisting.validationState).toBe("ready");
+  });
+
   it("keeps an identical fingerprint a duplicate without consulting the route", () => {
     const staged = row("row-1", leg([stop("KEUG"), stop("KRBG")]));
     const [assessed] = applyDuplicateCandidates(
