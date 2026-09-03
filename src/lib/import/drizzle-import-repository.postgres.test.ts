@@ -24,7 +24,8 @@ import {
   decideImportRows,
   getUserImportBatch,
 } from "./service";
-import { stageFlightImport } from "./worker";
+import { stageFlightImport, stageMappedFlightImport } from "./worker";
+import type { GenericCsvMapping } from "./generic-csv";
 import { applyProposalCorrection } from "./corrections";
 import { applyDuplicateCandidates } from "./dedupe";
 import { createRowFingerprint } from "./fingerprint";
@@ -774,6 +775,226 @@ postgresDescribe("PostgreSQL import journey", () => {
     expect(otherStops).toEqual([]);
   });
 
+  it("assesses duplicates against multi-stop routes and commits only the missing leg", async () => {
+    const userId = await createUser("multi-stop-dedupe");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const bandon = `B${suffix}`;
+    const roseburg = `R${suffix}`;
+    const northBend = `N${suffix}`;
+    const [bandonId, roseburgId, northBendId] = Array.from(
+      { length: 3 },
+      () => randomUUID(),
+    );
+    cleanupAirports.push(bandonId, roseburgId, northBendId);
+    await getDb().insert(airports).values([
+      airportRow(bandonId, bandon, null),
+      airportRow(roseburgId, roseburg, null),
+      airportRow(northBendId, northBend, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: bandonId, code: bandon, codeType: "icao", priority: 10 },
+      { airportId: roseburgId, code: roseburg, codeType: "icao", priority: 10 },
+      {
+        airportId: northBendId,
+        code: northBend,
+        codeType: "icao",
+        priority: 10,
+      },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    // The already-imported day contains a multi-stop leg whose middle stop is
+    // neither endpoint, which is what the duplicate query has to load.
+    const flownLegs = [
+      `2026-08-14,${bandon},${bandon},${roseburg},1.4`,
+      `2026-08-14,${bandon},${northBend},,0.7`,
+    ];
+    const first = await runAutomaticMappedImport(
+      userId,
+      routeCsv(flownLegs),
+      "myflightbook-day.csv",
+      repository,
+    );
+    expect(first).toMatchObject({
+      status: "committed",
+      completion: { importedRows: 2 },
+    });
+
+    const stagedRows =
+      (await repository.getRowsForCommit(userId, first.batchId)) ?? [];
+    const candidates = await repository.findDuplicateCandidates(
+      userId,
+      stagedRows,
+    );
+    const multiStop = candidates.find(
+      ({ flight }) => (flight?.airportMatches?.length ?? 0) === 3,
+    );
+    expect(multiStop?.flight?.airportIdentifiers).toEqual([
+      bandon,
+      roseburg,
+      bandon,
+    ]);
+
+    const reexport = await runAutomaticMappedImport(
+      userId,
+      routeCsv([...flownLegs, `2026-08-14,${northBend},${roseburg},,0.6`]),
+      "myflightbook-day-reexport.csv",
+      repository,
+    );
+    expect(reexport).toMatchObject({
+      status: "committed",
+      reused: false,
+      completion: { importedRows: 1, duplicateRows: 2 },
+    });
+    const flown = await repository.listFlights(userId);
+    expect(flown).toHaveLength(3);
+    expect(
+      flown.map(({ airportSequence }) =>
+        airportSequence?.map(({ code }) => code).join(">"),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        `${bandon}>${roseburg}>${bandon}`,
+        `${bandon}>${northBend}`,
+        `${northBend}>${roseburg}`,
+      ]),
+    );
+  });
+
+  it("keeps importing when a stored flight's airport metadata cannot be rendered", async () => {
+    const userId = await createUser("stale-airport");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const origin = `A${suffix}`;
+    const stale = `S${suffix}`;
+    const addition = `D${suffix}`;
+    const [originId, staleId, additionId] = Array.from({ length: 3 }, () =>
+      randomUUID(),
+    );
+    cleanupAirports.push(originId, staleId, additionId);
+    await getDb().insert(airports).values([
+      airportRow(originId, origin, null),
+      airportRow(staleId, stale, null),
+      airportRow(additionId, addition, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: originId, code: origin, codeType: "icao", priority: 10 },
+      { airportId: staleId, code: stale, codeType: "icao", priority: 10 },
+      { airportId: additionId, code: addition, codeType: "icao", priority: 10 },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    const committed = await runAutomaticImport(
+      userId,
+      foreFlight([`2026-08-20,SYNTH-A,${origin},${stale},50,09:00,0.5,flown`]),
+      "flown.csv",
+      repository,
+    );
+    expect(committed).toMatchObject({ completion: { importedRows: 1 } });
+
+    // A catalog row that lost every public identifier cannot be turned into a
+    // proposal, and that must not take the rest of the import down with it.
+    await getDb()
+      .update(airports)
+      .set({
+        icao: null,
+        iata: null,
+        localCode: null,
+        sourceIdent: null,
+        sourceIdentProvenance: null,
+      })
+      .where(eq(airports.id, staleId));
+
+    const later = await runAutomaticImport(
+      userId,
+      foreFlight([
+        `2026-08-20,SYNTH-A,${origin},${addition},60,10:00,0.6,new leg`,
+      ]),
+      "new-leg.csv",
+      repository,
+    );
+    expect(later).toMatchObject({
+      status: "committed",
+      completion: { importedRows: 1 },
+    });
+    const persisted = await withUserDb(userId, (tx) =>
+      tx.select({ id: flights.id }).from(flights).where(eq(flights.userId, userId)),
+    );
+    expect(persisted).toHaveLength(2);
+  });
+
+  it("stages the same file again after a failed attempt and still reuses committed imports", async () => {
+    const userId = await createUser("failed-retry");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const origin = `F${suffix}`;
+    const destination = `T${suffix}`;
+    const [originId, destinationId] = Array.from({ length: 2 }, () =>
+      randomUUID(),
+    );
+    cleanupAirports.push(originId, destinationId);
+    await getDb().insert(airports).values([
+      airportRow(originId, origin, null),
+      airportRow(destinationId, destination, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: originId, code: origin, codeType: "icao", priority: 10 },
+      {
+        airportId: destinationId,
+        code: destination,
+        codeType: "icao",
+        priority: 10,
+      },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    const repositories = {
+      imports: repository,
+      flights: repository,
+      airports: repository,
+    };
+    const content = foreFlight([
+      `2026-08-21,SYNTH-A,${origin},${destination},70,11:00,0.7,retry`,
+    ]);
+    const failedAttempt = await stageFlightImport(
+      userId,
+      upload(content, "logbook.csv"),
+      repositories,
+    );
+    await repository.failBatch(userId, failedAttempt.batchId, {
+      code: "processing-failed",
+      message: "The file could not be staged for review.",
+    });
+
+    const retry = await runAutomaticImport(
+      userId,
+      content,
+      "logbook.csv",
+      repository,
+    );
+    expect(retry.batchId).not.toBe(failedAttempt.batchId);
+    expect(retry).toMatchObject({
+      status: "committed",
+      reused: false,
+      completion: { importedRows: 1 },
+    });
+    expect(
+      (await repository.getBatch(userId, failedAttempt.batchId))?.status,
+    ).toBe("expired");
+
+    const reused = await runAutomaticImport(
+      userId,
+      content,
+      "logbook-renamed.csv",
+      repository,
+    );
+    expect(reused).toMatchObject({
+      batchId: retry.batchId,
+      status: "committed",
+      reused: true,
+      completion: { importedRows: 1 },
+    });
+    expect(await repository.listFlights(userId)).toHaveLength(1);
+  });
+
   it("reconciles pending unresolved rows after alias refresh without cross-tenant or duplicate writes", async () => {
     const ownerId = await createUser("reconcile-owner");
     const otherId = await createUser("reconcile-other");
@@ -925,6 +1146,42 @@ async function runAutomaticImport(
     repository,
     repository,
   );
+}
+
+const routeMapping: GenericCsvMapping = {
+  columns: {
+    date: "Date",
+    origin: "From",
+    destination: "To",
+    route: "Route",
+    duration: "Duration",
+  },
+  dateFormat: "iso",
+  durationFormat: "decimal-hours",
+  defaults: { kind: "private", role: "pilot" },
+};
+
+function routeCsv(rows: string[]): string {
+  return ["Date,From,To,Route,Duration", ...rows, ""].join("\n");
+}
+
+async function runAutomaticMappedImport(
+  userId: string,
+  content: string,
+  fileName: string,
+  repository: DrizzleImportRepository,
+) {
+  const staged = await stageMappedFlightImport(
+    userId,
+    upload(content, fileName),
+    routeMapping,
+    {
+      imports: repository,
+      flights: repository,
+      airports: repository,
+    },
+  );
+  return automaticallyCommitImport(userId, staged, repository, repository);
 }
 
 async function createUser(label: string): Promise<string> {

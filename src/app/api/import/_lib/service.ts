@@ -176,6 +176,15 @@ function storageAwareImportRepository(input: {
     findBatchByFileFingerprint: (...args) =>
       repository.findBatchByFileFingerprint(...args),
     async createBatch(userId: string, batch: CreateImportBatchInput) {
+      // A failed or cancelled attempt on the same bytes still owns the
+      // fingerprint slot and is no longer swept by expireOriginalUploads once
+      // it is expired, so its private upload is deleted here first.
+      for (const key of await repository.supersedeUnreusableBatches(
+        userId,
+        batch.fileFingerprint,
+      )) {
+        await storage.delete(key).catch(() => undefined);
+      }
       const objectKey = `imports/${input.userId}/${batch.id}/${input.rawFileSha256}.csv`;
       await storage.put(objectKey, input.bytes, "text/csv");
       try {
@@ -213,6 +222,8 @@ function storageAwareImportRepository(input: {
     },
     completeStaging: (...args) => repository.completeStaging(...args),
     failBatch: (...args) => repository.failBatch(...args),
+    supersedeUnreusableBatches: (...args) =>
+      repository.supersedeUnreusableBatches(...args),
     scrubBatchRawSnapshots: (...args) =>
       repository.scrubBatchRawSnapshots(...args),
     expireBatchAndScrub: (...args) =>

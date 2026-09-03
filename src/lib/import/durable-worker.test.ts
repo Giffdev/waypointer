@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   automaticallyCommit: vi.fn(),
   scrub: vi.fn(),
   expire: vi.fn(),
+  supersede: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -27,6 +28,7 @@ vi.mock("@/lib/db/repositories/drizzle-import-repository", () => ({
   DrizzleImportRepository: class DrizzleImportRepository {
     scrubBatchRawSnapshots = state.scrub;
     expireBatchAndScrub = state.expire;
+    supersedeUnreusableBatches = state.supersede;
   },
 }));
 
@@ -152,6 +154,7 @@ beforeEach(() => {
   };
   state.duplicate = null;
   state.updates = [];
+  state.supersede.mockResolvedValue([]);
   state.stage.mockResolvedValue({ batchId, status: "review", reused: false });
   state.stageMapped.mockResolvedValue({
     batchId,
@@ -204,6 +207,39 @@ describe("durable import worker boundaries", () => {
           status: "processing",
           scanStatus: "clean",
           scanProvider: "clamav",
+        }),
+      ]),
+    );
+  });
+
+  it("supersedes an earlier failed attempt on the same bytes before claiming the hash", async () => {
+    const staleKey = `imports/${userId}/stale/${originalHash}.csv`;
+    state.supersede.mockResolvedValue([staleKey]);
+    const queue = jobs();
+    const objects = storage();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
+    expect(state.supersede).toHaveBeenCalledWith(userId, {
+      algorithm: "sha256",
+      version: 1,
+      value: canonicalHash,
+    });
+    expect(objects.delete).toHaveBeenCalledWith(staleKey);
+    expect(state.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "processing",
+          fileSha256: canonicalHash,
         }),
       ]),
     );

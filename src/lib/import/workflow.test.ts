@@ -229,6 +229,40 @@ describe("web import workflow", () => {
     ).toBe(true);
   });
 
+  it("stages the same bytes again after a failed attempt and still reuses successes", async () => {
+    const store = repository();
+    const repositories = { imports: store, flights: store, airports: store };
+    const upload = {
+      fileName: "logbook.csv",
+      mimeType: "text/csv",
+      sizeBytes: Buffer.byteLength(fixture),
+      content: fixture,
+    };
+    const failedAttempt = await stageFlightImport(
+      "user-a",
+      upload,
+      repositories,
+    );
+    await store.failBatch("user-a", failedAttempt.batchId, {
+      code: "processing-failed",
+      message: "The file could not be staged for review.",
+    });
+
+    const retry = await stageFlightImport("user-a", upload, repositories);
+    expect(retry).toMatchObject({ status: "review", reused: false });
+    expect(retry.batchId).not.toBe(failedAttempt.batchId);
+    expect((await store.getBatch("user-a", failedAttempt.batchId))?.status).toBe(
+      "expired",
+    );
+
+    const repeated = await stageFlightImport("user-a", upload, repositories);
+    expect(repeated).toEqual({
+      batchId: retry.batchId,
+      status: "review",
+      reused: true,
+    });
+  });
+
   it("scrubs review snapshots when a failed batch ages out", async () => {
     const store = repository();
     const repositories = { imports: store, flights: store, airports: store };

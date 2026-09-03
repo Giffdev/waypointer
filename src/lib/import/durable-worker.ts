@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, notInArray } from "drizzle-orm";
 import { withUserDb } from "@/lib/db";
 import { importBatches } from "@/lib/db/schema";
 import { DrizzleImportRepository } from "@/lib/db/repositories/drizzle-import-repository";
@@ -20,6 +20,7 @@ import {
 import { parseGenericCsvMapping } from "./generic-mapping";
 import { automaticallyCommitImport } from "./service";
 import { CsvDecodeError, decodeCsvBytes } from "./csv-decode";
+import { NON_REUSABLE_IMPORT_BATCH_STATUSES } from "./batch-lifecycle";
 
 const repository = new DrizzleImportRepository();
 
@@ -201,6 +202,16 @@ export class DurableImportWorker {
     );
     if (objectKey !== canonicalKey) {
       await this.storage.move(objectKey, canonicalKey);
+    }
+    // The same bytes may still be claimed by a failed or cancelled attempt;
+    // stamping fileSha256 below would collide with the partial unique index
+    // on (user_id, file_sha256) while that attempt is not expired.
+    for (const key of await repository.supersedeUnreusableBatches(
+      job.userId,
+      { algorithm: "sha256", version: 1, value: sha256 },
+    )) {
+      if (key === canonicalKey) continue;
+      await this.storage.delete(key).catch(() => undefined);
     }
     await updateBatch(job.userId, payload.batchId, {
       status: "processing",
@@ -465,7 +476,9 @@ function findDuplicate(userId: string, batchId: string, sha256: string) {
           eq(importBatches.userId, userId),
           eq(importBatches.fileSha256, sha256),
           ne(importBatches.id, batchId),
-          ne(importBatches.status, "expired"),
+          notInArray(importBatches.status, [
+            ...NON_REUSABLE_IMPORT_BATCH_STATUSES,
+          ]),
         ),
       )
       .limit(1);

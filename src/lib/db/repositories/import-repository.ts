@@ -33,6 +33,15 @@ export interface ImportRepository {
     userId: string,
     input: CreateImportBatchInput,
   ): Promise<ImportBatchSummary>;
+  /**
+   * Expires same-fingerprint batches whose lifecycle status can never be
+   * reused (failed/cancelled) so identical bytes can stage again, and returns
+   * the private object keys the caller must delete.
+   */
+  supersedeUnreusableBatches(
+    userId: string,
+    fingerprint: VersionedFingerprint,
+  ): Promise<string[]>;
   completeStaging(
     userId: string,
     batchId: string,

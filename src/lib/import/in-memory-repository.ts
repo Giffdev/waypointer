@@ -28,6 +28,10 @@ import {
   type VersionedFingerprint,
 } from "./types";
 import { createAcceptedDuplicateFingerprint } from "./fingerprint";
+import {
+  SUPERSEDABLE_IMPORT_BATCH_STATUSES,
+  isReusableImportBatchStatus,
+} from "./batch-lifecycle";
 
 type BatchRecord = {
   userId: string;
@@ -193,7 +197,7 @@ export class InMemoryImportRepository
         candidate.userId === userId &&
         candidate.fileFingerprint.version === fingerprint.version &&
         candidate.fileFingerprint.value === fingerprint.value &&
-        candidate.summary.status !== "expired",
+        isReusableImportBatchStatus(candidate.summary.status),
     );
     return record ? clone(record.summary) : null;
   }
@@ -203,12 +207,13 @@ export class InMemoryImportRepository
     input: CreateImportBatchInput,
   ): Promise<ImportBatchSummary> {
     requireUser(userId);
+    await this.supersedeUnreusableBatches(userId, input.fileFingerprint);
     const existing = [...this.batches.values()].find(
       (candidate) =>
         candidate.userId === userId &&
         candidate.fileFingerprint.version === input.fileFingerprint.version &&
         candidate.fileFingerprint.value === input.fileFingerprint.value &&
-        candidate.summary.status !== "expired",
+        isReusableImportBatchStatus(candidate.summary.status),
     );
     if (existing) return clone(existing.summary);
     const now = new Date().toISOString();
@@ -267,6 +272,34 @@ export class InMemoryImportRepository
       updatedAt: new Date().toISOString(),
     };
     return clone(record.summary);
+  }
+
+  // Mirrors DrizzleImportRepository: a failed or cancelled attempt stops
+  // owning the file fingerprint so the same bytes can be staged again.
+  async supersedeUnreusableBatches(
+    userId: string,
+    fingerprint: VersionedFingerprint,
+  ): Promise<string[]> {
+    requireUser(userId);
+    for (const record of this.batches.values()) {
+      if (
+        record.userId !== userId ||
+        record.fileFingerprint.version !== fingerprint.version ||
+        record.fileFingerprint.value !== fingerprint.value ||
+        !(
+          SUPERSEDABLE_IMPORT_BATCH_STATUSES as readonly string[]
+        ).includes(record.summary.status)
+      ) {
+        continue;
+      }
+      scrubRawSnapshots(record.rows);
+      record.summary = {
+        ...record.summary,
+        status: "expired",
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return [];
   }
 
   async expireBatchAndScrub(userId: string, batchId: string): Promise<void> {
