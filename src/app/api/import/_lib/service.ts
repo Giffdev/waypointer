@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, eq, lte, ne } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { withUserDb } from "@/lib/db";
 import { DrizzleImportRepository } from "@/lib/db/repositories/drizzle-import-repository";
 import type {
@@ -8,6 +8,7 @@ import type {
 } from "@/lib/db/repositories/import-repository";
 import { importBatches } from "@/lib/db/schema";
 import { detectFlightImportFormat } from "@/lib/import/registry";
+import { cleanUpSupersededObjects } from "@/lib/import/superseded-cleanup";
 import { redactOwnerImportBatchDetail } from "@/lib/import/api-contract";
 import type {
   AirportSearchResult,
@@ -177,14 +178,18 @@ function storageAwareImportRepository(input: {
       repository.findBatchByFileFingerprint(...args),
     async createBatch(userId: string, batch: CreateImportBatchInput) {
       // A failed or cancelled attempt on the same bytes still owns the
-      // fingerprint slot and is no longer swept by expireOriginalUploads once
-      // it is expired, so its private upload is deleted here first.
-      for (const key of await repository.supersedeUnreusableBatches(
+      // fingerprint slot, so it is superseded here and its private upload is
+      // deleted. A delete that fails leaves the batch unstamped and the next
+      // retention sweep retries it.
+      await cleanUpSupersededObjects(
         userId,
-        batch.fileFingerprint,
-      )) {
-        await storage.delete(key).catch(() => undefined);
-      }
+        await repository.supersedeUnreusableBatches(
+          userId,
+          batch.fileFingerprint,
+        ),
+        storage,
+        repository,
+      );
       const objectKey = `imports/${input.userId}/${batch.id}/${input.rawFileSha256}.csv`;
       await storage.put(objectKey, input.bytes, "text/csv");
       try {
@@ -238,30 +243,35 @@ function storageAwareImportRepository(input: {
 }
 
 async function expireOriginalUploads(userId: string): Promise<void> {
-  const expired = await withUserDb(userId, (tx) =>
-    tx
-      .select({
-        id: importBatches.id,
-        originalObjectKey: importBatches.originalObjectKey,
-      })
-      .from(importBatches)
-      .where(
-        and(
-          eq(importBatches.userId, userId),
-          lte(importBatches.expiresAt, new Date()),
-          ne(importBatches.status, "expired"),
-        ),
-      ),
-  );
-  if (expired.length === 0) return;
+  // Anything past its retention window that has not recorded a successful
+  // object cleanup, including batches already expired by supersession whose
+  // delete failed earlier.
+  const pending = await repository.listBatchesPendingObjectCleanup(userId);
+  if (pending.length === 0) return;
 
   const storage = getPrivateObjectStorage();
-  for (const batch of expired) {
-    await repository.scrubBatchRawSnapshots(userId, batch.id);
-    if (batch.originalObjectKey) {
-      await storage.delete(batch.originalObjectKey);
+  for (const batch of pending) {
+    await repository.scrubBatchRawSnapshots(userId, batch.batchId);
+    let deletedEverything = true;
+    for (const key of batch.objectKeys) {
+      try {
+        await storage.delete(key);
+      } catch (error) {
+        deletedEverything = false;
+        // Never log the key or the provider message: the key embeds the owner.
+        console.warn("import-expired-object-delete-failed", {
+          batchId: batch.batchId,
+          error: error instanceof Error ? error.name : typeof error,
+        });
+      }
     }
-    await repository.expireBatchAndScrub(userId, batch.id);
+    // A failed delete keeps the batch unstamped so the next sweep retries it,
+    // and leaves a non-expired batch unexpired exactly as before.
+    if (!deletedEverything) continue;
+    if (batch.status !== "expired") {
+      await repository.expireBatchAndScrub(userId, batch.batchId);
+    }
+    await repository.recordBatchObjectCleanup(userId, batch.batchId);
   }
 }
 

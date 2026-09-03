@@ -13,6 +13,7 @@ import type {
   CompleteImportStagingInput,
   CreateImportBatchInput,
   ImportRepository,
+  SupersededImportBatch,
 } from "@/lib/db/repositories/import-repository";
 import {
   IMPORT_CONTRACT_VERSION,
@@ -275,13 +276,15 @@ export class InMemoryImportRepository
   }
 
   // Mirrors DrizzleImportRepository: a failed or cancelled attempt stops
-  // owning the file fingerprint so the same bytes can be staged again.
+  // owning the file fingerprint so the same bytes can be staged again. This
+  // repository has no private object storage, so nothing is ever pending.
   async supersedeUnreusableBatches(
     userId: string,
     fingerprint: VersionedFingerprint,
-  ): Promise<string[]> {
+  ): Promise<SupersededImportBatch[]> {
     requireUser(userId);
-    for (const record of this.batches.values()) {
+    const superseded: SupersededImportBatch[] = [];
+    for (const [batchId, record] of this.batches.entries()) {
       if (
         record.userId !== userId ||
         record.fileFingerprint.version !== fingerprint.version ||
@@ -298,8 +301,9 @@ export class InMemoryImportRepository
         status: "expired",
         updatedAt: new Date().toISOString(),
       };
+      superseded.push({ batchId, pendingObjectKeys: [] });
     }
-    return [];
+    return superseded;
   }
 
   async expireBatchAndScrub(userId: string, batchId: string): Promise<void> {

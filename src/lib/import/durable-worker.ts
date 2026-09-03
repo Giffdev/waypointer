@@ -21,6 +21,7 @@ import { parseGenericCsvMapping } from "./generic-mapping";
 import { automaticallyCommitImport } from "./service";
 import { CsvDecodeError, decodeCsvBytes } from "./csv-decode";
 import { NON_REUSABLE_IMPORT_BATCH_STATUSES } from "./batch-lifecycle";
+import { cleanUpSupersededObjects } from "./superseded-cleanup";
 
 const repository = new DrizzleImportRepository();
 
@@ -205,14 +206,19 @@ export class DurableImportWorker {
     }
     // The same bytes may still be claimed by a failed or cancelled attempt;
     // stamping fileSha256 below would collide with the partial unique index
-    // on (user_id, file_sha256) while that attempt is not expired.
-    for (const key of await repository.supersedeUnreusableBatches(
+    // on (user_id, file_sha256) while that attempt is not expired. The
+    // canonical key is retained rather than deleted: this job now owns it.
+    await cleanUpSupersededObjects(
       job.userId,
-      { algorithm: "sha256", version: 1, value: sha256 },
-    )) {
-      if (key === canonicalKey) continue;
-      await this.storage.delete(key).catch(() => undefined);
-    }
+      await repository.supersedeUnreusableBatches(job.userId, {
+        algorithm: "sha256",
+        version: 1,
+        value: sha256,
+      }),
+      this.storage,
+      repository,
+      new Set([canonicalKey]),
+    );
     await updateBatch(job.userId, payload.batchId, {
       status: "processing",
       originalObjectKey: canonicalKey,

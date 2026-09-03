@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { and, eq, inArray } from "drizzle-orm";
@@ -993,6 +993,64 @@ postgresDescribe("PostgreSQL import journey", () => {
       completion: { importedRows: 1 },
     });
     expect(await repository.listFlights(userId)).toHaveLength(1);
+  });
+
+  it("keeps a superseded upload discoverable until its deletion is recorded", async () => {
+    const userId = await createUser("cleanup-retry");
+    const repository = new DrizzleImportRepository();
+    const fingerprint = {
+      algorithm: "sha256" as const,
+      version: 1,
+      value: createHash("sha256").update(randomUUID()).digest("hex"),
+    };
+    const failedId = randomUUID();
+    const objectKey = `imports/${userId}/${failedId}/${fingerprint.value}.csv`;
+    await repository.createBatch(userId, {
+      id: failedId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 128,
+      fileFingerprint: fingerprint,
+      originalObjectKey: objectKey,
+      status: "processing",
+    });
+    await repository.failBatch(userId, failedId, {
+      code: "processing-failed",
+      message: "The import could not be processed safely.",
+    });
+
+    // A retry that never calls supersede itself still must not lose the key:
+    // createBatch supersedes internally and drops the return value.
+    const retryId = randomUUID();
+    await repository.createBatch(userId, {
+      id: retryId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 128,
+      fileFingerprint: fingerprint,
+      originalObjectKey: `imports/${userId}/${retryId}/${fingerprint.value}.csv`,
+      status: "processing",
+    });
+    expect((await repository.getBatch(userId, failedId))?.status).toBe(
+      "expired",
+    );
+
+    const pending = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(pending).toContainEqual({
+      batchId: failedId,
+      status: "expired",
+      objectKeys: [objectKey],
+    });
+    expect(pending.map((batch) => batch.batchId)).not.toContain(retryId);
+
+    // Only a confirmed deletion stops the sweep from retrying.
+    await repository.recordBatchObjectCleanup(userId, failedId);
+    expect(
+      (await repository.listBatchesPendingObjectCleanup(userId)).map(
+        (batch) => batch.batchId,
+      ),
+    ).not.toContain(failedId);
+    expect(
+      await repository.supersedeUnreusableBatches(userId, fingerprint),
+    ).toEqual([]);
   });
 
   it("reconciles pending unresolved rows after alias refresh without cross-tenant or duplicate writes", async () => {

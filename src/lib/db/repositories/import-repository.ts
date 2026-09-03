@@ -24,6 +24,20 @@ export type CompleteImportStagingInput = {
   rows: StoredImportRow[];
 };
 
+/** A batch that gave up its file fingerprint and whose private objects are
+ * still awaiting deletion. */
+export type SupersededImportBatch = {
+  batchId: string;
+  pendingObjectKeys: string[];
+};
+
+/** A batch whose retention sweep still owes an object deletion. */
+export type PendingObjectCleanup = {
+  batchId: string;
+  status: string;
+  objectKeys: string[];
+};
+
 export interface ImportRepository {
   findBatchByFileFingerprint(
     userId: string,
@@ -35,13 +49,18 @@ export interface ImportRepository {
   ): Promise<ImportBatchSummary>;
   /**
    * Expires same-fingerprint batches whose lifecycle status can never be
-   * reused (failed/cancelled) so identical bytes can stage again, and returns
-   * the private object keys the caller must delete.
+   * reused (failed/cancelled) so identical bytes can stage again.
+   *
+   * The superseded rows keep their object keys and a null `originalDeletedAt`,
+   * so an undeleted upload stays discoverable through
+   * `listBatchesPendingObjectCleanup` no matter what the caller does with the
+   * returned value. Deleting the returned keys is the fast path, not the only
+   * one.
    */
   supersedeUnreusableBatches(
     userId: string,
     fingerprint: VersionedFingerprint,
-  ): Promise<string[]>;
+  ): Promise<SupersededImportBatch[]>;
   completeStaging(
     userId: string,
     batchId: string,

@@ -6,6 +6,8 @@ import {
   getTableColumns,
   ilike,
   inArray,
+  isNull,
+  lte,
   ne,
   notInArray,
   or,
@@ -62,6 +64,8 @@ import type {
   CompleteImportStagingInput,
   CreateImportBatchInput,
   ImportRepository,
+  PendingObjectCleanup,
+  SupersededImportBatch,
 } from "./import-repository";
 
 export class DrizzleImportRepository
@@ -347,19 +351,21 @@ export class DrizzleImportRepository
 
   // Frees the (user_id, file_sha256) uniqueness slot held by batches that can
   // no longer be reused, so the same bytes can be staged again after a failed
-  // attempt. Returns the private object keys of the superseded batches:
-  // expiring a batch removes it from the retention sweep, so the caller that
-  // owns object storage has to delete them.
+  // attempt. The superseded rows keep their object keys and a null
+  // originalDeletedAt, and their retention window is closed immediately, so a
+  // failed or skipped delete is still found by listBatchesPendingObjectCleanup
+  // instead of orphaning a private upload.
   async supersedeUnreusableBatches(
     userId: string,
     fingerprint: VersionedFingerprint,
-  ): Promise<string[]> {
+  ): Promise<SupersededImportBatch[]> {
     return this.runWithUserDb(userId, async (tx) => {
       const stale = await tx
         .select({
           id: importBatches.id,
           originalObjectKey: importBatches.originalObjectKey,
           quarantineObjectKey: importBatches.quarantineObjectKey,
+          originalDeletedAt: importBatches.originalDeletedAt,
         })
         .from(importBatches)
         .where(
@@ -376,7 +382,7 @@ export class DrizzleImportRepository
         await scrubRawSnapshots(tx, userId, batch.id, now);
         await tx
           .update(importBatches)
-          .set({ status: "expired", updatedAt: now })
+          .set({ status: "expired", expiresAt: now, updatedAt: now })
           .where(
             and(
               eq(importBatches.id, batch.id),
@@ -384,15 +390,59 @@ export class DrizzleImportRepository
             ),
           );
       }
-      return [
-        ...new Set(
-          stale.flatMap(({ originalObjectKey, quarantineObjectKey }) =>
-            [originalObjectKey, quarantineObjectKey].filter(
-              (key): key is string => Boolean(key),
-            ),
+      return stale.map((batch) => ({
+        batchId: batch.id,
+        pendingObjectKeys: batch.originalDeletedAt
+          ? []
+          : objectKeysFor(batch),
+      }));
+    });
+  }
+
+  // Retention sweeps ask for the batches that still owe an object deletion:
+  // anything past its window that has not recorded a successful cleanup.
+  async listBatchesPendingObjectCleanup(
+    userId: string,
+  ): Promise<PendingObjectCleanup[]> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const pending = await tx
+        .select({
+          id: importBatches.id,
+          status: importBatches.status,
+          originalObjectKey: importBatches.originalObjectKey,
+          quarantineObjectKey: importBatches.quarantineObjectKey,
+        })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            lte(importBatches.expiresAt, new Date()),
+            isNull(importBatches.originalDeletedAt),
           ),
-        ),
-      ];
+        );
+      return pending.map((batch) => ({
+        batchId: batch.id,
+        status: batch.status,
+        objectKeys: objectKeysFor(batch),
+      }));
+    });
+  }
+
+  // Only ever called after every object for the batch is confirmed gone (or
+  // has been handed to a live batch); a failed delete leaves the stamp null so
+  // the next sweep retries it.
+  async recordBatchObjectCleanup(
+    userId: string,
+    batchId: string,
+  ): Promise<void> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const now = new Date();
+      await tx
+        .update(importBatches)
+        .set({ originalDeletedAt: now, updatedAt: now })
+        .where(
+          and(eq(importBatches.id, batchId), eq(importBatches.userId, userId)),
+        );
     });
   }
 
@@ -401,9 +451,10 @@ export class DrizzleImportRepository
     input: CreateImportBatchInput,
   ): Promise<ImportBatchSummary> {
     // Retries of the same file are only possible once the failed attempt
-    // stops holding the uniqueness slot. Callers that own object storage
-    // supersede first so they can delete the orphaned upload; doing it here
-    // as well keeps direct repository users correct.
+    // stops holding the uniqueness slot. Object cleanup is tracked on the
+    // superseded rows themselves, so callers that own storage can delete the
+    // returned keys immediately while repository-only callers still leave the
+    // work discoverable for the retention sweep.
     await this.supersedeUnreusableBatches(userId, input.fileFingerprint);
     return this.runWithUserDb(userId, async (tx) => {
       const [batch] = await tx
@@ -1221,6 +1272,21 @@ async function persistDuplicateCandidates(
   if (candidates.length > 0) {
     await tx.insert(duplicateCandidates).values(candidates);
   }
+}
+
+// The private objects a batch is still responsible for. Kept in one place so
+// cleanup discovery and supersession can never disagree about what to delete.
+function objectKeysFor(batch: {
+  originalObjectKey: string | null;
+  quarantineObjectKey: string | null;
+}): string[] {
+  return [
+    ...new Set(
+      [batch.originalObjectKey, batch.quarantineObjectKey].filter(
+        (key): key is string => Boolean(key),
+      ),
+    ),
+  ];
 }
 
 async function scrubRawSnapshots(
