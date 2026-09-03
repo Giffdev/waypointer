@@ -2,8 +2,8 @@
 
 **Status:** Current implementation reference
 **Product owner:** Devin Sinha
-**Revision owner:** Zoe
-**Last updated:** 2026-08-21
+**Revision owner:** Simon
+**Last updated:** 2026-09-03
 
 ## Executive summary
 
@@ -21,6 +21,10 @@ Sharing has one deliberately simple contract:
 - Owners cannot choose individual flights or publish a partial map.
 - Account settings present one toggle whose states are **Share my map** and
   **Disable sharing**.
+- A lightweight "Share map" popover on `/map` mirrors owner status
+  (enable/copy/open) for discoverability and deep-links to
+  `/settings#sharing-title` for the full management surface (disable,
+  republish); it is not a second sharing contract.
 - Enabling sharing makes the page intentionally public to anyone who knows or
   discovers the username.
 - Disabling sharing makes the public route unavailable.
@@ -101,8 +105,10 @@ registration/tail number only as a disclosed viewer-local filter field.
 
 ### Owner control
 
-Every account starts with sharing off. The sharing control appears in
-`/settings`:
+Every account starts with sharing off. The full sharing management surface
+lives in `/settings`; a lightweight status/enable/copy popover is also
+reachable from the map page toolbar and deep-links back to
+`/settings#sharing-title` for disable/republish:
 
 | Current state | Available action | Result |
 | --- | --- | --- |
@@ -245,7 +251,8 @@ No fixture may contain a real person's private flight data.
 - Share publishes the whole eligible map with no flight or route cap.
 - The only public map URL is `/{username}`.
 - The public page and endpoint require no additional secret or request body.
-- Public responses contain only the approved schema-v2 projection with
+- Public responses contain only the approved schema-v3 projection (with a
+  legacy schema-v2 shape retained for callers that omit `?contract=3`) with
   canonical public airport metadata and viewer-local filter facts.
 - Disable, suspension, rename, and deletion prevent subsequent public loads.
 - Old sharing URLs remain broken and do not redirect.

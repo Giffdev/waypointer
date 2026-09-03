@@ -8,6 +8,14 @@ Vercel SSO protection is disabled so users can reach public registration.
 Registration remains protected by email verification, rate limiting, and the
 password policy.
 
+The `Giffdev/waypointer` GitHub repository is public, with secret scanning,
+secret-scanning push protection, and Dependabot security updates enabled, and
+branch protection on `main` requiring the `test` and `validate` checks before
+merge. Nothing in this document or the linked Vercel/Railway/Firebase
+projects should ever require committing a real secret value to source
+control; every credential referenced below is deployment-platform
+configuration, not a repository file.
+
 ## Adopted local conventions
 
 The neighboring `arkham-horror-lcg-ca` and `unmatched-match-trac` projects use:
@@ -246,6 +254,38 @@ The release order is:
 4. Deploy the reviewed application artifact.
 5. Complete the public-auth and handle-sharing acceptance checks before
    removing the release fence.
+
+### Owner-approved production release workflow
+
+The airport-catalog control-plane deployment (`npm run deploy:production`,
+driven by `.github/workflows/vercel-deploy.yml` and
+`.github/workflows/vercel-release-approval.yml`) requires an independent
+approval recorded as a separate `workflow_dispatch` run before it will
+deploy. Waypointer has exactly one collaborator (the repository owner), so
+that independence is expressed as an owner-only check rather than a second
+distinct identity:
+
+1. Dispatch `vercel-release-approval.yml` with `operation: prepare` (or
+   `deploy`), the exact reviewed commit SHA, and the candidate manifest
+   SHA-256. The workflow requires `github.actor == github.repository_owner`
+   and uploads a signed approval artifact naming that run.
+2. Dispatch `vercel-deploy.yml` with the same operation/commit/manifest plus
+   the approval run's ID. It downloads and validates that approval artifact
+   (exact commit, manifest, and operation match, and the approval run
+   itself succeeded), and additionally requires the workflow requester
+   (`github.actor`) to be the repository owner. It fails closed if either
+   identity check does not resolve to the owner.
+3. `prepare` builds and uploads a prebuilt artifact for review; `deploy`
+   downloads that reviewed artifact and deploys it unmodified.
+
+This replaced an earlier requirement that the approver be a *different*
+GitHub identity from the requester, which is impossible for a solo
+maintainer and was reverted after being introduced in error — do not
+reintroduce a distinct-approver requirement without an explicit
+maintainer-model decision. This control plane is separate from, and heavier
+than, the plain `vercel deploy --prod` recovery path below; use the plain
+path for direct hotfix recovery, not this one, unless independently
+reviewed artifact provenance is specifically required.
 
 The current production recovery is intentionally simple: persist exactly
 `FLIGHT_MAP_RELEASE_WRITES_PAUSED=false` for the Vercel Production environment,

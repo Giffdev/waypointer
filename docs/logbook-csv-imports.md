@@ -34,7 +34,21 @@ Evidence:
 
 Exports containing MyFlightbook's documented `Route` field can map it as an
 ordered airport sequence. Route-only MyFlightbook files are detected when the
-published core fields are present.
+published core fields are present, and mapping no longer requires a `From`/`To`
+pair that a Route-only export never has.
+
+Real MyFlightbook exports are UTF-8-with-BOM, quote-all, CRLF, and use a
+locale-dependent list separator (comma in en-US, semicolon in many other
+locales). A shared decoder (`src/lib/import/csv-decode.ts`) used by every
+upload path (client preview, synchronous upload, durable worker) accepts
+UTF-8 (with or without BOM), UTF-16 (BOM-only), and — only when there is no
+UTF-8 BOM and strict UTF-8 decoding fails — a Windows-1252 fallback, which
+covers the common case of Excel re-saving a MyFlightbook export and
+corrupting its encoding. Binary signatures (Office/ZIP, OLE, PDF, images) are
+rejected before any text decoding is attempted. Comma-as-decimal-separator
+locales (e.g. `1,5` meaning 1.5 hours) are not handled; duration parsing
+still requires `.` decimals. Delimiter detection (comma vs. semicolon) is
+quote-aware and scoped to the first CSV record.
 
 ### CrewLounge PILOTLOG compatible CSV
 
@@ -78,6 +92,14 @@ cloud-account formats.
 ## Generic mapping limits
 
 - Maximum upload size remains 10 MB unless the deployment lowers it.
+- Accepted CSV content types are centralized in
+  `src/lib/import/csv-mime.ts` (`text/csv`, `text/plain`,
+  `application/vnd.ms-excel`, `application/octet-stream`) and shared by the
+  client preview gate, the synchronous upload route, and the durable
+  presigned-upload flow so the three allowlists cannot drift; the file-picker
+  `accept` attribute advertises the same set (plus the `.csv` extension) so
+  mobile document pickers that report non-`text/csv` MIME types (iOS Safari's
+  `application/vnd.ms-excel`, some Android providers) are not greyed out.
 - The first non-empty record must be a unique header row, with at most 128
   columns.
 - Date formats are explicit: ISO `YYYY-MM-DD`, `YYYYMMDD`, month/day/year, or

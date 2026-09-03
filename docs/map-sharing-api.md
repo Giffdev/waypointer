@@ -28,6 +28,12 @@ sharing controls and no product flight-count ceiling. Re-enabling republishes
 the entire current map at the same username URL. Changing the username
 disables sharing until the owner explicitly enables it again.
 
+Two owner surfaces call this same API: the full management panel on
+`/settings` (enable/disable, link, copy), and a lightweight discoverability
+popover on `/map` (status, enable, copy/open link) that deep-links to
+`/settings#sharing-title` for disable/republish. Neither surface adds a
+distinct endpoint or contract.
+
 ## Public read boundary
 
 The public page reads the projection with a bodyless request:
@@ -41,15 +47,26 @@ function with a fixed `pg_catalog, public` search path and no `PUBLIC` execute
 grant. Production migration provisioning grants execution only to the runtime
 database role.
 
-Schema version 2 returns a frozen, public-safe whole-map projection:
+The endpoint defaults to the frozen schema-v2 projection for backward
+compatibility. Callers that need per-leg route direction (geometry-based
+direction icons, reciprocal-route labeling) must request
+`GET /api/shared/{username}?contract=3`; the bundled shared-map page always
+uses `?contract=3`. Both variants return the same public-safe whole-map
+projection:
 
 - aggregate flight and route counts;
-- directional route IDs, kind, count, and both canonical airports;
+- routes carry `id`, `kind`, `flightCount`, both canonical airports, and (v3
+  only) `forwardFlightCount`/`reverseFlightCount` plus a route-level
+  `directionMode`;
 - each airport's preferred public identifier (IATA, local, ICAO, then source
   identifier), name, city, country, facility type, and reference coordinates;
 - the minimum per-flight facts needed for viewer-local filtering: calendar
   date, commercial/private kind, passenger/pilot role, normalized aircraft
-  labels, registration/tail number when present, and public route references.
+  labels, registration/tail number when present, and route references — v2
+  exposes a flat `routeIds` array per flight, v3 exposes ordered
+  `routeLegs: { routeId, direction }` entries so multi-stop direction (e.g.
+  a reciprocal leg on the same route) can be rendered per leg instead of only
+  per route.
 
 The default view includes all published flights. Role, date-range, aircraft,
 and registration filters run only in the viewer and never mutate owner data;
