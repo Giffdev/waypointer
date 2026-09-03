@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { preferredAirportCode } from "../airport-preferred-code";
 import { importProposalValidationState } from "./review";
 import {
   auditAirportReferences,
@@ -6,6 +7,7 @@ import {
   airportSearchKey,
   airportSearchPhoneticKeys,
   assertHistoricalAirportReplacementSeparation,
+  canonicalAirportIdentifierFields,
   createAirportResolver,
   preferredAirportIataCode,
   selectBestAirportAliasMatches,
@@ -370,5 +372,133 @@ describe("airport identifier resolution", () => {
       expandedIdentifierAliases: 8,
       ambiguousTopPriorityCodes: 1,
     });
+  });
+});
+
+/**
+ * Mirrors the row `scripts/seed-airports.ts` writes for one reference, so the
+ * parity checks below compare the code chosen at import/seed time with the code
+ * a later database read of that same persisted row produces.
+ */
+function seededAirportRow(source: AirportReference) {
+  const proposedIcao =
+    source.gpsCode ?? (/^[A-Z]{4}$/.test(source.ident) ? source.ident : null);
+  const canonical = canonicalAirportIdentifierFields(source);
+  return {
+    ...canonical,
+    icao: proposedIcao,
+    localCode:
+      source.localCode ??
+      (source.ident !== proposedIcao ? source.ident : null),
+  };
+}
+
+describe("airport display code policy", () => {
+  const bandonState = reference("KS05", {
+    name: "Bandon State Airport",
+    municipality: "Bandon",
+    latitude: 43.084499,
+    longitude: -124.408997,
+    gpsCode: "S05",
+    iataCode: "BDY",
+    localCode: "S05",
+  });
+  const scheduledBushField = reference("PAKI", {
+    name: "Kipnuk Airport",
+    municipality: "Kipnuk",
+    scheduledService: true,
+    gpsCode: "PAKI",
+    iataCode: "KPN",
+    localCode: "IIK",
+  });
+  const staleMediumAirport = reference("KADH", {
+    type: "medium_airport",
+    name: "Ada Regional Airport",
+    municipality: "Ada",
+    gpsCode: "KADH",
+    iataCode: "ADT",
+    localCode: "ADH",
+  });
+  const stalePhnomPenh = reference("VDPP", {
+    type: "large_airport",
+    name: "Phnom Penh International Airport",
+    isoCountry: "KH",
+    municipality: "Phnom Penh",
+    gpsCode: "VDPP",
+    iataCode: "PNH",
+  });
+  const identOnlyLocalCode = reference("PG-0123", {
+    name: "Unnamed Strip",
+    isoCountry: "PG",
+    municipality: "Nowhere",
+    iataCode: "XYZ",
+  });
+
+  it("labels an unscheduled small field with its local code, not its IATA code", () => {
+    const resolve = createAirportResolver([bandonState]);
+    for (const identifier of ["BDY", "S05", "KS05"]) {
+      expect(resolve(identifier)).toMatchObject({
+        status: "resolved",
+        reference: { ident: "KS05" },
+        airport: { code: "S05", name: "Bandon State Airport" },
+      });
+    }
+  });
+
+  it("keeps IATA codes for scheduled fields and for medium/large airports", () => {
+    expect(
+      createAirportResolver([scheduledBushField])("PAKI"),
+    ).toMatchObject({ airport: { code: "KPN" } });
+    expect(createAirportResolver([staleMediumAirport])("KADH")).toMatchObject({
+      airport: { code: "ADT" },
+    });
+    expect(createAirportResolver([stalePhnomPenh])("VDPP")).toMatchObject({
+      airport: { code: "PNH" },
+    });
+    expect(createAirportResolver([formerSiemReap])("REP")).toMatchObject({
+      airport: { code: "REP" },
+    });
+  });
+
+  it("does not let an ident-shaped local code preempt a real IATA code", () => {
+    expect(
+      createAirportResolver([identOnlyLocalCode])("PG-0123"),
+    ).toMatchObject({ airport: { code: "XYZ" } });
+  });
+
+  it("resolves the same code at import time and from the persisted row", () => {
+    const catalog = [
+      bandonState,
+      scheduledBushField,
+      staleMediumAirport,
+      stalePhnomPenh,
+      identOnlyLocalCode,
+      formerSiemReap,
+      formerSchonefeld,
+      berlinBrandenburg,
+      siemReapAngkor,
+      tonasket,
+      omak,
+      forks,
+      quillayute,
+    ];
+    for (const source of catalog) {
+      const resolution = createAirportResolver([source])(source.ident);
+      expect(resolution.status).toBe("resolved");
+      expect({
+        ident: source.ident,
+        code: preferredAirportCode(seededAirportRow(source)),
+      }).toEqual({
+        ident: source.ident,
+        code:
+          resolution.status === "resolved" ? resolution.airport.code : null,
+      });
+    }
+  });
+
+  it("keeps every alias resolvable after a code is demoted", () => {
+    expect(
+      airportIdentifierAliases(bandonState).map(({ code }) => code),
+    ).toEqual(expect.arrayContaining(["BDY", "S05", "KS05"]));
   });
 });

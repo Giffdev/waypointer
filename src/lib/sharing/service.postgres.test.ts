@@ -225,6 +225,73 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     ).toContain("Chewelah Municipal Airport");
   });
 
+  it("refreshes an already-published airport label from the live catalog", async () => {
+    const owner = await createOwner("Bandon Pilot");
+    const [originId, destinationId] = await createBandonAirports();
+    await createFlight(owner.id, originId, destinationId);
+
+    await expect(enableMapSharing(owner.id)).resolves.toMatchObject({
+      enabled: true,
+      publishedFlightCount: 1,
+    });
+    // A published route orders its endpoints by internal airport id, which is
+    // a random UUID here, so the airports are addressed by name rather than by
+    // route position.
+    const codesByName = (projection: {
+      routes: Array<{
+        origin: { code: string; name: string };
+        destination: { code: string; name: string };
+      }>;
+    }) =>
+      Object.fromEntries(
+        projection.routes.flatMap(({ origin, destination }) =>
+          [origin, destination].map(({ name, code }) => [name, code]),
+        ),
+      );
+
+    // Published while the catalog still carried the unused IATA code, so the
+    // frozen snapshot captured the stale label.
+    const published = await getPublicMapProjection(owner.username);
+    expect(codesByName(published)).toEqual({
+      "Bandon State Airport": "BDY",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
+    const [storedShare] = await withUserDb(owner.id, (tx) =>
+      tx
+        .select({ projection: mapShares.projection })
+        .from(mapShares)
+        .where(eq(mapShares.userId, owner.id)),
+    );
+    expect(
+      codesByName(
+        storedShare!.projection as Parameters<typeof codesByName>[0],
+      ),
+    ).toEqual({
+      "Bandon State Airport": "BDY",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
+
+    // An airport catalog release withholds the unused IATA code; the owner
+    // does not republish and the stored snapshot is never rewritten.
+    await requireFixtureAdmin()`
+      update airports
+      set iata = null
+      where id = ${originId}::uuid
+    `;
+    const refreshed = await getPublicMapProjection(owner.username);
+    expect(codesByName(refreshed)).toEqual({
+      "Bandon State Airport": "S05",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
+    const [unchangedShare] = await withUserDb(owner.id, (tx) =>
+      tx
+        .select({ projection: mapShares.projection })
+        .from(mapShares)
+        .where(eq(mapShares.userId, owner.id)),
+    );
+    expect(unchangedShare!.projection).toEqual(storedShare!.projection);
+  });
+
   it("rejects airport display metadata containing control characters", async () => {
     const owner = await createOwner("Control Character Pilot");
     const [originId, destinationId] = await createAirports(
@@ -403,6 +470,59 @@ async function createAirports(
         'commercial',
         'sharing-test'
       )
+  `;
+  return [originId, destinationId];
+}
+
+async function createBandonAirports(): Promise<[string, string]> {
+  const originId = randomUUID();
+  const destinationId = randomUUID();
+  airportIds.push(originId, destinationId);
+  await requireFixtureAdmin()`
+    insert into airports (
+      id, source_ident, icao, iata, local_code, name, city, country,
+      latitude, longitude, facility, scheduled_service, dataset_version
+    )
+    values
+      (
+        ${originId}::uuid,
+        'KS05',
+        'KS05',
+        'BDY',
+        'S05',
+        'Bandon State Airport',
+        'Bandon',
+        'US',
+        43.0895,
+        -124.4158,
+        'general-aviation',
+        false,
+        'sharing-test'
+      ),
+      (
+        ${destinationId}::uuid,
+        'KSEA',
+        'KSEA',
+        'SEA',
+        'SEA',
+        'Seattle-Tacoma International Airport',
+        'Seattle',
+        'US',
+        47.4502,
+        -122.3088,
+        'commercial',
+        true,
+        'sharing-test'
+      )
+  `;
+  await requireFixtureAdmin()`
+    insert into airport_aliases (airport_id, code, code_type, priority)
+    values
+      (${originId}::uuid, 'BDY', 'iata', 20),
+      (${originId}::uuid, 'S05', 'faa-lid', 30),
+      (${originId}::uuid, 'KS05', 'ident', 40),
+      (${destinationId}::uuid, 'SEA', 'iata', 20),
+      (${destinationId}::uuid, 'KSEA', 'icao', 10)
   `;
   return [originId, destinationId];
 }
