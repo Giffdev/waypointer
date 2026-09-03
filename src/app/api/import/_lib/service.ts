@@ -41,6 +41,7 @@ import {
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
 import { getPrivateObjectStorage } from "@/lib/storage";
 import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
+import { CsvDecodeError, decodeCsvBytes } from "@/lib/import/csv-decode";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -136,41 +137,18 @@ export function decodeUpload(file: File, bytes: Uint8Array): string {
       "The upload content type is not supported.",
     );
   }
-  if (bytes.includes(0)) {
-    throw new ImportServiceError(
-      415,
-      "binary-content",
-      "Binary upload content is not supported.",
-    );
-  }
-
-  let content: string;
   try {
-    content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
+    return decodeCsvBytes(bytes).content;
+  } catch (error) {
+    if (error instanceof CsvDecodeError && error.reason === "binary-content") {
+      throw new ImportServiceError(415, "binary-content", error.message);
+    }
     throw new ImportServiceError(
       415,
       "invalid-utf8",
-      "The upload must be valid UTF-8 text.",
+      "The upload must be valid UTF-8 or Windows-1252 text.",
     );
   }
-
-  const inspected = content.slice(0, 8192);
-  const controlCharacters = [...inspected].filter((character) => {
-    const code = character.charCodeAt(0);
-    return code < 32 && ![9, 10, 13].includes(code);
-  }).length;
-  if (
-    controlCharacters >
-    Math.max(2, Math.floor(inspected.length * 0.005))
-  ) {
-    throw new ImportServiceError(
-      415,
-      "binary-content",
-      "The upload appears to contain binary data.",
-    );
-  }
-  return content.replace(/^\uFEFF/, "");
 }
 
 function cleanFileName(name: string): string {

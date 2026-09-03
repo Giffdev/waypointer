@@ -3,6 +3,10 @@
 drizzle/migrations/*.sql text eol=crlf
 data/private/reference/ourairports-airports.csv -text
 artifacts/release-evidence/airport-catalog/candidate-12a1816ff66d4eefaef954ad1ac126087fad44d72e8586ac233c6cc4fddf98d3.json -text
+# Real MyFlightbook exports use CRLF + a UTF-8 BOM; this fixture must keep
+# its exact bytes rather than being normalized to LF on checkout.
+src/lib/import/__fixtures__/myflightbook-realistic.csv -text
+src/lib/import/__fixtures__/myflightbook-semicolon.csv -text
 
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union

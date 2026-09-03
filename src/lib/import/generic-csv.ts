@@ -1,7 +1,7 @@
 import type { FlightKind, FlightRole } from "../flight-data";
 import type { CivilDate } from "../flight-statistics";
 import { sourceRoleDefault } from "../flight-role";
-import { parseCsv, type CsvRecord } from "./csv";
+import { parseCsv, detectCsvDelimiter, type CsvRecord } from "./csv";
 import { sha256Text } from "./sha256";
 import type { ImportIssue } from "./types";
 
@@ -615,7 +615,7 @@ function documentRows(input: string): {
   header: CsvRecord;
   rows: CsvRecord[];
 } {
-  const records = parseCsv(input).filter(
+  const records = parseCsv(input, detectCsvDelimiter(input)).filter(
     (record) => !record.cells.every((cell) => cell.trim() === ""),
   );
   if (records.length === 0) throw new GenericCsvImportError("empty-document");
@@ -894,10 +894,19 @@ function presetMapping(
   normalizedHeaders: ReadonlySet<string>,
 ): GenericCsvMapping {
   if (preset.id === "myflightbook-export" && normalizedHeaders.has("route")) {
+    // Real MyFlightbook exports use a single "Route" column and have no
+    // From/To columns at all (see evidenceUrl). Only keep origin/destination
+    // in the mapping when the file also has explicit From/To headers
+    // (a hybrid case); otherwise mapping them to non-existent headers would
+    // make parseMappedGenericCsv reject every Route-only export outright.
+    const hasExplicitEndpoints =
+      normalizedHeaders.has("from") && normalizedHeaders.has("to");
+    const { origin, destination, ...rest } = preset.suggestedMapping.columns;
     return {
       ...preset.suggestedMapping,
       columns: {
-        ...preset.suggestedMapping.columns,
+        ...rest,
+        ...(hasExplicitEndpoints ? { origin, destination } : {}),
         route: "Route",
       },
     };

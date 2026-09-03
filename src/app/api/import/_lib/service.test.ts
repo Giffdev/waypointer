@@ -5,6 +5,10 @@ function csvFile(content: string, type: string, name = "flights.csv"): File {
   return new File([content], name, { type });
 }
 
+function bytesFile(bytes: Uint8Array, type: string, name = "flights.csv"): File {
+  return new File([bytes], name, { type });
+}
+
 const SAMPLE_CSV = "origin,destination\nSEA,LAX\n";
 
 describe("decodeUpload content-type allowlist", () => {
@@ -43,6 +47,56 @@ describe("decodeUpload content-type allowlist", () => {
         code: "unsupported-content-type",
         status: 415,
       });
+    }
+  });
+});
+
+describe("decodeUpload byte decoding", () => {
+  beforeEach(() => {
+    vi.stubEnv("IMPORT_MAX_BYTES", "1048576");
+  });
+
+  it("strips a UTF-8 BOM (real MyFlightbook exports are UTF-8 with a BOM)", () => {
+    const withBom = new Uint8Array([
+      0xef, 0xbb, 0xbf,
+      ...new TextEncoder().encode(SAMPLE_CSV),
+    ]);
+    const file = bytesFile(withBom, "text/csv");
+    expect(decodeUpload(file, withBom)).toBe(SAMPLE_CSV);
+  });
+
+  it("falls back to Windows-1252 for a no-BOM file re-saved by a spreadsheet", () => {
+    // 0xE9 is "é" in Windows-1252 but is not valid standalone UTF-8.
+    const windows1252 = new Uint8Array([
+      ...new TextEncoder().encode("origin,destination,notes\nSEA,LAX,Caf"),
+      0xe9,
+      ...new TextEncoder().encode("\n"),
+    ]);
+    const file = bytesFile(windows1252, "text/csv");
+    expect(decodeUpload(file, windows1252)).toBe(
+      "origin,destination,notes\nSEA,LAX,Café\n",
+    );
+  });
+
+  it("rejects a binary file (e.g. a renamed .xlsx) as binary-content, not invalid-utf8", () => {
+    const zipSignature = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
+    const file = bytesFile(zipSignature, "text/csv");
+    try {
+      decodeUpload(file, zipSignature);
+      throw new Error("expected decodeUpload to throw");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "binary-content", status: 415 });
+    }
+  });
+
+  it("rejects bytes that are neither valid UTF-8 nor plausible Windows-1252 text", () => {
+    const garbage = new Uint8Array([0x81, 0x8d, 0x8f, 0x90, 0x9d, 0x81, 0x8d]);
+    const file = bytesFile(garbage, "text/csv");
+    try {
+      decodeUpload(file, garbage);
+      throw new Error("expected decodeUpload to throw");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "binary-content", status: 415 });
     }
   });
 });

@@ -19,6 +19,7 @@ import {
 } from "./worker";
 import { parseGenericCsvMapping } from "./generic-mapping";
 import { automaticallyCommitImport } from "./service";
+import { CsvDecodeError, decodeCsvBytes } from "./csv-decode";
 
 const repository = new DrizzleImportRepository();
 
@@ -473,23 +474,14 @@ function findDuplicate(userId: string, batchId: string, sha256: string) {
 }
 
 function decodeCsv(bytes: Uint8Array): string {
-  if (bytes.includes(0)) {
-    throw new DurableJobError(
-      "invalid-upload",
-      false,
-      "Binary upload content is not supported.",
-    );
-  }
   try {
-    return new TextDecoder("utf-8", { fatal: true })
-      .decode(bytes)
-      .replace(/^\uFEFF/, "");
-  } catch {
-    throw new DurableJobError(
-      "invalid-upload",
-      false,
-      "The upload is not valid UTF-8.",
-    );
+    return decodeCsvBytes(bytes).content;
+  } catch (error) {
+    const message =
+      error instanceof CsvDecodeError
+        ? error.message
+        : "The upload is not valid UTF-8 or Windows-1252 text.";
+    throw new DurableJobError("invalid-upload", false, message);
   }
 }
 
