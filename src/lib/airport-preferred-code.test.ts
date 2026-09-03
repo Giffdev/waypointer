@@ -165,4 +165,25 @@ describe("local airport identifier policy", () => {
       prefersLocalAirportCode(reference({ type: " Small_Airport " })),
     ).toBe(true);
   });
+
+  it("keeps an IATA code that is the airport's own source identifier", () => {
+    // The guard is symmetric with the local-code check above: when the
+    // OurAirports `ident` *is* the IATA code, that code is the field's only
+    // real identity and the unrelated local code must not displace it. These
+    // are verbatim rows from the pinned catalog (PG, AU and MX strips) and are
+    // the 54 airports this rule holds back from the demotion cohort.
+    const identIsIata: AirportCatalogIdentity[] = [
+      reference({ ident: "ABP", iataCode: "ABP", localCode: "AKA" }),
+      reference({ ident: "AGG", iataCode: "AGG", localCode: "ANG" }),
+      reference({ ident: "BCZ", iataCode: "BCZ", localCode: "YBIC" }),
+      reference({ ident: "BHL", iataCode: "BHL", localCode: "BAX" }),
+      // Case and whitespace must not defeat the guard either.
+      reference({ ident: " bov ", iataCode: "BOV", localCode: "BOG" }),
+    ];
+    expect(
+      identIsIata.map((airport) => prefersLocalAirportCode(airport)),
+    ).toEqual(identIsIata.map(() => false));
+    // Bandon State is unaffected: its ident (`KS05`) is not its IATA code.
+    expect(prefersLocalAirportCode(reference())).toBe(true);
+  });
 });

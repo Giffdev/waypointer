@@ -42,7 +42,10 @@ export type AirportCatalogIdentity = {
  * Single source of truth for "which identifier does a stored airport row
  * display?". Consumed by the private map read path, the public sharing
  * projection, and (through `canonicalAirportIdentifierFields`) by import and
- * seed time, so a seeded row and a later read of that row always agree.
+ * seed time, so rows written by a catalog build and later reads of those rows
+ * derive the same code from the same columns. Rows persisted by an earlier
+ * catalog build keep whatever identifiers they were written with until the
+ * next approved airport catalog release rewrites them.
  *
  * The precedence itself is intentionally unconditional. Whether an airport
  * publishes an IATA code at all is decided once, at catalog build time, by
@@ -71,6 +74,14 @@ export function preferredAirportCode(
  * canonical import code and the persisted `airports.iata` column reflect one
  * decision. The IATA code itself stays fully resolvable: it is still emitted
  * as a typed `iata` entry in `airport_aliases`.
+ *
+ * The demotion only applies where the local code is genuinely a *different*
+ * identifier from the ones the airport is already known by. Both directions of
+ * that check are enforced symmetrically: a local code that merely repeats the
+ * source identifier carries no extra public information, and an IATA code that
+ * *is* the source identifier is the field's only real identity and is kept.
+ * The second guard covers the large block of Papua New Guinea, Australian and
+ * Mexican strips whose OurAirports `ident` is the IATA code itself.
  */
 export function prefersLocalAirportCode(
   reference: AirportCatalogIdentity,
@@ -80,14 +91,10 @@ export function prefersLocalAirportCode(
   }
   if (reference.scheduledService !== false) return false;
   const localCode = normalizeCode(reference.localCode);
-  if (!localCode || !normalizeCode(reference.iataCode)) return false;
-  // A local code that only repeats the source identifier is the seed fallback
-  // for airports with no real local/FAA code, so it carries no extra public
-  // information and must not preempt a genuine IATA code.
-  return (
-    localCode !== normalizeCode(reference.iataCode) &&
-    localCode !== normalizeCode(reference.ident)
-  );
+  const iataCode = normalizeCode(reference.iataCode);
+  const ident = normalizeCode(reference.ident);
+  if (!localCode || !iataCode) return false;
+  return localCode !== iataCode && localCode !== ident && iataCode !== ident;
 }
 
 export function isPublicAirportCode(value: unknown): value is string {

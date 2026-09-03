@@ -323,6 +323,10 @@ type AirportLabelRow = Pick<
  * the published code as an identifier alias *at the published coordinates*.
  * Unknown, ambiguous, or moved airports keep their published label, so this can
  * never invent or cross-assign a code.
+ *
+ * The relabel is cosmetic, so it fails open: if the catalog lookup errors the
+ * published map is still served with its stored labels rather than turning a
+ * readable shared map into a 503.
  */
 async function relabelledPublicRoutes(
   routes: PublicMapProjection["routes"],
@@ -336,24 +340,7 @@ async function relabelledPublicRoutes(
     ),
   ];
   if (codes.length === 0) return routes;
-  const rows = await getDb().execute<AirportLabelRow>(sql`
-    select
-      upper(${airportAliases.code}) as "aliasCode",
-      ${airports.id} as id,
-      ${airports.sourceIdent} as "sourceIdent",
-      ${airports.icao} as icao,
-      ${airports.iata} as iata,
-      ${airports.localCode} as "localCode",
-      ${airports.latitude} as latitude,
-      ${airports.longitude} as longitude
-    from ${airports}
-    join ${airportAliases}
-      on ${airportAliases.airportId} = ${airports.id}
-    where upper(${airportAliases.code}) in (${sql.join(
-      codes.map((code) => sql`${code}`),
-      sql`, `,
-    )})
-  `);
+  const rows = await airportLabelRows(codes);
   const byCode = new Map<string, AirportLabelRow[]>();
   for (const row of rows) {
     if (
@@ -387,6 +374,48 @@ function relabelledPublicAirport(
   if (new Set(candidates.map(({ id }) => id)).size !== 1) return airport;
   const code = preferredAirportCode(candidates[0]!);
   return code && code !== airport.code ? { ...airport, code } : airport;
+}
+
+/**
+ * Reads the catalog rows that carry any of `codes` as an identifier alias.
+ *
+ * `airport_aliases.code` is written upper-cased by the only writer of that
+ * table (`airportIdentifierAliases` upper-cases every alias it emits) and the
+ * lookup codes are upper-cased above, so the column is compared directly
+ * rather than through `upper(...)`: wrapping it discards the
+ * `airport_aliases_code_priority_idx` index and forces a sequential scan on
+ * every public map read. This matches how the import repository resolves an
+ * alias (`eq(airportAliases.code, normalized)`).
+ *
+ * A failure here means the *label refresh* is unavailable, not the map. The
+ * caller treats an empty result as "nothing to relabel", so an error degrades
+ * to the stored published labels instead of failing the whole read.
+ */
+async function airportLabelRows(
+  codes: string[],
+): Promise<readonly AirportLabelRow[]> {
+  try {
+    return await getDb().execute<AirportLabelRow>(sql`
+      select
+        ${airportAliases.code} as "aliasCode",
+        ${airports.id} as id,
+        ${airports.sourceIdent} as "sourceIdent",
+        ${airports.icao} as icao,
+        ${airports.iata} as iata,
+        ${airports.localCode} as "localCode",
+        ${airports.latitude} as latitude,
+        ${airports.longitude} as longitude
+      from ${airports}
+      join ${airportAliases}
+        on ${airportAliases.airportId} = ${airports.id}
+      where ${airportAliases.code} in (${sql.join(
+        codes.map((code) => sql`${code}`),
+        sql`, `,
+      )})
+    `);
+  } catch {
+    return [];
+  }
 }
 
 export function toLegacyPublicMapProjection(

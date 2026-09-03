@@ -18,14 +18,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifier over a stale IATA code, so Bandon State (`KS05`) displays and
   canonicalizes as `S05` instead of `BDY`, while every alias (`BDY`, `S05`,
   `KS05`) stays resolvable on import and search. The rule is decided once when
-  the airport catalog is built, gated on the OurAirports facility type and an
-  explicit `scheduled_service = false`, so scheduled, medium, large, heliport,
-  seaplane and closed facilities keep their published IATA codes — 702 small
-  airports change, versus 3,554 (including 917 medium/large airports such as
-  PNH, ODS, ULN and ISL) under a scheduled-service-only rule. Import
-  canonicalization and the public map selector share one policy module, and
-  already-published maps are relabelled at read time, so no republish is
-  required.
+  the airport catalog is built, gated on the OurAirports facility type, an
+  explicit `scheduled_service = false`, and a local code that is genuinely a
+  different identifier from both the IATA code and the source ident — so
+  scheduled, medium, large, heliport, seaplane and closed facilities keep their
+  published IATA codes, as do fields whose ident *is* their IATA code. Against
+  the pinned OurAirports snapshot this demotes 648 small airports and no medium
+  or large airport; a rule gated on `scheduled_service` alone would also demote
+  large airports such as Phnom Penh (`PNH`), Odesa (`ODS`), Ulaanbaatar
+  (`ULN`), İstanbul Atatürk (`ISL`) and Western Sydney (`WSI`), all of which
+  are marked `scheduled_service = "no"` upstream. Import canonicalization and
+  the public map selector share one policy module, and already-published maps
+  are relabelled at read time — no republish and no snapshot rewrite. Merging
+  this change does not by itself alter any displayed code in production: the
+  new labels appear only after an approved airport catalog release re-seeds
+  `airports.iata`, and the read-time relabel fails open to the stored published
+  labels if the catalog lookup is unavailable.
 - Import duplicate detection: same-day flights on the same tail are no longer
   flagged as duplicates when they fly different routes. Route agreement is now
   a hard gate rather than one signal among several, so a multi-leg day (for

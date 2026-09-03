@@ -86,13 +86,15 @@ Because display codes are labels, the public read re-derives them from the
 live airport catalog instead of trusting the frozen snapshot. An airport is
 relabelled only when exactly one catalog airport carries the published code as
 an identifier alias at the published coordinates; unknown, moved, or ambiguous
-airports keep whatever label was published. Already-published maps therefore
-pick up identifier corrections on the next read — no republish, no snapshot
-rewrite, and no change to the stored schema version, so the v2 rollback view
-stays valid. Corrections land only once an airport catalog release
-(`npm run db:airport-release`) rewrites the affected `airports.iata` values;
-until then the catalog still carries the old code and every map keeps its
-current label.
+airports keep whatever label was published. The refresh is cosmetic and fails
+open: if the catalog lookup errors, the map is still served with its stored
+published labels rather than returning `503 shared-map-unavailable`.
+Already-published maps therefore pick up identifier corrections on the next
+read — no republish, no snapshot rewrite, and no change to the stored schema
+version, so the v2 rollback view stays valid. Corrections land only once an
+airport catalog release (`npm run db:airport-release`) rewrites the affected
+`airports.iata` values; until then the catalog still carries the old code and
+every map keeps its current label.
 
 Pre-v2 snapshots are not reconstructed into synthetic `R<number>` regions.
 They return `409 republish-required` until the owner uses the authenticated

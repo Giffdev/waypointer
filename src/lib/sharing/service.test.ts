@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 const mocks = vi.hoisted(() => ({
   getDb: vi.fn(),
@@ -759,6 +761,44 @@ describe("published airport labels refresh from the live catalog", () => {
       const result = await getPublicMapProjection("devsin");
       expect(result.routes[0]!.origin.code, reason).toBe("BDY");
     }
+  });
+
+  it("serves the stored labels when the catalog lookup itself fails", async () => {
+    // The relabel is cosmetic. A catalog outage must not turn a readable
+    // shared map into the route handler's 503 fallback.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([storedBandonProjection()])
+      .mockRejectedValueOnce(new Error("relation airport_aliases is missing"));
+    mocks.getDb.mockReturnValue({ execute });
+
+    const result = await getPublicMapProjection("devsin");
+    expect(result.routes[0]!.origin.code).toBe("BDY");
+    expect(result.routes[0]!.destination.code).toBe("SEA");
+    expect(result.summary.routeCount).toBe(1);
+    expect(result.flights).toHaveLength(1);
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("looks the published codes up in a way that keeps the alias index usable", async () => {
+    // `airport_aliases.code` is written upper-cased, and the lookup codes are
+    // upper-cased before the query, so the column must be compared directly:
+    // `upper(code) in (...)` cannot use airport_aliases_code_priority_idx and
+    // turns every public map read into a sequential scan of the alias table.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([storedBandonProjection()])
+      .mockResolvedValueOnce([]);
+    mocks.getDb.mockReturnValue({ execute });
+
+    await getPublicMapProjection("devsin");
+
+    const { sql: text, params } = new PgDialect().sqlToQuery(
+      execute.mock.calls[1]![0] as SQL,
+    );
+    expect(text).not.toMatch(/upper\s*\(/i);
+    expect(text).toMatch(/"airport_aliases"\."code" in \(/);
+    expect(params).toEqual(["BDY", "SEA"]);
   });
 });
 

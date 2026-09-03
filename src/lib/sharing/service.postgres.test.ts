@@ -234,22 +234,42 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       enabled: true,
       publishedFlightCount: 1,
     });
+    // A published route orders its endpoints by internal airport id, which is
+    // a random UUID here, so the airports are addressed by name rather than by
+    // route position.
+    const codesByName = (projection: {
+      routes: Array<{
+        origin: { code: string; name: string };
+        destination: { code: string; name: string };
+      }>;
+    }) =>
+      Object.fromEntries(
+        projection.routes.flatMap(({ origin, destination }) =>
+          [origin, destination].map(({ name, code }) => [name, code]),
+        ),
+      );
+
     // Published while the catalog still carried the unused IATA code, so the
     // frozen snapshot captured the stale label.
     const published = await getPublicMapProjection(owner.username);
-    expect(published.routes[0]!.origin.code).toBe("BDY");
+    expect(codesByName(published)).toEqual({
+      "Bandon State Airport": "BDY",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
     const [storedShare] = await withUserDb(owner.id, (tx) =>
       tx
         .select({ projection: mapShares.projection })
         .from(mapShares)
         .where(eq(mapShares.userId, owner.id)),
     );
-    const storedCode = (
-      Reflect.get(storedShare!.projection as object, "routes") as Array<
-        Record<string, { code: string }>
-      >
-    )[0]!.origin.code;
-    expect(storedCode).toBe("BDY");
+    expect(
+      codesByName(
+        storedShare!.projection as Parameters<typeof codesByName>[0],
+      ),
+    ).toEqual({
+      "Bandon State Airport": "BDY",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
 
     // An airport catalog release withholds the unused IATA code; the owner
     // does not republish and the stored snapshot is never rewritten.
@@ -259,8 +279,10 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       where id = ${originId}::uuid
     `;
     const refreshed = await getPublicMapProjection(owner.username);
-    expect(refreshed.routes[0]!.origin.code).toBe("S05");
-    expect(refreshed.routes[0]!.destination.code).toBe("SEA");
+    expect(codesByName(refreshed)).toEqual({
+      "Bandon State Airport": "S05",
+      "Seattle-Tacoma International Airport": "SEA",
+    });
     const [unchangedShare] = await withUserDb(owner.id, (tx) =>
       tx
         .select({ projection: mapShares.projection })
