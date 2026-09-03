@@ -28,6 +28,21 @@ async function mockSharingStatus(page: Page) {
   );
 }
 
+async function mockEnabledSharingStatus(page: Page) {
+  await page.route(/\/api\/account\/sharing$/, (route) =>
+    route.fulfill({
+      json: {
+        sharing: {
+          enabled: true,
+          publicHandle: "e2e-pilot",
+          sharePath: "/e2e-pilot",
+          publishedFlightCount: 7,
+        },
+      },
+    }),
+  );
+}
+
 async function signInAndOpenMap(page: Page) {
   await page.goto("/auth/sign-in");
   await page.getByLabel("Email").fill(email!);
@@ -86,6 +101,62 @@ for (const width of [320, 390]) {
     expect(popupBox).not.toBeNull();
     expect(popupBox!.x).toBeGreaterThanOrEqual(0);
     expect(popupBox!.x + popupBox!.width).toBeLessThanOrEqual(width + 1);
+  });
+}
+
+for (const width of [320, 360, 390]) {
+  test(`keeps the shared-state public link and Copy link fully inside the popover with no crowding/wrap at ${width}px`, async ({
+    page,
+  }) => {
+    test.skip(!enabled, "Persisted map E2E credentials are not configured.");
+    await page.setViewportSize({ width, height: 800 });
+    await mockEnabledSharingStatus(page);
+    await signInAndOpenMap(page);
+
+    await page.getByRole("button", { name: "Share map" }).click();
+    const dialog = page.getByRole("dialog", { name: "Share your map" });
+    await expect(dialog).toBeVisible();
+
+    // Regression coverage for the production overflow bug: the public
+    // map link input and the "Copy link" button must stay fully within
+    // the popover's own box (not just the viewport) at every affected
+    // width, and "Copy link" must render on a single line at an
+    // accessible touch-target size.
+    const popupBox = await dialog.boundingBox();
+    const input = page.getByRole("textbox", { name: "Public map link" });
+    const inputBox = await input.boundingBox();
+    const copyButton = page.getByRole("button", { name: "Copy link" });
+    const copyBox = await copyButton.boundingBox();
+    expect(popupBox).not.toBeNull();
+    expect(inputBox).not.toBeNull();
+    expect(copyBox).not.toBeNull();
+
+    expect(inputBox!.x).toBeGreaterThanOrEqual(popupBox!.x - 1);
+    expect(inputBox!.x + inputBox!.width).toBeLessThanOrEqual(
+      popupBox!.x + popupBox!.width + 1,
+    );
+    expect(copyBox!.x).toBeGreaterThanOrEqual(popupBox!.x - 1);
+    expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(
+      popupBox!.x + popupBox!.width + 1,
+    );
+
+    const copyLineCount = await copyButton.evaluate(
+      (el) => el.getClientRects().length,
+    );
+    expect(copyLineCount).toBe(1);
+    expect(copyBox!.height).toBeGreaterThanOrEqual(44);
+
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth + 1));
+
+    // The full canonical URL must remain present/copyable even though it
+    // may be visually ellipsized — copy() reads the underlying value.
+    await expect(input).toHaveValue(/\/e2e-pilot$/);
+    await copyButton.click();
+    await expect(dialog.getByRole("status")).toHaveText(
+      "Public map link copied.",
+    );
   });
 }
 

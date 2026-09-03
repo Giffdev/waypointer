@@ -124,6 +124,59 @@ describe("MapShareControl", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("gives Copy link its own visible chrome so it isn't squeezed by the icon-row's 44x44 button styling", async () => {
+    // Regression test: `.icon-controls button` previously matched this
+    // button too (a plain descendant selector), forcing it into a fixed
+    // 44x44 icon-tile box and wrapping "Copy link" onto two lines. The fix
+    // scopes that rule to direct children and gives this button its own
+    // `.secondary-button` class (matching "Open public map") so its sizing
+    // no longer depends on which ancestor row it happens to render inside.
+    const user = userEvent.setup();
+    render(<MapShareControl />);
+    await user.click(screen.getByRole("button", { name: "Share map" }));
+    await screen.findByText("Not shared");
+    await user.click(screen.getByRole("button", { name: "Share my map" }));
+    await screen.findByText("Public sharing is on");
+
+    const copyButton = screen.getByRole("button", { name: "Copy link" });
+    expect(copyButton).toHaveClass("secondary-button");
+    const openLink = screen.getByRole("link", { name: "Open public map" });
+    expect(openLink).toHaveClass("secondary-button");
+  });
+
+  it("gives the Retry sharing status button its own visible chrome, matching Copy link/Open public map", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down")),
+    );
+    const user = userEvent.setup();
+    render(<MapShareControl />);
+    await user.click(screen.getByRole("button", { name: "Share map" }));
+    await screen.findByText("Sharing status unavailable");
+
+    const retry = screen.getByRole("button", { name: "Retry sharing status" });
+    expect(retry).toHaveClass("secondary-button");
+  });
+
+  it("keeps the public map link input inside a `<label>` so it can shrink/ellipsize without breaking its accessible name", async () => {
+    // Regression guard for the popup-overflow fix: the input must remain
+    // a proper shrinkable flex/grid child (min-width:0 handled in CSS)
+    // while still being reachable by its accessible name and holding the
+    // full, untruncated URL value (copy/select still operate on the real
+    // value even though the CSS visually ellipsizes long text).
+    const user = userEvent.setup();
+    render(<MapShareControl />);
+    await user.click(screen.getByRole("button", { name: "Share map" }));
+    await screen.findByText("Not shared");
+    await user.click(screen.getByRole("button", { name: "Share my map" }));
+
+    const input = await screen.findByRole("textbox", {
+      name: "Public map link",
+    });
+    expect(input).toHaveValue("https://waypointer-app.vercel.app/test-pilot");
+    expect(input).toHaveAttribute("readonly");
+  });
+
   it("shows an error state with retry when sharing status fails to load", async () => {
     vi.stubGlobal(
       "fetch",

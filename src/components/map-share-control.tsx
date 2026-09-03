@@ -139,6 +139,7 @@ export function MapShareControl() {
               <div className="sharing-actions">
                 <button
                   type="button"
+                  className="secondary-button"
                   onClick={() => copyLink()}
                 >
                   Copy link
@@ -158,6 +159,7 @@ export function MapShareControl() {
           {failed && (
             <button
               type="button"
+              className="secondary-button"
               disabled={busy}
               onClick={() => retryStatus()}
             >
