@@ -205,12 +205,21 @@ describe("route-gated duplicate detection", () => {
       "ready",
     ]);
 
+    // `createRowFingerprint` is `VersionedFingerprint | undefined` and returns
+    // undefined for a routeless flight, while an existing candidate always
+    // carries a fingerprint. A literal non-matching stub keeps the assertion on
+    // the scoring path: the staged row has no fingerprint of its own, so the
+    // exact-fingerprint branch cannot fire and the route gate decides.
     const [againstExisting] = applyDuplicateCandidates(
       [row("row-3", first)],
       [
         {
           flightId: "flight-a",
-          fingerprint: createRowFingerprint("user-a", second),
+          fingerprint: {
+            algorithm: "sha256",
+            version: 1,
+            value: "existing-routeless",
+          },
           flight: second,
         },
       ],
