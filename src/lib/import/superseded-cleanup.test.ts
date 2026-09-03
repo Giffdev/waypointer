@@ -97,8 +97,7 @@ describe("superseded object cleanup", () => {
     );
   });
 
-  it("never deletes an object a live batch took over, and stops sweeping it", async () => {
-    const storage = { delete: vi.fn().mockResolvedValue(undefined) };
+  it("never deletes an object a live batch took over, and stops sweeping it", async () => {    const storage = { delete: vi.fn().mockResolvedValue(undefined) };
     const repository = recorder();
 
     const result = await cleanUpSupersededObjects(
@@ -115,5 +114,34 @@ describe("superseded object cleanup", () => {
       "user-1",
       "batch-1",
     );
+  });
+
+  it("survives a failed cleanup stamp and leaves the batch pending", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const storage = { delete: vi.fn().mockResolvedValue(undefined) };
+    const repository = {
+      recordBatchObjectCleanup: vi
+        .fn()
+        .mockRejectedValue(new Error("connection terminated")),
+    };
+
+    const result = await cleanUpSupersededObjects(
+      "user-1",
+      [{ batchId: "batch-1", pendingObjectKeys: ["imports/user-1/a.csv"] }],
+      storage,
+      repository,
+    );
+
+    expect(result).toEqual({
+      deletedKeys: ["imports/user-1/a.csv"],
+      failedBatchIds: ["batch-1"],
+    });
+    expect(warn).toHaveBeenCalledWith("import-superseded-cleanup-record-failed", {
+      batchId: "batch-1",
+      error: "Error",
+    });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain("imports/user-1");
+    expect(logged).not.toContain("connection terminated");
   });
 });

@@ -67,6 +67,7 @@ import type {
   PendingObjectCleanup,
   SupersededImportBatch,
 } from "./import-repository";
+import { MAX_OBJECT_CLEANUP_BATCH } from "./import-repository";
 
 export class DrizzleImportRepository
   implements ImportRepository, FlightRepository, AirportRepository
@@ -358,6 +359,7 @@ export class DrizzleImportRepository
   async supersedeUnreusableBatches(
     userId: string,
     fingerprint: VersionedFingerprint,
+    exceptBatchId?: string,
   ): Promise<SupersededImportBatch[]> {
     return this.runWithUserDb(userId, async (tx) => {
       const stale = await tx
@@ -375,6 +377,7 @@ export class DrizzleImportRepository
             inArray(importBatches.status, [
               ...SUPERSEDABLE_IMPORT_BATCH_STATUSES,
             ]),
+            ...(exceptBatchId ? [ne(importBatches.id, exceptBatchId)] : []),
           ),
         );
       const now = new Date();
@@ -401,6 +404,8 @@ export class DrizzleImportRepository
 
   // Retention sweeps ask for the batches that still owe an object deletion:
   // anything past its window that has not recorded a successful cleanup.
+  // Capped and ordered oldest first so an account that predates cleanup
+  // tracking drains over several sweeps instead of stalling one request.
   async listBatchesPendingObjectCleanup(
     userId: string,
   ): Promise<PendingObjectCleanup[]> {
@@ -419,7 +424,9 @@ export class DrizzleImportRepository
             lte(importBatches.expiresAt, new Date()),
             isNull(importBatches.originalDeletedAt),
           ),
-        );
+        )
+        .orderBy(asc(importBatches.expiresAt), asc(importBatches.id))
+        .limit(MAX_OBJECT_CLEANUP_BATCH);
       return pending.map((batch) => ({
         batchId: batch.id,
         status: batch.status,

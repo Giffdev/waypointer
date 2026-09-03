@@ -18,6 +18,7 @@ import {
   getUserImportBatch,
 } from "./service";
 import { stageFlightImport } from "./worker";
+import { createFileFingerprint } from "./fingerprint";
 import { applyProposalCorrection } from "./corrections";
 import { applyDuplicateCandidates } from "./dedupe";
 import { createRowFingerprint } from "./fingerprint";
@@ -261,6 +262,53 @@ describe("web import workflow", () => {
       status: "review",
       reused: true,
     });
+  });
+
+  it("honours the object-cleanup contract without private object storage", async () => {
+    const store = repository();
+    const repositories = { imports: store, flights: store, airports: store };
+    const upload = {
+      fileName: "logbook.csv",
+      mimeType: "text/csv",
+      sizeBytes: Buffer.byteLength(fixture),
+      content: fixture,
+    };
+    const failedAttempt = await stageFlightImport(
+      "user-a",
+      upload,
+      repositories,
+    );
+    await store.failBatch("user-a", failedAttempt.batchId, {
+      code: "processing-failed",
+      message: "The file could not be staged for review.",
+    });
+
+    const fingerprint = createFileFingerprint("user-a", fixture);
+    // The batch the caller is working on is never superseded out from under it.
+    expect(
+      await store.supersedeUnreusableBatches(
+        "user-a",
+        fingerprint,
+        failedAttempt.batchId,
+      ),
+    ).toEqual([]);
+    expect((await store.getBatch("user-a", failedAttempt.batchId))?.status).toBe(
+      "failed",
+    );
+
+    expect(
+      await store.supersedeUnreusableBatches("user-a", fingerprint),
+    ).toEqual([{ batchId: failedAttempt.batchId, pendingObjectKeys: [] }]);
+    // Nothing was ever written to object storage, so nothing is ever pending.
+    expect(await store.listBatchesPendingObjectCleanup("user-a")).toEqual([]);
+
+    expect(store.objectCleanupRecordedAt("user-a", failedAttempt.batchId)).toBe(
+      undefined,
+    );
+    await store.recordBatchObjectCleanup("user-a", failedAttempt.batchId);
+    expect(
+      store.objectCleanupRecordedAt("user-a", failedAttempt.batchId),
+    ).toEqual(expect.any(String));
   });
 
   it("scrubs review snapshots when a failed batch ages out", async () => {

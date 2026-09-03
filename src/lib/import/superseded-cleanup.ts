@@ -53,7 +53,17 @@ export async function cleanUpSupersededObjects(
       }
     }
     if (deletedEverything) {
-      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+      try {
+        await repository.recordBatchObjectCleanup(userId, batch.batchId);
+      } catch (error) {
+        // Cleanup bookkeeping must never fail the request that triggered it:
+        // the batch simply stays pending for the next sweep.
+        console.warn("import-superseded-cleanup-record-failed", {
+          batchId: batch.batchId,
+          error: errorName(error),
+        });
+        failedBatchIds.push(batch.batchId);
+      }
     } else {
       failedBatchIds.push(batch.batchId);
     }

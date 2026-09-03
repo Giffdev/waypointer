@@ -13,6 +13,7 @@ import type {
   CompleteImportStagingInput,
   CreateImportBatchInput,
   ImportRepository,
+  PendingObjectCleanup,
   SupersededImportBatch,
 } from "@/lib/db/repositories/import-repository";
 import {
@@ -40,6 +41,7 @@ type BatchRecord = {
   fileFingerprint: VersionedFingerprint;
   summary: ImportBatchSummary;
   rows: StoredImportRow[];
+  objectCleanupRecordedAt?: string;
 };
 
 type FlightRecord = {
@@ -281,11 +283,13 @@ export class InMemoryImportRepository
   async supersedeUnreusableBatches(
     userId: string,
     fingerprint: VersionedFingerprint,
+    exceptBatchId?: string,
   ): Promise<SupersededImportBatch[]> {
     requireUser(userId);
     const superseded: SupersededImportBatch[] = [];
     for (const [batchId, record] of this.batches.entries()) {
       if (
+        batchId === exceptBatchId ||
         record.userId !== userId ||
         record.fileFingerprint.version !== fingerprint.version ||
         record.fileFingerprint.value !== fingerprint.value ||
@@ -304,6 +308,29 @@ export class InMemoryImportRepository
       superseded.push({ batchId, pendingObjectKeys: [] });
     }
     return superseded;
+  }
+
+  // Batches staged here never own a private object, so a sweep has nothing to
+  // delete. The cleanup stamp is still recorded so callers that mirror the
+  // production flow observe the same state transitions.
+  async listBatchesPendingObjectCleanup(
+    userId: string,
+  ): Promise<PendingObjectCleanup[]> {
+    requireUser(userId);
+    return [];
+  }
+
+  async recordBatchObjectCleanup(
+    userId: string,
+    batchId: string,
+  ): Promise<void> {
+    const record = this.requireBatch(userId, batchId);
+    record.objectCleanupRecordedAt = new Date().toISOString();
+  }
+
+  /** Test seam: when the cleanup stamp was recorded, if at all. */
+  objectCleanupRecordedAt(userId: string, batchId: string): string | undefined {
+    return this.requireBatch(userId, batchId).objectCleanupRecordedAt;
   }
 
   async expireBatchAndScrub(userId: string, batchId: string): Promise<void> {

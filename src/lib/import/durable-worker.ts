@@ -206,15 +206,17 @@ export class DurableImportWorker {
     }
     // The same bytes may still be claimed by a failed or cancelled attempt;
     // stamping fileSha256 below would collide with the partial unique index
-    // on (user_id, file_sha256) while that attempt is not expired. The
+    // on (user_id, file_sha256) while that attempt is not expired. This job's
+    // own batch is excluded: a cancelled or retried attempt that already
+    // stamped the hash must not expire itself out from under this run. The
     // canonical key is retained rather than deleted: this job now owns it.
     await cleanUpSupersededObjects(
       job.userId,
-      await repository.supersedeUnreusableBatches(job.userId, {
-        algorithm: "sha256",
-        version: 1,
-        value: sha256,
-      }),
+      await repository.supersedeUnreusableBatches(
+        job.userId,
+        { algorithm: "sha256", version: 1, value: sha256 },
+        payload.batchId,
+      ),
       this.storage,
       repository,
       new Set([canonicalKey]),

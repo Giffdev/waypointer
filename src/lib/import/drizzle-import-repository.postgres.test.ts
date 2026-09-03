@@ -18,6 +18,7 @@ import {
   users,
 } from "@/lib/db/schema";
 import { reconcileUnresolvedAirportImports } from "./airport-reconciliation";
+import { MAX_OBJECT_CLEANUP_BATCH } from "@/lib/db/repositories/import-repository";
 import {
   automaticallyCommitImport,
   commitImportBatch,
@@ -1051,6 +1052,103 @@ postgresDescribe("PostgreSQL import journey", () => {
     expect(
       await repository.supersedeUnreusableBatches(userId, fingerprint),
     ).toEqual([]);
+  });
+
+  it("caps one cleanup sweep and keeps the remainder discoverable", async () => {
+    const userId = await createUser("cleanup-cap");
+    const repository = new DrizzleImportRepository();
+    const total = MAX_OBJECT_CLEANUP_BATCH + 3;
+    const created: string[] = [];
+    for (let index = 0; index < total; index += 1) {
+      const batchId = randomUUID();
+      created.push(batchId);
+      await repository.createBatch(userId, {
+        id: batchId,
+        fileName: `logbook-${index}.csv`,
+        fileSizeBytes: 64,
+        fileFingerprint: {
+          algorithm: "sha256",
+          version: 1,
+          value: createHash("sha256").update(batchId).digest("hex"),
+        },
+        originalObjectKey: `imports/${userId}/${batchId}/original.csv`,
+        status: "processing",
+      });
+      // Oldest first: index 0 is the furthest past its retention window.
+      await withUserDb(userId, (tx) =>
+        tx
+          .update(importBatches)
+          .set({ expiresAt: new Date(Date.now() - (total - index) * 60_000) })
+          .where(
+            and(
+              eq(importBatches.id, batchId),
+              eq(importBatches.userId, userId),
+            ),
+          ),
+      );
+    }
+
+    const first = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(first).toHaveLength(MAX_OBJECT_CLEANUP_BATCH);
+    expect(first.map((batch) => batch.batchId)).toEqual(
+      created.slice(0, MAX_OBJECT_CLEANUP_BATCH),
+    );
+
+    for (const batch of first) {
+      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    }
+
+    // The batches the cap held back are returned by the next sweep, not lost.
+    const second = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(second.map((batch) => batch.batchId)).toEqual(
+      created.slice(MAX_OBJECT_CLEANUP_BATCH),
+    );
+    for (const batch of second) {
+      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    }
+    expect(await repository.listBatchesPendingObjectCleanup(userId)).toEqual([]);
+  });
+
+  it("never supersedes the batch a caller is currently working on", async () => {
+    const userId = await createUser("self-supersede");
+    const repository = new DrizzleImportRepository();
+    const fingerprint = {
+      algorithm: "sha256" as const,
+      version: 1,
+      value: createHash("sha256").update(randomUUID()).digest("hex"),
+    };
+    const batchId = randomUUID();
+    await repository.createBatch(userId, {
+      id: batchId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 64,
+      fileFingerprint: fingerprint,
+      originalObjectKey: `imports/${userId}/${batchId}/original.csv`,
+      status: "processing",
+    });
+    await repository.failBatch(userId, batchId, {
+      code: "processing-failed",
+      message: "The import could not be processed safely.",
+    });
+
+    expect(
+      await repository.supersedeUnreusableBatches(
+        userId,
+        fingerprint,
+        batchId,
+      ),
+    ).toEqual([]);
+    expect((await repository.getBatch(userId, batchId))?.status).toBe("failed");
+
+    // A later sweep can still reclaim it once nobody is working on it.
+    expect(
+      await repository.supersedeUnreusableBatches(userId, fingerprint),
+    ).toEqual([
+      {
+        batchId,
+        pendingObjectKeys: [`imports/${userId}/${batchId}/original.csv`],
+      },
+    ]);
   });
 
   it("reconciles pending unresolved rows after alias refresh without cross-tenant or duplicate writes", async () => {

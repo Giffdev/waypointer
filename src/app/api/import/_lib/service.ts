@@ -229,6 +229,10 @@ function storageAwareImportRepository(input: {
     failBatch: (...args) => repository.failBatch(...args),
     supersedeUnreusableBatches: (...args) =>
       repository.supersedeUnreusableBatches(...args),
+    listBatchesPendingObjectCleanup: (...args) =>
+      repository.listBatchesPendingObjectCleanup(...args),
+    recordBatchObjectCleanup: (...args) =>
+      repository.recordBatchObjectCleanup(...args),
     scrubBatchRawSnapshots: (...args) =>
       repository.scrubBatchRawSnapshots(...args),
     expireBatchAndScrub: (...args) =>
@@ -271,7 +275,14 @@ async function expireOriginalUploads(userId: string): Promise<void> {
     if (batch.status !== "expired") {
       await repository.expireBatchAndScrub(userId, batch.batchId);
     }
-    await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    try {
+      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    } catch (error) {
+      console.warn("import-expired-cleanup-record-failed", {
+        batchId: batch.batchId,
+        error: error instanceof Error ? error.name : typeof error,
+      });
+    }
   }
 }
 

@@ -234,11 +234,11 @@ describe("durable import worker boundaries", () => {
     await expect(worker.runOne()).resolves.toBe(true);
 
     const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
-    expect(state.supersede).toHaveBeenCalledWith(userId, {
-      algorithm: "sha256",
-      version: 1,
-      value: canonicalHash,
-    });
+    expect(state.supersede).toHaveBeenCalledWith(
+      userId,
+      { algorithm: "sha256", version: 1, value: canonicalHash },
+      batchId,
+    );
     expect(objects.delete).toHaveBeenCalledWith(staleKey);
     expect(state.recordCleanup).toHaveBeenCalledWith(userId, "stale-batch");
     expect(state.updates).toEqual(
@@ -249,6 +249,35 @@ describe("durable import worker boundaries", () => {
         }),
       ]),
     );
+  });
+
+  it("never supersedes the batch the job is currently processing", async () => {
+    const queue = jobs();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      storage(),
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
+    expect(state.supersede).toHaveBeenCalledWith(
+      userId,
+      { algorithm: "sha256", version: 1, value: canonicalHash },
+      batchId,
+    );
+    expect(state.expire).not.toHaveBeenCalled();
+    expect(state.recordCleanup).not.toHaveBeenCalledWith(userId, batchId);
+    expect(state.batch).toMatchObject({
+      status: "processing",
+      fileSha256: canonicalHash,
+    });
+    // Still stampable by a later sweep: nothing claimed its objects.
+    expect(state.batch.originalDeletedAt).toBeUndefined();
   });
 
   it("keeps a superseded upload sweepable when its delete fails, and still stages", async () => {
