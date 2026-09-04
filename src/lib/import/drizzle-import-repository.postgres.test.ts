@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { and, eq, inArray } from "drizzle-orm";
@@ -18,13 +18,15 @@ import {
   users,
 } from "@/lib/db/schema";
 import { reconcileUnresolvedAirportImports } from "./airport-reconciliation";
+import { MAX_OBJECT_CLEANUP_BATCH } from "@/lib/db/repositories/import-repository";
 import {
   automaticallyCommitImport,
   commitImportBatch,
   decideImportRows,
   getUserImportBatch,
 } from "./service";
-import { stageFlightImport } from "./worker";
+import { stageFlightImport, stageMappedFlightImport } from "./worker";
+import type { GenericCsvMapping } from "./generic-csv";
 import { applyProposalCorrection } from "./corrections";
 import { applyDuplicateCandidates } from "./dedupe";
 import { createRowFingerprint } from "./fingerprint";
@@ -774,6 +776,381 @@ postgresDescribe("PostgreSQL import journey", () => {
     expect(otherStops).toEqual([]);
   });
 
+  it("assesses duplicates against multi-stop routes and commits only the missing leg", async () => {
+    const userId = await createUser("multi-stop-dedupe");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const bandon = `B${suffix}`;
+    const roseburg = `R${suffix}`;
+    const northBend = `N${suffix}`;
+    const [bandonId, roseburgId, northBendId] = Array.from(
+      { length: 3 },
+      () => randomUUID(),
+    );
+    cleanupAirports.push(bandonId, roseburgId, northBendId);
+    await getDb().insert(airports).values([
+      airportRow(bandonId, bandon, null),
+      airportRow(roseburgId, roseburg, null),
+      airportRow(northBendId, northBend, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: bandonId, code: bandon, codeType: "icao", priority: 10 },
+      { airportId: roseburgId, code: roseburg, codeType: "icao", priority: 10 },
+      {
+        airportId: northBendId,
+        code: northBend,
+        codeType: "icao",
+        priority: 10,
+      },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    // The already-imported day contains a multi-stop leg whose middle stop is
+    // neither endpoint, which is what the duplicate query has to load.
+    const flownLegs = [
+      `2026-08-14,${bandon},${bandon},${roseburg},1.4`,
+      `2026-08-14,${bandon},${northBend},,0.7`,
+    ];
+    const first = await runAutomaticMappedImport(
+      userId,
+      routeCsv(flownLegs),
+      "myflightbook-day.csv",
+      repository,
+    );
+    expect(first).toMatchObject({
+      status: "committed",
+      completion: { importedRows: 2 },
+    });
+
+    const stagedRows =
+      (await repository.getRowsForCommit(userId, first.batchId)) ?? [];
+    const candidates = await repository.findDuplicateCandidates(
+      userId,
+      stagedRows,
+    );
+    const multiStop = candidates.find(
+      ({ flight }) => (flight?.airportMatches?.length ?? 0) === 3,
+    );
+    expect(multiStop?.flight?.airportIdentifiers).toEqual([
+      bandon,
+      roseburg,
+      bandon,
+    ]);
+
+    const reexport = await runAutomaticMappedImport(
+      userId,
+      routeCsv([...flownLegs, `2026-08-14,${northBend},${roseburg},,0.6`]),
+      "myflightbook-day-reexport.csv",
+      repository,
+    );
+    expect(reexport).toMatchObject({
+      status: "committed",
+      reused: false,
+      completion: { importedRows: 1, duplicateRows: 2 },
+    });
+    const flown = await repository.listFlights(userId);
+    expect(flown).toHaveLength(3);
+    expect(
+      flown.map(({ airportSequence }) =>
+        airportSequence?.map(({ code }) => code).join(">"),
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        `${bandon}>${roseburg}>${bandon}`,
+        `${bandon}>${northBend}`,
+        `${northBend}>${roseburg}`,
+      ]),
+    );
+  });
+
+  it("keeps importing when a stored flight's airport metadata cannot be rendered", async () => {
+    const userId = await createUser("stale-airport");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const origin = `A${suffix}`;
+    const stale = `S${suffix}`;
+    const addition = `D${suffix}`;
+    const [originId, staleId, additionId] = Array.from({ length: 3 }, () =>
+      randomUUID(),
+    );
+    cleanupAirports.push(originId, staleId, additionId);
+    await getDb().insert(airports).values([
+      airportRow(originId, origin, null),
+      airportRow(staleId, stale, null),
+      airportRow(additionId, addition, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: originId, code: origin, codeType: "icao", priority: 10 },
+      { airportId: staleId, code: stale, codeType: "icao", priority: 10 },
+      { airportId: additionId, code: addition, codeType: "icao", priority: 10 },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    const committed = await runAutomaticImport(
+      userId,
+      foreFlight([`2026-08-20,SYNTH-A,${origin},${stale},50,09:00,0.5,flown`]),
+      "flown.csv",
+      repository,
+    );
+    expect(committed).toMatchObject({ completion: { importedRows: 1 } });
+
+    // A catalog row that lost every public identifier cannot be turned into a
+    // proposal, and that must not take the rest of the import down with it.
+    await getDb()
+      .update(airports)
+      .set({
+        icao: null,
+        iata: null,
+        localCode: null,
+        sourceIdent: null,
+        sourceIdentProvenance: null,
+      })
+      .where(eq(airports.id, staleId));
+
+    const later = await runAutomaticImport(
+      userId,
+      foreFlight([
+        `2026-08-20,SYNTH-A,${origin},${addition},60,10:00,0.6,new leg`,
+      ]),
+      "new-leg.csv",
+      repository,
+    );
+    expect(later).toMatchObject({
+      status: "committed",
+      completion: { importedRows: 1 },
+    });
+    const persisted = await withUserDb(userId, (tx) =>
+      tx.select({ id: flights.id }).from(flights).where(eq(flights.userId, userId)),
+    );
+    expect(persisted).toHaveLength(2);
+  });
+
+  it("stages the same file again after a failed attempt and still reuses committed imports", async () => {
+    const userId = await createUser("failed-retry");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const origin = `F${suffix}`;
+    const destination = `T${suffix}`;
+    const [originId, destinationId] = Array.from({ length: 2 }, () =>
+      randomUUID(),
+    );
+    cleanupAirports.push(originId, destinationId);
+    await getDb().insert(airports).values([
+      airportRow(originId, origin, null),
+      airportRow(destinationId, destination, null),
+    ]);
+    await getDb().insert(airportAliases).values([
+      { airportId: originId, code: origin, codeType: "icao", priority: 10 },
+      {
+        airportId: destinationId,
+        code: destination,
+        codeType: "icao",
+        priority: 10,
+      },
+    ]);
+
+    const repository = new DrizzleImportRepository();
+    const repositories = {
+      imports: repository,
+      flights: repository,
+      airports: repository,
+    };
+    const content = foreFlight([
+      `2026-08-21,SYNTH-A,${origin},${destination},70,11:00,0.7,retry`,
+    ]);
+    const failedAttempt = await stageFlightImport(
+      userId,
+      upload(content, "logbook.csv"),
+      repositories,
+    );
+    await repository.failBatch(userId, failedAttempt.batchId, {
+      code: "processing-failed",
+      message: "The file could not be staged for review.",
+    });
+
+    const retry = await runAutomaticImport(
+      userId,
+      content,
+      "logbook.csv",
+      repository,
+    );
+    expect(retry.batchId).not.toBe(failedAttempt.batchId);
+    expect(retry).toMatchObject({
+      status: "committed",
+      reused: false,
+      completion: { importedRows: 1 },
+    });
+    expect(
+      (await repository.getBatch(userId, failedAttempt.batchId))?.status,
+    ).toBe("expired");
+
+    const reused = await runAutomaticImport(
+      userId,
+      content,
+      "logbook-renamed.csv",
+      repository,
+    );
+    expect(reused).toMatchObject({
+      batchId: retry.batchId,
+      status: "committed",
+      reused: true,
+      completion: { importedRows: 1 },
+    });
+    expect(await repository.listFlights(userId)).toHaveLength(1);
+  });
+
+  it("keeps a superseded upload discoverable until its deletion is recorded", async () => {
+    const userId = await createUser("cleanup-retry");
+    const repository = new DrizzleImportRepository();
+    const fingerprint = {
+      algorithm: "sha256" as const,
+      version: 1,
+      value: createHash("sha256").update(randomUUID()).digest("hex"),
+    };
+    const failedId = randomUUID();
+    const objectKey = `imports/${userId}/${failedId}/${fingerprint.value}.csv`;
+    await repository.createBatch(userId, {
+      id: failedId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 128,
+      fileFingerprint: fingerprint,
+      originalObjectKey: objectKey,
+      status: "processing",
+    });
+    await repository.failBatch(userId, failedId, {
+      code: "processing-failed",
+      message: "The import could not be processed safely.",
+    });
+
+    // A retry that never calls supersede itself still must not lose the key:
+    // createBatch supersedes internally and drops the return value.
+    const retryId = randomUUID();
+    await repository.createBatch(userId, {
+      id: retryId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 128,
+      fileFingerprint: fingerprint,
+      originalObjectKey: `imports/${userId}/${retryId}/${fingerprint.value}.csv`,
+      status: "processing",
+    });
+    expect((await repository.getBatch(userId, failedId))?.status).toBe(
+      "expired",
+    );
+
+    const pending = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(pending).toContainEqual({
+      batchId: failedId,
+      status: "expired",
+      objectKeys: [objectKey],
+    });
+    expect(pending.map((batch) => batch.batchId)).not.toContain(retryId);
+
+    // Only a confirmed deletion stops the sweep from retrying.
+    await repository.recordBatchObjectCleanup(userId, failedId);
+    expect(
+      (await repository.listBatchesPendingObjectCleanup(userId)).map(
+        (batch) => batch.batchId,
+      ),
+    ).not.toContain(failedId);
+    expect(
+      await repository.supersedeUnreusableBatches(userId, fingerprint),
+    ).toEqual([]);
+  });
+
+  it("caps one cleanup sweep and keeps the remainder discoverable", async () => {
+    const userId = await createUser("cleanup-cap");
+    const repository = new DrizzleImportRepository();
+    const total = MAX_OBJECT_CLEANUP_BATCH + 3;
+    const created: string[] = [];
+    for (let index = 0; index < total; index += 1) {
+      const batchId = randomUUID();
+      created.push(batchId);
+      await repository.createBatch(userId, {
+        id: batchId,
+        fileName: `logbook-${index}.csv`,
+        fileSizeBytes: 64,
+        fileFingerprint: {
+          algorithm: "sha256",
+          version: 1,
+          value: createHash("sha256").update(batchId).digest("hex"),
+        },
+        originalObjectKey: `imports/${userId}/${batchId}/original.csv`,
+        status: "processing",
+      });
+      // Oldest first: index 0 is the furthest past its retention window.
+      await withUserDb(userId, (tx) =>
+        tx
+          .update(importBatches)
+          .set({ expiresAt: new Date(Date.now() - (total - index) * 60_000) })
+          .where(
+            and(
+              eq(importBatches.id, batchId),
+              eq(importBatches.userId, userId),
+            ),
+          ),
+      );
+    }
+
+    const first = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(first).toHaveLength(MAX_OBJECT_CLEANUP_BATCH);
+    expect(first.map((batch) => batch.batchId)).toEqual(
+      created.slice(0, MAX_OBJECT_CLEANUP_BATCH),
+    );
+
+    for (const batch of first) {
+      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    }
+
+    // The batches the cap held back are returned by the next sweep, not lost.
+    const second = await repository.listBatchesPendingObjectCleanup(userId);
+    expect(second.map((batch) => batch.batchId)).toEqual(
+      created.slice(MAX_OBJECT_CLEANUP_BATCH),
+    );
+    for (const batch of second) {
+      await repository.recordBatchObjectCleanup(userId, batch.batchId);
+    }
+    expect(await repository.listBatchesPendingObjectCleanup(userId)).toEqual([]);
+  });
+
+  it("never supersedes the batch a caller is currently working on", async () => {
+    const userId = await createUser("self-supersede");
+    const repository = new DrizzleImportRepository();
+    const fingerprint = {
+      algorithm: "sha256" as const,
+      version: 1,
+      value: createHash("sha256").update(randomUUID()).digest("hex"),
+    };
+    const batchId = randomUUID();
+    await repository.createBatch(userId, {
+      id: batchId,
+      fileName: "logbook.csv",
+      fileSizeBytes: 64,
+      fileFingerprint: fingerprint,
+      originalObjectKey: `imports/${userId}/${batchId}/original.csv`,
+      status: "processing",
+    });
+    await repository.failBatch(userId, batchId, {
+      code: "processing-failed",
+      message: "The import could not be processed safely.",
+    });
+
+    expect(
+      await repository.supersedeUnreusableBatches(
+        userId,
+        fingerprint,
+        batchId,
+      ),
+    ).toEqual([]);
+    expect((await repository.getBatch(userId, batchId))?.status).toBe("failed");
+
+    // A later sweep can still reclaim it once nobody is working on it.
+    expect(
+      await repository.supersedeUnreusableBatches(userId, fingerprint),
+    ).toEqual([
+      {
+        batchId,
+        pendingObjectKeys: [`imports/${userId}/${batchId}/original.csv`],
+      },
+    ]);
+  });
+
   it("reconciles pending unresolved rows after alias refresh without cross-tenant or duplicate writes", async () => {
     const ownerId = await createUser("reconcile-owner");
     const otherId = await createUser("reconcile-other");
@@ -925,6 +1302,42 @@ async function runAutomaticImport(
     repository,
     repository,
   );
+}
+
+const routeMapping: GenericCsvMapping = {
+  columns: {
+    date: "Date",
+    origin: "From",
+    destination: "To",
+    route: "Route",
+    duration: "Duration",
+  },
+  dateFormat: "iso",
+  durationFormat: "decimal-hours",
+  defaults: { kind: "private", role: "pilot" },
+};
+
+function routeCsv(rows: string[]): string {
+  return ["Date,From,To,Route,Duration", ...rows, ""].join("\n");
+}
+
+async function runAutomaticMappedImport(
+  userId: string,
+  content: string,
+  fileName: string,
+  repository: DrizzleImportRepository,
+) {
+  const staged = await stageMappedFlightImport(
+    userId,
+    upload(content, fileName),
+    routeMapping,
+    {
+      imports: repository,
+      flights: repository,
+      airports: repository,
+    },
+  );
+  return automaticallyCommitImport(userId, staged, repository, repository);
 }
 
 async function createUser(label: string): Promise<string> {

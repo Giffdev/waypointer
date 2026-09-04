@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (disable/republish). (#44)
 
 ### Fixed
+- Multi-stop import recovery: re-importing a logbook that contains a
+  multi-stop day no longer fails the whole batch. Duplicate assessment loaded
+  the airport catalog from a flight's origin and destination only, so any
+  stored flight with an intermediate stop (for example `S05 → KRBG → S05`)
+  threw while candidates were being built, the batch was marked
+  `processing-failed`, and nothing was committed — which is why a missing
+  Roseburg leg stayed missing. Stops are now read before the catalog query and
+  every stop airport is loaded, matching the flight list. A stored flight whose
+  airport metadata still cannot be rendered no longer breaks the import: it
+  falls back to exact-fingerprint duplicate matching, so no route is invented
+  and no duplicate flight can be created.
+- Retrying an identical failed upload: a file that failed to process kept
+  owning its content hash, so re-uploading the same bytes returned the failed
+  batch instead of staging a new one and the user could never recover without
+  editing the file. Failed and cancelled batches are no longer reusable — they
+  are scrubbed, expired and their private upload is deleted — while successful
+  and committed imports are still deduplicated exactly as before. If deleting
+  the superseded upload fails, the batch stays in the retention sweep and the
+  deletion is retried rather than being silently orphaned.
 - Airport display codes: unscheduled small airports now prefer their local/FAA
   identifier over a stale IATA code, so Bandon State (`KS05`) displays and
   canonicalizes as `S05` instead of `BDY`, while every alias (`BDY`, `S05`,

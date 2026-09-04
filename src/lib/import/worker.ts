@@ -173,7 +173,12 @@ async function stageCreatedBatch(
       rows: stagedRows,
     });
     return uploadResponse(batch, false);
-  } catch {
+  } catch (error) {
+    console.error("import-staging-failed", {
+      batchId,
+      adapterId: parsed.adapterId,
+      error: errorName(error),
+    });
     const failed = await repositories.imports.failBatch(userId, batchId, {
       code: "processing-failed",
       message: "The file could not be staged for review.",
@@ -210,18 +215,32 @@ async function stageCreatedMappedBatch(
     });
     return uploadResponse(batch, false);
   } catch (error) {
+    const code =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : "processing-failed";
+    console.error("import-staging-failed", {
+      batchId,
+      adapterId: "generic-csv-v1",
+      code,
+      error: errorName(error),
+    });
     const failed = await repositories.imports.failBatch(userId, batchId, {
-      code:
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        typeof error.code === "string"
-          ? error.code
-          : "processing-failed",
+      code,
       message: "The mapped CSV could not be staged for review.",
     });
     return uploadResponse(failed, false);
   }
+}
+
+// Failures are reported through the batch status/error UX; the class name is
+// logged so a staging regression is attributable without putting logbook
+// contents in the logs.
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 async function mapParsedRows(

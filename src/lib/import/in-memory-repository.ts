@@ -13,6 +13,8 @@ import type {
   CompleteImportStagingInput,
   CreateImportBatchInput,
   ImportRepository,
+  PendingObjectCleanup,
+  SupersededImportBatch,
 } from "@/lib/db/repositories/import-repository";
 import {
   IMPORT_CONTRACT_VERSION,
@@ -28,6 +30,10 @@ import {
   type VersionedFingerprint,
 } from "./types";
 import { createAcceptedDuplicateFingerprint } from "./fingerprint";
+import {
+  SUPERSEDABLE_IMPORT_BATCH_STATUSES,
+  isReusableImportBatchStatus,
+} from "./batch-lifecycle";
 
 type BatchRecord = {
   userId: string;
@@ -35,6 +41,7 @@ type BatchRecord = {
   fileFingerprint: VersionedFingerprint;
   summary: ImportBatchSummary;
   rows: StoredImportRow[];
+  objectCleanupRecordedAt?: string;
 };
 
 type FlightRecord = {
@@ -193,7 +200,7 @@ export class InMemoryImportRepository
         candidate.userId === userId &&
         candidate.fileFingerprint.version === fingerprint.version &&
         candidate.fileFingerprint.value === fingerprint.value &&
-        candidate.summary.status !== "expired",
+        isReusableImportBatchStatus(candidate.summary.status),
     );
     return record ? clone(record.summary) : null;
   }
@@ -203,12 +210,13 @@ export class InMemoryImportRepository
     input: CreateImportBatchInput,
   ): Promise<ImportBatchSummary> {
     requireUser(userId);
+    await this.supersedeUnreusableBatches(userId, input.fileFingerprint);
     const existing = [...this.batches.values()].find(
       (candidate) =>
         candidate.userId === userId &&
         candidate.fileFingerprint.version === input.fileFingerprint.version &&
         candidate.fileFingerprint.value === input.fileFingerprint.value &&
-        candidate.summary.status !== "expired",
+        isReusableImportBatchStatus(candidate.summary.status),
     );
     if (existing) return clone(existing.summary);
     const now = new Date().toISOString();
@@ -267,6 +275,62 @@ export class InMemoryImportRepository
       updatedAt: new Date().toISOString(),
     };
     return clone(record.summary);
+  }
+
+  // Mirrors DrizzleImportRepository: a failed or cancelled attempt stops
+  // owning the file fingerprint so the same bytes can be staged again. This
+  // repository has no private object storage, so nothing is ever pending.
+  async supersedeUnreusableBatches(
+    userId: string,
+    fingerprint: VersionedFingerprint,
+    exceptBatchId?: string,
+  ): Promise<SupersededImportBatch[]> {
+    requireUser(userId);
+    const superseded: SupersededImportBatch[] = [];
+    for (const [batchId, record] of this.batches.entries()) {
+      if (
+        batchId === exceptBatchId ||
+        record.userId !== userId ||
+        record.fileFingerprint.version !== fingerprint.version ||
+        record.fileFingerprint.value !== fingerprint.value ||
+        !(
+          SUPERSEDABLE_IMPORT_BATCH_STATUSES as readonly string[]
+        ).includes(record.summary.status)
+      ) {
+        continue;
+      }
+      scrubRawSnapshots(record.rows);
+      record.summary = {
+        ...record.summary,
+        status: "expired",
+        updatedAt: new Date().toISOString(),
+      };
+      superseded.push({ batchId, pendingObjectKeys: [] });
+    }
+    return superseded;
+  }
+
+  // Batches staged here never own a private object, so a sweep has nothing to
+  // delete. The cleanup stamp is still recorded so callers that mirror the
+  // production flow observe the same state transitions.
+  async listBatchesPendingObjectCleanup(
+    userId: string,
+  ): Promise<PendingObjectCleanup[]> {
+    requireUser(userId);
+    return [];
+  }
+
+  async recordBatchObjectCleanup(
+    userId: string,
+    batchId: string,
+  ): Promise<void> {
+    const record = this.requireBatch(userId, batchId);
+    record.objectCleanupRecordedAt = new Date().toISOString();
+  }
+
+  /** Test seam: when the cleanup stamp was recorded, if at all. */
+  objectCleanupRecordedAt(userId: string, batchId: string): string | undefined {
+    return this.requireBatch(userId, batchId).objectCleanupRecordedAt;
   }
 
   async expireBatchAndScrub(userId: string, batchId: string): Promise<void> {

@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   automaticallyCommit: vi.fn(),
   scrub: vi.fn(),
   expire: vi.fn(),
+  supersede: vi.fn(),
+  recordCleanup: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -27,6 +29,8 @@ vi.mock("@/lib/db/repositories/drizzle-import-repository", () => ({
   DrizzleImportRepository: class DrizzleImportRepository {
     scrubBatchRawSnapshots = state.scrub;
     expireBatchAndScrub = state.expire;
+    supersedeUnreusableBatches = state.supersede;
+    recordBatchObjectCleanup = state.recordCleanup;
   },
 }));
 
@@ -152,6 +156,8 @@ beforeEach(() => {
   };
   state.duplicate = null;
   state.updates = [];
+  state.supersede.mockResolvedValue([]);
+  state.recordCleanup.mockResolvedValue(undefined);
   state.stage.mockResolvedValue({ batchId, status: "review", reused: false });
   state.stageMapped.mockResolvedValue({
     batchId,
@@ -207,6 +213,125 @@ describe("durable import worker boundaries", () => {
         }),
       ]),
     );
+  });
+
+  it("supersedes an earlier failed attempt on the same bytes before claiming the hash", async () => {
+    const staleKey = `imports/${userId}/stale/${originalHash}.csv`;
+    state.supersede.mockResolvedValue([
+      { batchId: "stale-batch", pendingObjectKeys: [staleKey] },
+    ]);
+    const queue = jobs();
+    const objects = storage();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
+    expect(state.supersede).toHaveBeenCalledWith(
+      userId,
+      { algorithm: "sha256", version: 1, value: canonicalHash },
+      batchId,
+    );
+    expect(objects.delete).toHaveBeenCalledWith(staleKey);
+    expect(state.recordCleanup).toHaveBeenCalledWith(userId, "stale-batch");
+    expect(state.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "processing",
+          fileSha256: canonicalHash,
+        }),
+      ]),
+    );
+  });
+
+  it("never supersedes the batch the job is currently processing", async () => {
+    const queue = jobs();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      storage(),
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
+    expect(state.supersede).toHaveBeenCalledWith(
+      userId,
+      { algorithm: "sha256", version: 1, value: canonicalHash },
+      batchId,
+    );
+    expect(state.expire).not.toHaveBeenCalled();
+    expect(state.recordCleanup).not.toHaveBeenCalledWith(userId, batchId);
+    expect(state.batch).toMatchObject({
+      status: "processing",
+      fileSha256: canonicalHash,
+    });
+    // Still stampable by a later sweep: nothing claimed its objects.
+    expect(state.batch.originalDeletedAt).toBeUndefined();
+  });
+
+  it("keeps a superseded upload sweepable when its delete fails, and still stages", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const staleKey = `imports/${userId}/stale/${originalHash}.csv`;
+    state.supersede.mockResolvedValue([
+      { batchId: "stale-batch", pendingObjectKeys: [staleKey] },
+    ]);
+    const queue = jobs();
+    const objects = storage({
+      delete: vi.fn().mockRejectedValue(new Error("bucket unavailable")),
+    });
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    expect(state.recordCleanup).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "import-superseded-object-delete-failed",
+      { batchId: "stale-batch", error: "Error" },
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(staleKey);
+    expect(state.stage).toHaveBeenCalledOnce();
+    expect(queue.complete).toHaveBeenCalledWith(jobId, "worker-1");
+  });
+
+  it("never deletes the canonical object a superseded batch already held", async () => {
+    const canonicalHash = createHash("sha256").update(cleanBytes).digest("hex");
+    const canonicalKey = `imports/${userId}/${batchId}/${canonicalHash}.csv`;
+    state.supersede.mockResolvedValue([
+      { batchId: "stale-batch", pendingObjectKeys: [canonicalKey] },
+    ]);
+    const queue = jobs();
+    const objects = storage();
+    const worker = new DurableImportWorker(
+      queue as never,
+      queue as never,
+      objects,
+      scanner(),
+      "worker-1",
+      120,
+    );
+
+    await expect(worker.runOne()).resolves.toBe(true);
+
+    expect(objects.delete).not.toHaveBeenCalledWith(canonicalKey);
+    expect(state.recordCleanup).toHaveBeenCalledWith(userId, "stale-batch");
   });
 
   it("revalidates and stages the immutable per-job mapping after a clean scan", async () => {

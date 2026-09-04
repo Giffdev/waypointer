@@ -6,7 +6,10 @@ import {
   getTableColumns,
   ilike,
   inArray,
+  isNull,
+  lte,
   ne,
+  notInArray,
   or,
 } from "drizzle-orm";
 import type { Airport, Flight, FlightSource } from "@/lib/flight-data";
@@ -15,6 +18,10 @@ import type {
   ExistingFingerprintCandidate,
 } from "@/lib/import/dedupe";
 import { createAcceptedDuplicateFingerprint } from "@/lib/import/fingerprint";
+import {
+  NON_REUSABLE_IMPORT_BATCH_STATUSES,
+  SUPERSEDABLE_IMPORT_BATCH_STATUSES,
+} from "@/lib/import/batch-lifecycle";
 import {
   airportSearchPhoneticKeys,
   selectBestAirportAliasMatches,
@@ -57,7 +64,10 @@ import type {
   CompleteImportStagingInput,
   CreateImportBatchInput,
   ImportRepository,
+  PendingObjectCleanup,
+  SupersededImportBatch,
 } from "./import-repository";
+import { MAX_OBJECT_CLEANUP_BATCH } from "./import-repository";
 
 export class DrizzleImportRepository
   implements ImportRepository, FlightRepository, AirportRepository
@@ -330,7 +340,9 @@ export class DrizzleImportRepository
           and(
             eq(importBatches.userId, userId),
             eq(importBatches.fileSha256, fingerprint.value),
-            ne(importBatches.status, "expired"),
+            notInArray(importBatches.status, [
+              ...NON_REUSABLE_IMPORT_BATCH_STATUSES,
+            ]),
           ),
         )
         .limit(1);
@@ -338,10 +350,119 @@ export class DrizzleImportRepository
     });
   }
 
+  // Frees the (user_id, file_sha256) uniqueness slot held by batches that can
+  // no longer be reused, so the same bytes can be staged again after a failed
+  // attempt. The superseded rows keep their object keys and a null
+  // originalDeletedAt, and their retention window is closed immediately, so a
+  // failed or skipped delete is still found by listBatchesPendingObjectCleanup
+  // instead of orphaning a private upload.
+  async supersedeUnreusableBatches(
+    userId: string,
+    fingerprint: VersionedFingerprint,
+    exceptBatchId?: string,
+  ): Promise<SupersededImportBatch[]> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const stale = await tx
+        .select({
+          id: importBatches.id,
+          originalObjectKey: importBatches.originalObjectKey,
+          quarantineObjectKey: importBatches.quarantineObjectKey,
+          originalDeletedAt: importBatches.originalDeletedAt,
+        })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.fileSha256, fingerprint.value),
+            inArray(importBatches.status, [
+              ...SUPERSEDABLE_IMPORT_BATCH_STATUSES,
+            ]),
+            ...(exceptBatchId ? [ne(importBatches.id, exceptBatchId)] : []),
+          ),
+        );
+      const now = new Date();
+      for (const batch of stale) {
+        await scrubRawSnapshots(tx, userId, batch.id, now);
+        await tx
+          .update(importBatches)
+          .set({ status: "expired", expiresAt: now, updatedAt: now })
+          .where(
+            and(
+              eq(importBatches.id, batch.id),
+              eq(importBatches.userId, userId),
+            ),
+          );
+      }
+      return stale.map((batch) => ({
+        batchId: batch.id,
+        pendingObjectKeys: batch.originalDeletedAt
+          ? []
+          : objectKeysFor(batch),
+      }));
+    });
+  }
+
+  // Retention sweeps ask for the batches that still owe an object deletion:
+  // anything past its window that has not recorded a successful cleanup.
+  // Capped and ordered oldest first so an account that predates cleanup
+  // tracking drains over several sweeps instead of stalling one request.
+  async listBatchesPendingObjectCleanup(
+    userId: string,
+  ): Promise<PendingObjectCleanup[]> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const pending = await tx
+        .select({
+          id: importBatches.id,
+          status: importBatches.status,
+          originalObjectKey: importBatches.originalObjectKey,
+          quarantineObjectKey: importBatches.quarantineObjectKey,
+        })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            lte(importBatches.expiresAt, new Date()),
+            isNull(importBatches.originalDeletedAt),
+          ),
+        )
+        .orderBy(asc(importBatches.expiresAt), asc(importBatches.id))
+        .limit(MAX_OBJECT_CLEANUP_BATCH);
+      return pending.map((batch) => ({
+        batchId: batch.id,
+        status: batch.status,
+        objectKeys: objectKeysFor(batch),
+      }));
+    });
+  }
+
+  // Only ever called after every object for the batch is confirmed gone (or
+  // has been handed to a live batch); a failed delete leaves the stamp null so
+  // the next sweep retries it.
+  async recordBatchObjectCleanup(
+    userId: string,
+    batchId: string,
+  ): Promise<void> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const now = new Date();
+      await tx
+        .update(importBatches)
+        .set({ originalDeletedAt: now, updatedAt: now })
+        .where(
+          and(eq(importBatches.id, batchId), eq(importBatches.userId, userId)),
+        );
+    });
+  }
+
   async createBatch(
     userId: string,
     input: CreateImportBatchInput,
   ): Promise<ImportBatchSummary> {
+    // Retries of the same file are only possible once the failed attempt
+    // stops holding the uniqueness slot. Object cleanup is tracked on the
+    // superseded rows themselves, so callers that own storage can delete the
+    // returned keys immediately while repository-only callers still leave the
+    // work discoverable for the retention sweep.
+    await this.supersedeUnreusableBatches(userId, input.fileFingerprint);
     return this.runWithUserDb(userId, async (tx) => {
       const [batch] = await tx
         .insert(importBatches)
@@ -367,7 +488,9 @@ export class DrizzleImportRepository
           and(
             eq(importBatches.userId, userId),
             eq(importBatches.fileSha256, input.fileFingerprint.value),
-            ne(importBatches.status, "expired"),
+            notInArray(importBatches.status, [
+              ...NON_REUSABLE_IMPORT_BATCH_STATUSES,
+            ]),
           ),
         )
         .limit(1);
@@ -782,21 +905,10 @@ export class DrizzleImportRepository
           ),
         );
       if (matches.length === 0) return [];
-      const airportIds = [
-        ...new Set(
-          matches.flatMap((flight) => [
-            flight.originAirportId,
-            flight.destinationAirportId,
-          ]),
-        ),
-      ];
-      const airportRows = await tx
-        .select()
-        .from(airports)
-        .where(inArray(airports.id, airportIds));
-      const airportById = new Map(
-        airportRows.map((airport) => [airport.id, airport]),
-      );
+      // Stops are read before the airport catalog query so intermediate stop
+      // airports are part of the `airportIds` union; loading only the
+      // endpoints leaves multi-stop routes unresolvable. listFlights uses the
+      // same ordering for the same reason.
       const stopRows = await tx
         .select()
         .from(flightStops)
@@ -810,25 +922,59 @@ export class DrizzleImportRepository
           ),
         )
         .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
+      const airportIds = [
+        ...new Set([
+          ...matches.flatMap((flight) => [
+            flight.originAirportId,
+            flight.destinationAirportId,
+          ]),
+          ...stopRows.map((stop) => stop.airportId),
+        ]),
+      ];
+      const airportRows = await tx
+        .select()
+        .from(airports)
+        .where(inArray(airports.id, airportIds));
+      const airportById = new Map(
+        airportRows.map((airport) => [airport.id, airport]),
+      );
       const stopsByFlight = new Map<string, typeof stopRows>();
       for (const stop of stopRows) {
         const stops = stopsByFlight.get(stop.flightId) ?? [];
         stops.push(stop);
         stopsByFlight.set(stop.flightId, stops);
       }
-      return matches.map((match) => ({
-        flightId: match.id,
-        fingerprint: {
-          algorithm: "sha256",
+      return matches.map((match) => {
+        const stops = stopsByFlight.get(match.id);
+        const fingerprint = {
+          algorithm: "sha256" as const,
           version: 1,
           value: match.fingerprint,
-        },
-        flight: databaseFlightProposal(
+        };
+        // An existing flight whose airport catalog metadata cannot be
+        // rendered must not abort duplicate assessment for the whole upload.
+        // The candidate is still returned without a route so exact-fingerprint
+        // dedupe keeps working (ExistingFingerprintCandidate.flight is
+        // optional precisely for this); it is never fabricated from the
+        // endpoints, which would invent a route the pilot did not fly.
+        const unresolvable = unresolvableRouteAirportIds(
           match,
           airportById,
-          stopsByFlight.get(match.id),
-        ),
-      }));
+          stops,
+        );
+        if (unresolvable.length > 0) {
+          console.warn("import-duplicate-candidate-route-unresolved", {
+            flightId: match.id,
+            unresolvedAirportIds: unresolvable,
+          });
+          return { flightId: match.id, fingerprint };
+        }
+        return {
+          flightId: match.id,
+          fingerprint,
+          flight: databaseFlightProposal(match, airportById, stops),
+        };
+      });
     });
   }
 
@@ -1135,6 +1281,21 @@ async function persistDuplicateCandidates(
   }
 }
 
+// The private objects a batch is still responsible for. Kept in one place so
+// cleanup discovery and supersession can never disagree about what to delete.
+function objectKeysFor(batch: {
+  originalObjectKey: string | null;
+  quarantineObjectKey: string | null;
+}): string[] {
+  return [
+    ...new Set(
+      [batch.originalObjectKey, batch.quarantineObjectKey].filter(
+        (key): key is string => Boolean(key),
+      ),
+    ),
+  ];
+}
+
 async function scrubRawSnapshots(
   tx: DatabaseTransaction,
   userId: string,
@@ -1310,6 +1471,39 @@ function toAirport(row: AirportRow): Airport {
   };
 }
 
+function routeAirportIds(
+  row: FlightRow,
+  stopRows?: Array<typeof flightStops.$inferSelect>,
+): string[] {
+  return stopRows && stopRows.length >= 2
+    ? stopRows.map(({ airportId }) => airportId)
+    : [row.originAirportId, row.destinationAirportId];
+}
+
+// Duplicate assessment is read-only enrichment: a candidate whose catalog
+// metadata is missing or unusable is reported instead of thrown so one bad
+// stored flight cannot fail an entire import. Returns the airport ids that
+// databaseFlightProposal would not be able to render.
+function unresolvableRouteAirportIds(
+  row: FlightRow,
+  airportById: Map<string, AirportRow>,
+  stopRows?: Array<typeof flightStops.$inferSelect>,
+): string[] {
+  const required = [
+    row.originAirportId,
+    row.destinationAirportId,
+    ...routeAirportIds(row, stopRows),
+  ];
+  return [
+    ...new Set(
+      required.filter((airportId) => {
+        const airport = airportById.get(airportId);
+        return !airport || !preferredAirportCode(airport);
+      }),
+    ),
+  ];
+}
+
 function databaseFlightProposal(
   row: FlightRow,
   airportById: Map<string, AirportRow>,
@@ -1320,14 +1514,7 @@ function databaseFlightProposal(
   if (!origin || !destination) {
     throw new Error("A duplicate candidate references a missing airport");
   }
-  const routeRows =
-    stopRows && stopRows.length >= 2
-      ? stopRows
-      : [
-          { airportId: row.originAirportId },
-          { airportId: row.destinationAirportId },
-        ];
-  const airportMatches = routeRows.map(({ airportId }) => {
+  const airportMatches = routeAirportIds(row, stopRows).map((airportId) => {
     const airport = airportById.get(airportId);
     if (!airport) {
       throw new Error("A duplicate candidate route references a missing airport");
