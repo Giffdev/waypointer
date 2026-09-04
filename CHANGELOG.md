@@ -8,12 +8,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Route waypoints (persistence and data contract; no UI in this change): a
+  ForeFlight `Route` column is now parsed into an ordered path of *waypoints*
+  alongside the flight's landings and persisted as
+  `flight_stops.stop_kind = 'waypoint'`. A flight exposes them through the new
+  presentation-only `routePath`; nothing renders them yet. Waypoints are never
+  treated as landings — `airportSequence`, unique-airport counts, landing
+  counts, dedupe identity, and the public share contract all stay
+  landings-only, so adding waypoints to an existing logbook cannot move a
+  single statistic. Token acceptance is deliberately narrow: airway,
+  procedure, and nav-fix shapes are rejected, and a token must name the
+  airport through an ICAO/FAA-LID/GPS/ident alias (an IATA-only match is not
+  enough). Unresolved and rejected tokens stay in the preserved raw route text
+  and raise a row warning instead of invalidating the row. Generic/mapped CSV
+  imports are unchanged: their multi-airport columns remain explicit landings.
+- `GET /api/import/attention`: a read-only pending-import count endpoint for
+  future badge surfaces to consume. No surface reads it yet.
+- `POST /api/import/batches/{batchId}/reprocess`: explicitly restage a batch
+  under the current importer version while its private original is still
+  retained. The original object is copied, not moved, so the source batch
+  keeps its own file; repeat calls return the batch the first call created.
+  Expired uploads can simply be uploaded again.
 - Map-page Share control: a lightweight "Share map" popover on `/map` shows
   sharing status, enables sharing, and copies/opens the public link, and
   deep-links to `/settings#sharing-title` for full management
   (disable/republish). (#44)
 
 ### Fixed
+- Repeated legs with a blank departure time no longer collapse into one
+  flight. Two same-day legs over the same route with no `TimeOut` produced an
+  identical fingerprint, the unique index on `(user_id, fingerprint)` enforced
+  the collapse physically, and the extra flights disappeared with no
+  user-visible notice. Row fingerprint v3 appends a stable `sourceRowKey` when
+  — and only when — the departure time is blank, so distinct source rows stay
+  distinct while a timed flight logged in two providers still collapses.
+- Import identity survives a re-export that inserts rows or adds columns. The
+  previous source row key was an ordinal (`adapterVersion:rowNumber`), so
+  adding one unrelated row at the top of a logbook export made every row below
+  it look new. The key is now derived from a fixed projection of the row's
+  identity fields — date, times, endpoints, flight number, registration,
+  aircraft — plus an occurrence counter within the file, so an added column or
+  an edited remark no longer changes which flight a row is.
+- Re-importing after a pipeline fix now actually reprocesses. Batch reuse was
+  keyed on the file hash alone, so the same bytes staged by an older importer
+  were returned forever and a deployed fix could never reach the data it
+  fixed. Batch identity now includes the importer version. Successful
+  same-version reuse is unchanged, and flights committed under an older
+  fingerprint version are *adopted* rather than duplicated.
+- Corrections no longer leave the canonical route stale. Correcting an airport
+  patched only the derived `origin`/`destination`/`airportMatches` projection
+  and left `routeNodes` untouched, so the row committed its original airport,
+  stopped matching its own fingerprint, and re-imports of the same file created
+  duplicates. The same bug in post-catalog-refresh reconciliation meant a row
+  that became resolvable never became committable.
+- Commit invariant violations are typed and map to `409`/`422` instead of a
+  generic `503`. Silently dropping unresolved airports from a committing route
+  is replaced by an assertive committable-route invariant, so a dropped middle
+  stop can no longer commit as a shorter flight.
+- The import format detector no longer stops after 256 physical lines, and no
+  longer discards everything it read when a file turns out to be malformed. A
+  ForeFlight export with a large Aircraft Table — or any quoted field
+  containing newlines — pushed the `Flights Table` marker out of the scan
+  window and the file was rejected as unrecognised; a single stray quote
+  anywhere did the same, because the reader threw and detection fell back to
+  zero records. The scan is now record-aware, bounded, and lenient: it keeps
+  everything read before a fault and reports "we stopped reading" rather than
+  "this format is unsupported". The import path still parses strictly, so a
+  malformed file fails loudly instead of importing short.
+- Import invariant errors no longer log a bare error name. Unexpected failures
+  now log a correlation id and the stack frames — never the message, which
+  routinely quotes an airport, a registration, or a whole CSV cell.
 - Multi-stop import recovery: re-importing a logbook that contains a
   multi-stop day no longer fails the whole batch. Duplicate assessment loaded
   the airport catalog from a flight's origin and destination only, so any

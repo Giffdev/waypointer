@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Airport } from "../flight-data";
 import { applyProposalCorrection, validateProposalPatch } from "./corrections";
-import type { StoredImportRow } from "./types";
+import type { ImportAirportMatch, StoredImportRow } from "./types";
 
 const airport: Airport = {
   code: "SEA",
@@ -126,5 +126,137 @@ describe("staged corrections", () => {
     expect(() =>
       validateProposalPatch({ unsafe: "value" } as never),
     ).toThrow(/unsupported/);
+  });
+
+  // Regression: correcting an airport used to patch only the derived
+  // origin/destination/airportMatches projection and leave routeNodes stale.
+  // Every commit-readiness check, the committed stop list, and the row
+  // fingerprint read the nodes, so the corrected row committed its *original*
+  // airport and stopped matching its own identity.
+  it("corrects the canonical route nodes, not just the derived projection", () => {
+    const source = unresolvedRow();
+    const waypoint: ImportAirportMatch = {
+      status: "resolved",
+      identifier: "KRBG",
+      airportId: "airport-rbg",
+      airport: { ...airport, code: "RBG", name: "Roseburg Regional" },
+    };
+    source.proposedFlight.routeNodes = [
+      {
+        kind: "landing",
+        identifier: "KXXX",
+        match: { status: "not-found", identifier: "KXXX" },
+        sourceField: "From",
+        tokenIndex: 0,
+      },
+      {
+        kind: "waypoint",
+        identifier: "KRBG",
+        match: waypoint,
+        sourceField: "Route",
+        tokenIndex: 1,
+      },
+      {
+        kind: "landing",
+        identifier: "KJFK",
+        match: { status: "not-found", identifier: "KJFK" },
+        sourceField: "To",
+        tokenIndex: 2,
+      },
+    ];
+
+    const corrected = applyProposalCorrection(
+      source,
+      {
+        origin: {
+          status: "resolved",
+          identifier: "KSEA",
+          airportId: "airport-sea",
+          airport,
+        },
+      },
+      "2026-08-12T18:00:00.000Z",
+    );
+
+    const nodes = corrected.proposedFlight.routeNodes ?? [];
+    expect(nodes[0]).toMatchObject({
+      kind: "landing",
+      identifier: "KSEA",
+      match: { status: "resolved", airportId: "airport-sea" },
+    });
+    // The waypoint is untouched — a landing correction never reclassifies it.
+    expect(nodes[1]).toMatchObject({ kind: "waypoint", identifier: "KRBG" });
+    // The derived projection stays landings-only and agrees with the nodes.
+    expect(corrected.proposedFlight.airportMatches).toHaveLength(2);
+    expect(corrected.proposedFlight.origin).toMatchObject({
+      airportId: "airport-sea",
+    });
+    expect(corrected.proposedFlight.airportIdentifiers).toEqual([
+      "KSEA",
+      "KJFK",
+    ]);
+  });
+
+  it("addresses a route-stop correction by landing index, skipping waypoints", () => {
+    const source = unresolvedRow();
+    source.proposedFlight.routeNodes = [
+      {
+        kind: "landing",
+        identifier: "KXXX",
+        match: { status: "not-found", identifier: "KXXX" },
+        sourceField: "From",
+        tokenIndex: 0,
+      },
+      {
+        kind: "waypoint",
+        identifier: "KRBG",
+        match: {
+          status: "resolved",
+          identifier: "KRBG",
+          airportId: "airport-rbg",
+          airport: { ...airport, code: "RBG", name: "Roseburg Regional" },
+        },
+        sourceField: "Route",
+        tokenIndex: 1,
+      },
+      {
+        kind: "landing",
+        identifier: "KJFK",
+        match: { status: "not-found", identifier: "KJFK" },
+        sourceField: "To",
+        tokenIndex: 2,
+      },
+    ];
+    source.proposedFlight.airportMatches = [
+      source.proposedFlight.origin!,
+      source.proposedFlight.destination!,
+    ];
+
+    const corrected = applyProposalCorrection(
+      source,
+      {
+        resolvedRouteStop: {
+          index: 1,
+          airport: {
+            status: "resolved",
+            identifier: "KSEA",
+            airportId: "airport-sea",
+            airport,
+          },
+        },
+      },
+      "2026-08-12T18:00:00.000Z",
+    );
+
+    const nodes = corrected.proposedFlight.routeNodes ?? [];
+    expect(nodes[1]).toMatchObject({ kind: "waypoint", identifier: "KRBG" });
+    expect(nodes[2]).toMatchObject({
+      kind: "landing",
+      identifier: "KSEA",
+      match: { airportId: "airport-sea" },
+    });
+    expect(corrected.proposedFlight.destination).toMatchObject({
+      airportId: "airport-sea",
+    });
   });
 });

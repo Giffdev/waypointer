@@ -1,4 +1,5 @@
-import type { Airport, MapRoute } from "./flight-data";
+import type { Airport, Flight, MapRoute } from "./flight-data";
+import { flightRoutePath } from "./flight-data";
 import { routeFrequencyStrength } from "./map-visualization";
 import { airportIdentity } from "./route-aggregation";
 import {
@@ -138,6 +139,77 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
       };
     }),
   };
+}
+
+export type RoutePathFeatureCollection = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: {
+      flightId: string;
+      date: string;
+      /** Ordered node codes, landings and waypoints together. */
+      pathCodes: string[];
+      waypointCodes: string[];
+      landingCodes: string[];
+      hasWaypoints: boolean;
+      routeLabel: string;
+      routeRaw?: string;
+    };
+    geometry: {
+      type: "MultiLineString";
+      coordinates: Position[][];
+    };
+  }>;
+};
+
+/**
+ * Draws each flight's actual path, waypoints included.
+ *
+ * Kept entirely separate from `createRouteFeatureCollection`, which aggregates
+ * landings into the `uniqueRoutes` statistic. This one aggregates nothing and
+ * counts nothing: it exists so a flight that flew over an airport can show that
+ * on the map without that airport ever being claimed as visited.
+ */
+export function createFlightRoutePathFeatureCollection(
+  flights: Array<
+    Pick<Flight, "id" | "date" | "origin" | "destination" | "airportSequence" | "routePath" | "routeRaw">
+  >,
+): RoutePathFeatureCollection {
+  const features: RoutePathFeatureCollection["features"] = [];
+  for (const flight of flights) {
+    const path = flightRoutePath(flight);
+    if (path.length < 2) continue;
+    const coordinates: Position[][] = [];
+    for (let index = 0; index < path.length - 1; index += 1) {
+      for (const segment of splitAtAntimeridian(
+        greatCircleCoordinates(path[index].airport, path[index + 1].airport, 48),
+      )) {
+        coordinates.push(segment);
+      }
+    }
+    if (coordinates.length === 0) continue;
+    const pathCodes = path.map((node) => node.airport.code);
+    features.push({
+      type: "Feature",
+      properties: {
+        flightId: flight.id,
+        date: flight.date,
+        pathCodes,
+        waypointCodes: path
+          .filter((node) => node.kind === "waypoint")
+          .map((node) => node.airport.code),
+        landingCodes: path
+          .filter((node) => node.kind === "landing")
+          .map((node) => node.airport.code),
+        hasWaypoints: path.some((node) => node.kind === "waypoint"),
+        routeLabel: pathCodes.join(" → "),
+        ...(flight.routeRaw ? { routeRaw: flight.routeRaw } : {}),
+      },
+      geometry: { type: "MultiLineString", coordinates },
+    });
+  }
+  return { type: "FeatureCollection", features };
 }
 
 export function createAirportFeatureCollection(

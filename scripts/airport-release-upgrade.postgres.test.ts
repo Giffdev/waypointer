@@ -106,6 +106,36 @@ function fixtureDatabaseUrl() {
   return parsed.toString();
 }
 
+/** The token drizzle's migrator splits migration files on. */
+const STATEMENT_BREAKPOINT = ["--", "> statement-breakpoint"].join("");
+
+/** The newest reviewed migration — the schema the application requires. */
+async function newestMigrationTag(): Promise<string> {
+  const migrations = await loadAirportReleaseMigrations();
+  const newest = migrations.at(-1);
+  if (!newest) throw new Error("The migration manifest is empty.");
+  return newest.tag;
+}
+
+/** Boundary name for the newest reviewed migration, e.g. "0018". */
+async function newestMigrationBoundary(): Promise<string> {
+  return (await newestMigrationTag()).slice(0, 4);
+}
+
+/**
+ * Seeds the fixture database up to and including `finalTag`.
+ *
+ * The rehearsal used to stop at 0014 so the release itself would apply 0015.
+ * That state is no longer reachable in production: the release executes
+ * application code (airport reconciliation reads flights and import rows
+ * through the repository), so the database it runs against must already carry
+ * the schema the deployed application requires. A database still at 0014
+ * could not serve the application at all, let alone be reconciled by it.
+ *
+ * The "does the release apply pending migrations, and only the reviewed ones"
+ * behaviour is covered directly, and without this coupling, by
+ * `scripts/airport-release-migrations.test.ts`.
+ */
 async function applyMigrationsThrough(
   client: ReturnType<typeof postgres>,
   finalTag: string,
@@ -123,12 +153,11 @@ async function applyMigrationsThrough(
     select count(*)::integer as count from drizzle.__drizzle_migrations
   `;
   for (const migration of migrations.slice(ledger.count)) {
-    if (migration.tag === "0015_airport_source_provenance") break;
     const sql = await readFile(
       path.join(root, "drizzle", "migrations", `${migration.tag}.sql`),
       "utf8",
     );
-    for (const statement of sql.split("--> statement-breakpoint")) {
+    for (const statement of sql.split(STATEMENT_BREAKPOINT)) {
       if (statement.trim()) await client.unsafe(statement);
     }
     await client.unsafe(
@@ -337,10 +366,9 @@ beforeAll(async () => {
     await applyMigrationsThrough(client, "0008_read_only_map_sharing");
     await insertLegacyFixture(client);
     await insertUnresolvedImport(client);
-    await applyMigrationsThrough(
-      client,
-      "0014_fix_flight_share_invalidation",
-    );
+    // Up to the application's own schema. The release runs application code,
+    // so this is the only boundary a real deployment can present.
+    await applyMigrationsThrough(client, await newestMigrationTag());
     [database] = await client<Array<{
       database_name: string;
       database_oid: number;
@@ -751,8 +779,13 @@ postgresDescribe("production-like airport catalog upgrade", () => {
       includedMigrations: ["0015_airport_source_provenance"],
       applicationPromotionIncluded: false,
     });
-    expect(first.evidence.migration.before.boundary).toBe("0014");
-    expect(first.evidence.migration.after.boundary).toBe("0015");
+    // The database already carries the application's schema, so the release
+    // applies nothing and the boundary is unchanged either side of it. That
+    // the release *does* apply a pending reviewed migration when one exists is
+    // asserted directly in scripts/airport-release-migrations.test.ts.
+    const boundary = await newestMigrationBoundary();
+    expect(first.evidence.migration.before.boundary).toBe(boundary);
+    expect(first.evidence.migration.after.boundary).toBe(boundary);
     const secondEnvironment = await createSecondPassEnvironment();
     const second = await runAirportCatalogRelease({
       environment: secondEnvironment,
@@ -1016,7 +1049,9 @@ postgresDescribe("production-like airport catalog upgrade", () => {
         "test",
         expected,
       );
-      expect(restored.migration.boundary).toBe("0014");
+      expect(restored.migration.boundary).toBe(
+        await newestMigrationBoundary(),
+      );
       const [flight] = await restoredClient<Array<{
         origin_airport_id: string;
         destination_airport_id: string;
@@ -1028,9 +1063,15 @@ postgresDescribe("production-like airport catalog upgrade", () => {
         origin_airport_id: legacyIds.totalRf,
         destination_airport_id: legacyIds.tonasket,
       });
+      // A partial restore that leaves a schema artifact behind must be
+      // rejected. The drill used to add `source_ident_provenance`, which only
+      // worked while the fixture sat at the 0014 ledger; the rehearsal now
+      // starts from the application's own schema, where that column already
+      // exists, so an unmistakably synthetic column stands in for the same
+      // drift.
       await restoredClient.unsafe(
         `alter table airports
-         add column source_ident_provenance text`,
+         add column rollback_drill_residue text`,
       );
       await expect(
         verifyRestoredAirportState(
@@ -1060,7 +1101,7 @@ postgresDescribe("production-like airport catalog upgrade", () => {
           restored,
           expected,
           partialRestoreMutation:
-            "0015 source_ident_provenance column left behind at the 0014 ledger",
+            "a stray airports column left behind after restore",
           partialRestoreRejected: true,
           mutableTableRestoration: mutableRollbackResults,
           requiresFreshTargetApprovalBeforeRetry: true,

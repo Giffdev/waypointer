@@ -19,6 +19,56 @@ exact duplicates are skipped, and a fully resolved upload returns to the map.
 Partial imports show only unresolved rows and state how many rows were already
 imported. Presets and inferred mappings never bypass server-side validation.
 
+An upload is only redirected away when nothing is left to decide. If any row is
+unresolved, an ambiguous duplicate, or carrying an unresolved route token, it
+stays outstanding, and the count is published read-only at
+`GET /api/import/attention` for badge surfaces to consume. No surface consumes
+it yet; it ships ahead of the UI so the numbers have one definition when they
+do.
+
+## Route columns become waypoints, never landings
+
+The **ForeFlight adapter only** reads the `Route` header. Route tokens become
+ordered *waypoints*: they are persisted as `flight_stops.stop_kind = 'waypoint'`
+and exposed on a flight as the presentation-only `routePath`. They never count
+as a landing, never change `airportSequence`, and never affect unique-airport,
+route, or landing statistics, and they are excluded from the public share
+contract. Only an explicit endpoint/landing column, or a deliberate user
+action, creates a landing.
+
+Generic and mapped CSV imports are deliberately **not** routed through this
+classifier. Their multi-airport columns are explicit airport-sequence fields
+and continue to produce landings exactly as before; reclassifying them would
+change the meaning of stops already committed, and therefore statistics and
+shares, with no migration and no preview. Extending waypoint classification to
+another provider is a separate, deliberate migration.
+
+Token acceptance is deliberately narrow:
+
+- airway, procedure, and nav-fix shapes are rejected before resolution;
+- a token must name its airport through an ICAO, FAA-LID, GPS, or ident alias.
+  The whole alias-type set for the winning airport is considered, not just the
+  highest-priority one, so `BFI` (IATA *and* FAA-LID for Boeing Field) is
+  accepted while an IATA-only match such as `OED` — the Medford VOR — is not;
+- endpoints and adjacent repeats are deduped, non-adjacent repeats are kept,
+  and the path is capped at 32 nodes.
+
+Anything not accepted stays in the preserved raw route text and produces a row
+warning, including a rejected IATA/navaid collision. It never invalidates the
+row and never places an airport marker.
+
+## Re-importing after an importer fix
+
+Batch identity includes the importer pipeline version, so re-uploading the same
+file after a pipeline fix restages it under the new version instead of
+returning the old result. Already-committed flights are still recognised — the
+row's `sourceRowKey`, or an older fingerprint version, adopts the existing
+flight rather than creating a second one. While the private original is still
+retained, `POST /api/import/batches/{batchId}/reprocess` performs the same
+restage without a re-upload; it copies the stored file so the original batch
+keeps its own, and repeat calls return the batch the first call created. Once
+the retention window has expired the file can simply be uploaded again.
+
 ## Presets
 
 ### MyFlightbook CSV

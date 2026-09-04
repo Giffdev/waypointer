@@ -45,6 +45,11 @@ export type ForeFlightProvenance = {
     distance: string;
     timeOut: string;
     totalTime: string;
+    /** Verbatim `Route` cell. Optional column; blank when absent. */
+    route: string;
+    allLandings: string;
+    dayLandingsFullStop: string;
+    nightLandingsFullStop: string;
   };
 };
 
@@ -54,6 +59,15 @@ export type ForeFlightFlight = {
   departureTime?: string;
   originIdentifier?: string;
   destinationIdentifier?: string;
+  /**
+   * Verbatim source route text. Route presence infers **nothing** — not a
+   * landing, not a takeoff, not an airport visit. It is classified into
+   * ordered airport waypoints by the shared normalizer, and every token that
+   * is not an airport is preserved here as text with no marker.
+   */
+  routeRaw?: string;
+  /** Informational only; never adds a stop and never changes a stop kind. */
+  landings?: { all?: number; fullStop?: number };
   distanceNauticalMiles?: number;
   totalTimeHours?: number;
   totalTimeStatus: StatsValueStatus;
@@ -119,6 +133,34 @@ export const FOREFLIGHT_V1_FLIGHT_HEADERS = [
 
 function firstCell(record: CsvRecord): string {
   return record.cells[0]?.trim() ?? "";
+}
+
+/**
+ * Landing counts are read for display only. They never create a stop and
+ * never change a stop kind: ForeFlight reports *how many* landings a leg had,
+ * never *where*, so inferring a place from a count would be a guess.
+ */
+function landingCounts(raw: {
+  allLandings: string;
+  dayLandingsFullStop: string;
+  nightLandingsFullStop: string;
+}): { all?: number; fullStop?: number } | undefined {
+  const count = (value: string): number | undefined => {
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  };
+  const all = count(raw.allLandings);
+  const day = count(raw.dayLandingsFullStop);
+  const night = count(raw.nightLandingsFullStop);
+  const fullStop =
+    day === undefined && night === undefined
+      ? undefined
+      : (day ?? 0) + (night ?? 0);
+  if (all === undefined && fullStop === undefined) return undefined;
+  return {
+    ...(all === undefined ? {} : { all }),
+    ...(fullStop === undefined ? {} : { fullStop }),
+  };
 }
 
 function isEmptyRecord(record: CsvRecord): boolean {
@@ -422,6 +464,18 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         distance: value(record, flightIndexes, "Distance"),
         timeOut: value(record, flightIndexes, "TimeOut"),
         totalTime: value(record, flightIndexes, "TotalTime"),
+        route: value(record, flightIndexes, "Route"),
+        allLandings: value(record, flightIndexes, "AllLandings"),
+        dayLandingsFullStop: value(
+          record,
+          flightIndexes,
+          "DayLandingsFullStop",
+        ),
+        nightLandingsFullStop: value(
+          record,
+          flightIndexes,
+          "NightLandingsFullStop",
+        ),
       };
       const rawDistance = raw.distance;
       const rawTotalTime = raw.totalTime;
@@ -460,6 +514,8 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         issues,
       );
       const registration = registrationFromForeFlightAircraftId(raw.aircraftId);
+      const routeRaw = raw.route.trim();
+      const landings = landingCounts(raw);
 
       return {
         sourceRowNumber: record.rowNumber,
@@ -467,6 +523,8 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         departureTime,
         originIdentifier,
         destinationIdentifier,
+        ...(routeRaw ? { routeRaw } : {}),
+        ...(landings ? { landings } : {}),
         distanceNauticalMiles,
         totalTimeHours,
         totalTimeStatus: valueStatus(rawTotalTime, totalTimeHours),

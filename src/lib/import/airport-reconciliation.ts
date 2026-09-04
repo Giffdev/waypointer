@@ -6,10 +6,12 @@ import { createRowFingerprint } from "./fingerprint";
 import {
   importProposalValidationState,
   isImportProposalCommitReady,
-} from "./review";
+  withDerivedLandingProjection,
+} from "./invariants";
 import { automaticallyCompleteReviewBatch } from "./service";
 import type {
   ImportAirportMatch,
+  ImportRouteNode,
   StoredImportRow,
 } from "./types";
 
@@ -53,8 +55,11 @@ export async function reconcileUnresolvedAirportImports(
   );
 
   for (const { userId, batchId } of uniqueCandidates.values()) {
+    // Narrow reads on purpose: the airport catalog release runs this against a
+    // database pinned to an older migration boundary, so reading whole rows
+    // would couple the release to every column the application later adds.
     const [batch, rows] = await Promise.all([
-      repositories.imports.getBatch(userId, batchId),
+      repositories.imports.getReviewBatchState(userId, batchId),
       repositories.imports.getRowsForCommit(userId, batchId),
     ]);
     if (!batch || batch.status !== "review" || !rows) continue;
@@ -155,7 +160,35 @@ async function reconcileRow(
     return result;
   };
 
-  if (
+  if (proposedFlight.routeNodes?.length) {
+    // Route nodes are the canonical path, so reconcile them and derive the
+    // legacy `origin`/`destination`/`airportMatches` projection from the
+    // result. Patching only the projection would leave the nodes stale, and
+    // every commit-readiness check reads the nodes.
+    const nodes: ImportRouteNode[] = [];
+    for (const [position, node] of proposedFlight.routeNodes.entries()) {
+      if (node.kind === "unmatched") {
+        nodes.push(node);
+        continue;
+      }
+      const match = await retry(
+        node.match,
+        node.identifier,
+        node.kind === "landing" && node.sourceField === "From"
+          ? "origin"
+          : node.kind === "landing" && node.sourceField === "To"
+            ? "destination"
+            : `route[${node.tokenIndex ?? position}]`,
+      );
+      nodes.push({ ...node, match: match ?? node.match });
+    }
+    proposedFlight.routeNodes = nodes;
+    const reconciled = withDerivedLandingProjection(proposedFlight);
+    proposedFlight.origin = reconciled.origin;
+    proposedFlight.destination = reconciled.destination;
+    proposedFlight.airportMatches = reconciled.airportMatches;
+    proposedFlight.airportIdentifiers = reconciled.airportIdentifiers;
+  } else if (
     proposedFlight.airportMatches &&
     proposedFlight.airportMatches.length >= 2
   ) {

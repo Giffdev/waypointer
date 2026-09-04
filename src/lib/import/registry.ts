@@ -1,4 +1,9 @@
-import { parseCsv } from "./csv.ts";
+import {
+  DEFAULT_INSPECTION_CHARACTERS,
+  DEFAULT_INSPECTION_RECORDS,
+  readCsvRecords,
+  type CsvRecord,
+} from "./csv.ts";
 import {
   FOREFLIGHT_CSV_ADAPTER,
   FOREFLIGHT_V1_AIRCRAFT_HEADERS,
@@ -18,8 +23,17 @@ import {
 } from "./generic-csv.ts";
 
 export const FLIGHT_IMPORT_DETECTION_THRESHOLD = 0.9;
-const MAX_INSPECTION_CHARACTERS = 256 * 1024;
-const MAX_INSPECTION_LINES = 256;
+/**
+ * Detection budget. Expressed in logical CSV records and characters, never in
+ * physical lines: a quoted remark spanning newlines and a several-hundred-row
+ * Aircraft Table are both normal, and the old 256-physical-line window pushed
+ * the `Flights Table` marker out of range and reported a valid export as an
+ * unsupported format. The size ceiling is preserved, only the unit changed.
+ */
+const MAX_INSPECTION_CHARACTERS = DEFAULT_INSPECTION_CHARACTERS;
+const MAX_INSPECTION_RECORDS = DEFAULT_INSPECTION_RECORDS;
+/** Confidence a partial signature must reach before truncation is worth reporting. */
+export const TRUNCATION_DISCLOSURE_THRESHOLD = 0.45;
 
 export type AdapterDetectionEvidence = {
   confidence: number;
@@ -201,11 +215,17 @@ export function detectFlightImportFormat(
         "Multiple implemented adapters met the confidence threshold; no adapter was selected.",
     };
   }
+  const truncated = candidates.some((candidate) =>
+    candidate.reasons.some((reason) =>
+      reason.startsWith("inspection-truncated"),
+    ),
+  );
   return {
     status: "unsupported",
     candidates: candidates.filter(({ confidence }) => confidence > 0),
-    reason:
-      "No implemented adapter met the confidence threshold; the file was not parsed.",
+    reason: truncated
+      ? "detection-truncated: the file matched a known export signature but the inspection stopped before the rest of it could be read."
+      : "No implemented adapter met the confidence threshold; the file was not parsed.",
   };
 }
 
@@ -258,8 +278,9 @@ export function parseFlightImport(input: string): ParsedFlightImport {
 }
 
 function detectForeFlight(input: string): AdapterDetectionEvidence {
-  const lines = inspectionLines(input);
-  const first = firstNonEmptyRecordCell(lines);
+  const inspection = inspectionRecords(input);
+  const records = inspection.records;
+  const first = firstNonEmptyCell(records);
   let confidence = 0;
   const reasons: string[] = [];
 
@@ -267,7 +288,7 @@ function detectForeFlight(input: string): AdapterDetectionEvidence {
     confidence += 0.45;
     reasons.push("The first non-empty record has the ForeFlight export signature");
   }
-  const aircraftHeader = headerAfterMarker(lines, "Aircraft Table");
+  const aircraftHeader = headerAfterMarker(records, "Aircraft Table");
   if (
     aircraftHeader &&
     hasHeaders(aircraftHeader, FOREFLIGHT_V1_AIRCRAFT_HEADERS)
@@ -275,23 +296,31 @@ function detectForeFlight(input: string): AdapterDetectionEvidence {
     confidence += 0.25;
     reasons.push("The aircraft table has all required ForeFlight v1 headers");
   }
-  const flightHeader = headerAfterMarker(lines, "Flights Table");
+  const flightHeader = headerAfterMarker(records, "Flights Table");
   if (
     flightHeader &&
     hasHeaders(flightHeader, FOREFLIGHT_V1_FLIGHT_HEADERS)
   ) {
     confidence += 0.3;
     reasons.push("The flights table has all required ForeFlight v1 headers");
+  } else if (
+    inspection.truncated &&
+    confidence >= TRUNCATION_DISCLOSURE_THRESHOLD
+  ) {
+    // We stopped reading; we did not conclude the format is wrong. Saying
+    // "unsupported format" here would be a lie the user cannot act on.
+    reasons.push(
+      "inspection-truncated: the file matched the ForeFlight signature but the flights table was not reached before the read stopped",
+    );
   }
 
   return { confidence, reasons };
 }
 
 function detectMyFlightRadar24(input: string): AdapterDetectionEvidence {
-  const lines = inspectionLines(input);
-  const firstIndex = lines.findIndex((line) => line.trim() !== "");
-  const header =
-    firstIndex < 0 ? undefined : parsePhysicalCsvLine(lines[firstIndex]);
+  const { records } = inspectionRecords(input);
+  const firstIndex = records.findIndex((record) => !isBlankRecord(record));
+  const header = firstIndex < 0 ? undefined : trimmedCells(records[firstIndex]);
   let confidence = 0;
   const reasons: string[] = [];
 
@@ -306,10 +335,10 @@ function detectMyFlightRadar24(input: string): AdapterDetectionEvidence {
     reasons.push("The first non-empty record is the exact myFlightradar24 v1 header");
   }
 
-  const firstDataLine = lines
+  const firstDataRecord = records
     .slice(firstIndex + 1)
-    .find((line) => line.trim() !== "");
-  const row = firstDataLine ? parsePhysicalCsvLine(firstDataLine) : undefined;
+    .find((record) => !isBlankRecord(record));
+  const row = firstDataRecord ? trimmedCells(firstDataRecord) : undefined;
   if (
     confidence > 0 &&
     row?.length === MY_FLIGHTRADAR24_V1_HEADERS.length &&
@@ -324,41 +353,52 @@ function detectMyFlightRadar24(input: string): AdapterDetectionEvidence {
   return { confidence, reasons };
 }
 
-function inspectionLines(input: string): string[] {
-  return input
-    .slice(0, MAX_INSPECTION_CHARACTERS)
-    .replace(/^\uFEFF/, "")
-    .split(/\r?\n/)
-    .slice(0, MAX_INSPECTION_LINES);
+function inspectionRecords(input: string): {
+  records: CsvRecord[];
+  truncated: boolean;
+} {
+  // Lenient on purpose. A syntax error is an answer about the file's
+  // *contents*; detection is asking about its *identity*. Discarding every
+  // record before the fault made one stray quote in a trailing remark enough
+  // to report a valid ForeFlight export as an unsupported format. The records
+  // read before the fault still identify the format, and `truncated` makes the
+  // shortfall visible so an unrecognised result says "we stopped reading"
+  // rather than "we don't support this". The import path keeps the strict
+  // reader, so a malformed file still fails loudly rather than importing
+  // short.
+  const result = readCsvRecords(input, {
+    maxRecords: MAX_INSPECTION_RECORDS,
+    maxCharacters: MAX_INSPECTION_CHARACTERS,
+    onSyntaxError: "truncate",
+  });
+  return { records: result.records, truncated: result.truncated };
 }
 
-function firstNonEmptyRecordCell(lines: string[]): string | undefined {
-  const line = lines.find((candidate) => candidate.trim() !== "");
-  return line ? parsePhysicalCsvLine(line)?.[0] : undefined;
+function trimmedCells(record: CsvRecord): string[] {
+  return record.cells.map((cell) => cell.trim());
+}
+
+function isBlankRecord(record: CsvRecord): boolean {
+  return record.cells.every((cell) => cell.trim() === "");
+}
+
+function firstNonEmptyCell(records: CsvRecord[]): string | undefined {
+  const record = records.find((candidate) => !isBlankRecord(candidate));
+  return record ? trimmedCells(record)[0] : undefined;
 }
 
 function headerAfterMarker(
-  lines: string[],
+  records: CsvRecord[],
   marker: string,
 ): string[] | undefined {
-  const markerIndex = lines.findIndex(
-    (line) => parsePhysicalCsvLine(line)?.[0] === marker,
+  const markerIndex = records.findIndex(
+    (record) => trimmedCells(record)[0] === marker,
   );
   if (markerIndex < 0) return undefined;
-  const headerLine = lines
+  const header = records
     .slice(markerIndex + 1)
-    .find((line) => line.trim() !== "");
-  return headerLine ? parsePhysicalCsvLine(headerLine) : undefined;
-}
-
-function parsePhysicalCsvLine(line: string): string[] | undefined {
-  try {
-    const records = parseCsv(line);
-    if (records.length !== 1) return undefined;
-    return records[0].cells.map((cell) => cell.trim());
-  } catch {
-    return undefined;
-  }
+    .find((record) => !isBlankRecord(record));
+  return header ? trimmedCells(header) : undefined;
 }
 
 function hasHeaders(actual: string[], required: readonly string[]): boolean {

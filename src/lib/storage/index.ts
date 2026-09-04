@@ -43,6 +43,15 @@ export interface PrivateObjectStorage {
     expiresInSeconds: number,
   ): Promise<PresignedPut>;
   move(sourceKey: string, destinationKey: string): Promise<void>;
+  /**
+   * Duplicate an object, leaving the source in place.
+   *
+   * Distinct from `move` because reprocessing must not reassign the original
+   * batch's only object to a new batch: retention cleanup for either batch
+   * deletes by key, so a shared key means the first cleanup silently destroys
+   * the other batch's source file and a second reprocess has nothing to read.
+   */
+  copy(sourceKey: string, destinationKey: string): Promise<void>;
   delete(key: string): Promise<void>;
 }
 
@@ -99,6 +108,18 @@ class LocalPrivateObjectStorage implements PrivateObjectStorage {
     const destination = this.filePath(destinationKey);
     await mkdir(path.dirname(destination), { recursive: true });
     await rename(source, destination);
+  }
+
+  async copy(sourceKey: string, destinationKey: string): Promise<void> {
+    const source = this.filePath(sourceKey);
+    const destination = this.filePath(destinationKey);
+    await mkdir(path.dirname(destination), { recursive: true });
+    // `wx` matches `put`: an existing destination is a caller bug, not
+    // something to overwrite silently.
+    await writeFile(destination, await readFile(source), {
+      flag: "wx",
+      mode: 0o600,
+    });
   }
 
   async delete(key: string): Promise<void> {
@@ -194,6 +215,11 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
   }
 
   async move(sourceKey: string, destinationKey: string): Promise<void> {
+    await this.copy(sourceKey, destinationKey);
+    await this.delete(validateKey(sourceKey));
+  }
+
+  async copy(sourceKey: string, destinationKey: string): Promise<void> {
     const source = validateKey(sourceKey);
     const destination = validateKey(destinationKey);
     await this.client.send(
@@ -201,9 +227,9 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
         Bucket: this.bucket,
         CopySource: `${this.bucket}/${source}`,
         Key: destination,
+        ServerSideEncryption: "AES256",
       }),
     );
-    await this.delete(source);
   }
 
   async delete(key: string): Promise<void> {
@@ -234,6 +260,10 @@ class SynchronousEphemeralObjectStorage implements PrivateObjectStorage {
   }
 
   async move(): Promise<void> {
+    throw new Error("Synchronous import originals are not retained.");
+  }
+
+  async copy(): Promise<void> {
     throw new Error("Synchronous import originals are not retained.");
   }
 

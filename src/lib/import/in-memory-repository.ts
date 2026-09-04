@@ -25,11 +25,16 @@ import {
   type ImportDecisionAction,
   type ImportDuplicateResolution,
   type ImportRowsPage,
+  type PendingImportAttention,
   type ProposedImportFlight,
   type StoredImportRow,
   type VersionedFingerprint,
 } from "./types";
 import { createAcceptedDuplicateFingerprint } from "./fingerprint";
+import {
+  hasUnresolvedRouteToken,
+  summarizePendingImportAttention,
+} from "./attention";
 import {
   SUPERSEDABLE_IMPORT_BATCH_STATUSES,
   isReusableImportBatchStatus,
@@ -353,6 +358,28 @@ export class InMemoryImportRepository
       .filter((record) => record.userId === userId)
       .map((record) => clone(record.summary))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async getPendingImportAttention(
+    userId: string,
+  ): Promise<PendingImportAttention> {
+    return summarizePendingImportAttention(await this.listBatches(userId));
+  }
+
+  async listReviewBatchIds(userId: string): Promise<string[]> {
+    return (await this.listBatches(userId))
+      .filter((batch) => batch.status === "review")
+      .map(({ id }) => id);
+  }
+
+  async getReviewBatchState(
+    userId: string,
+    batchId: string,
+  ): Promise<{ status: string; updatedAt: string } | null> {
+    const batch = await this.getBatch(userId, batchId);
+    return batch
+      ? { status: batch.status, updatedAt: batch.updatedAt }
+      : null;
   }
 
   async getBatch(
@@ -691,6 +718,9 @@ function emptyCounts(): ImportBatchCounts {
     reviewRequiredRows: 0,
     committedFlights: 0,
     attachedSources: 0,
+    routeWaypointRows: 0,
+    unresolvedRouteTokenRows: 0,
+    adoptedFlightRows: 0,
   };
 }
 
@@ -720,6 +750,17 @@ function countsFor(
     reviewRequiredRows: rows.filter((row) => row.decision === "pending").length,
     committedFlights: previous.committedFlights,
     attachedSources: previous.attachedSources,
+    routeWaypointRows: rows.filter((row) =>
+      (row.proposedFlight.routeNodes ?? []).some(
+        (node) => node.kind === "waypoint",
+      ),
+    ).length,
+    unresolvedRouteTokenRows: rows.filter((row) =>
+      hasUnresolvedRouteToken(row.issues),
+    ).length,
+    adoptedFlightRows: rows.filter(
+      (row) => row.duplicateCandidate?.scope === "existing-flight",
+    ).length,
   };
 }
 

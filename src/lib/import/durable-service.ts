@@ -1,10 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { withUserDb } from "@/lib/db";
 import { backgroundJobs, importBatches } from "@/lib/db/schema";
 import { isDurableImportConfiguration } from "@/lib/runtime-mode";
 import { getPrivateObjectStorage } from "@/lib/storage";
-import { createImportObjectKey } from "@/lib/storage/presign";
+import {
+  canonicalImportObjectKey,
+  createImportObjectKey,
+} from "@/lib/storage/presign";
 import { DurableJobRepository } from "@/lib/jobs/repository";
 import { ImportServiceError } from "@/app/api/import/_lib/service";
 import {
@@ -13,6 +16,7 @@ import {
 } from "@/lib/import/generic-mapping";
 import type { GenericCsvMapping } from "@/lib/import/generic-csv";
 import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
+import { IMPORTER_PIPELINE_VERSION } from "@/lib/import/version";
 
 // Shared with the client preview gate and the synchronous upload service;
 // see src/lib/import/csv-mime.ts for why this must stay in sync across all
@@ -128,6 +132,14 @@ export async function initiateDurableImport(
         userId,
         adapterId: "pending-detection",
         adapterVersion: 0,
+        // Stamped at insert, not when the worker learns the hash. The active
+        // uniqueness key is (user_id, file_sha256, importer_version); a batch
+        // left on the column default (0) would collide with a legacy batch
+        // that holds the same bytes at version 0 the instant the worker
+        // stamps the real hash, turning "re-upload the file the old importer
+        // mangled" into a 500. Stamping here is what makes that re-upload the
+        // recovery path it is supposed to be.
+        importerVersion: IMPORTER_PIPELINE_VERSION,
         status: "pending",
         originalObjectKey: objectKey,
         originalFileName: fileName,
@@ -427,6 +439,212 @@ export async function retryDurableImport(
       "The import cannot be retried.",
     );
   }
+}
+
+/**
+ * Restage a retained upload under the current importer pipeline.
+ *
+ * The file itself was never wrong — the importer was. So rather than asking
+ * someone to find and re-upload a CSV they imported months ago, this re-runs
+ * the bytes we already hold through the fixed pipeline as a new batch. The
+ * original batch is left untouched: reprocessing is additive and reversible,
+ * and the new batch records where it came from.
+ *
+ * It is idempotent. A double-click, a retried request, or a second reprocess
+ * of the same source returns the batch the first call created rather than
+ * failing on a unique index, and never leaves the source batch in a state the
+ * user has to repair.
+ */
+export async function reprocessDurableImport(
+  userId: string,
+  batchId: string,
+): Promise<{
+  batchId: string;
+  reprocessedFromBatchId: string;
+  status: "queued";
+  reused: boolean;
+}> {
+  assertDurableImportsEnabled();
+  assertBatchId(batchId);
+  const [batch] = await withUserDb(userId, (tx) =>
+    tx
+      .select()
+      .from(importBatches)
+      .where(
+        and(eq(importBatches.id, batchId), eq(importBatches.userId, userId)),
+      )
+      .limit(1),
+  );
+  if (!batch) {
+    throw new ImportServiceError(404, "batch-not-found", "Batch not found.");
+  }
+  if (batch.importerVersion >= IMPORTER_PIPELINE_VERSION) {
+    throw new ImportServiceError(
+      409,
+      "reprocess-not-required",
+      "This import already ran on the current importer.",
+    );
+  }
+
+  // Answered before any work: a repeat call must return the first call's
+  // result, not race it into a unique-index failure that leaves the caller
+  // unable to tell "already done" from "broken".
+  const existing = await findReprocessedBatch(userId, batch.id);
+  if (existing) {
+    return {
+      batchId: existing.id,
+      reprocessedFromBatchId: batch.id,
+      status: "queued" as const,
+      reused: true,
+    };
+  }
+
+  if (batch.originalDeletedAt) {
+    throw new ImportServiceError(
+      410,
+      "original-file-unavailable",
+      "The original file is no longer retained. Upload it again to reprocess it.",
+    );
+  }
+  const storage = getPrivateObjectStorage();
+  const object = await storage.head(batch.originalObjectKey);
+  if (!object || object.sizeBytes !== batch.fileSizeBytes) {
+    throw new ImportServiceError(
+      410,
+      "original-file-unavailable",
+      "The original file is no longer retained. Upload it again to reprocess it.",
+    );
+  }
+
+  const reprocessedBatchId = randomUUID();
+  // Its own object, its own key. Sharing the source batch's key would mean the
+  // first retention sweep or superseded-object cleanup to fire deletes the
+  // file out from under the other batch — and a second reprocess would find
+  // nothing to read.
+  const objectKey = canonicalImportObjectKey(
+    userId,
+    reprocessedBatchId,
+    batch.fileSha256,
+  );
+  await storage.copy(batch.originalObjectKey, objectKey);
+
+  const inserted = await withUserDb(userId, async (tx) => {
+    const now = new Date();
+    // The reprocessed batch carries the old batch's mapping so a generic CSV
+    // import does not lose its column choices on the way through.
+    const [priorJob] = await tx
+      .select({ payload: backgroundJobs.payload })
+      .from(backgroundJobs)
+      .where(
+        and(
+          eq(backgroundJobs.userId, userId),
+          eq(backgroundJobs.jobType, "scan_import"),
+          eq(backgroundJobs.idempotencyKey, `scan-import:${batchId}`),
+        ),
+      )
+      .limit(1);
+    const priorMapping = (priorJob?.payload as { mapping?: unknown } | null)
+      ?.mapping;
+    const [created] = await tx
+      .insert(importBatches)
+      .values({
+        id: reprocessedBatchId,
+        userId,
+        adapterId: batch.adapterId,
+        adapterVersion: batch.adapterVersion,
+        importerVersion: IMPORTER_PIPELINE_VERSION,
+        reprocessedFromBatchId: batch.id,
+        status: "queued",
+        originalObjectKey: objectKey,
+        originalFileName: batch.originalFileName,
+        declaredContentType: batch.declaredContentType,
+        objectEtag: object.etag ?? batch.objectEtag ?? null,
+        fileSha256: batch.fileSha256,
+        fileSizeBytes: batch.fileSizeBytes,
+        idempotencyKey: `reprocess:${batch.id}`,
+        // The copy is a copy of *this* file, so it inherits this file's
+        // retention deadline: reprocessing may not quietly extend how long
+        // someone's logbook file is kept.
+        expiresAt: batch.expiresAt,
+        uploadCompletedAt: now,
+        scanStatus: batch.scanStatus,
+        updatedAt: now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: importBatches.id });
+    if (!created) return null;
+    await tx
+      .insert(backgroundJobs)
+      .values({
+        userId,
+        jobType: "scan_import",
+        payload: priorMapping
+          ? { batchId: created.id, mapping: priorMapping }
+          : { batchId: created.id },
+        idempotencyKey: `scan-import:${created.id}`,
+      })
+      .onConflictDoNothing();
+    await tx
+      .insert(backgroundJobs)
+      .values({
+        userId,
+        jobType: "cleanup_import_retention",
+        payload: { batchId: created.id },
+        idempotencyKey: `cleanup-import-retention:${created.id}`,
+        availableAt: batch.expiresAt,
+        maxAttempts: 5,
+      })
+      .onConflictDoNothing();
+    return created;
+  });
+
+  if (inserted) {
+    return {
+      batchId: inserted.id,
+      reprocessedFromBatchId: batch.id,
+      status: "queued" as const,
+      reused: false,
+    };
+  }
+
+  // Lost the race. Someone else's insert won, so adopt its batch and remove
+  // the copy this call made — an orphaned object is a retained copy of the
+  // user's logbook that no batch will ever clean up.
+  await storage.delete(objectKey).catch(() => undefined);
+  const winner = await findReprocessedBatch(userId, batch.id);
+  if (!winner) {
+    throw new ImportServiceError(
+      409,
+      "reprocess-conflict",
+      "The import could not be reprocessed.",
+    );
+  }
+  return {
+    batchId: winner.id,
+    reprocessedFromBatchId: batch.id,
+    status: "queued" as const,
+    reused: true,
+  };
+}
+
+function findReprocessedBatch(
+  userId: string,
+  sourceBatchId: string,
+): Promise<{ id: string } | undefined> {
+  return withUserDb(userId, async (tx) => {
+    const [existing] = await tx
+      .select({ id: importBatches.id })
+      .from(importBatches)
+      .where(
+        and(
+          eq(importBatches.userId, userId),
+          eq(importBatches.reprocessedFromBatchId, sourceBatchId),
+          ne(importBatches.status, "expired"),
+        ),
+      )
+      .limit(1);
+    return existing;
+  });
 }
 
 function configuredMaxBytes(): number {

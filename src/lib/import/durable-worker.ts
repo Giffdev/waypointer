@@ -21,6 +21,7 @@ import { parseGenericCsvMapping } from "./generic-mapping";
 import { automaticallyCommitImport } from "./service";
 import { CsvDecodeError, decodeCsvBytes } from "./csv-decode";
 import { NON_REUSABLE_IMPORT_BATCH_STATUSES } from "./batch-lifecycle";
+import { IMPORTER_PIPELINE_VERSION } from "./version";
 import { cleanUpSupersededObjects } from "./superseded-cleanup";
 
 const repository = new DrizzleImportRepository();
@@ -474,6 +475,13 @@ function updateBatch(
   );
 }
 
+/**
+ * Cross-batch dedupe of the *same upload*, scoped to the current importer
+ * version. Without the version predicate a file staged by an older pipeline
+ * would keep absorbing every re-upload as a duplicate, so a deployed fix could
+ * never reach the rows it fixes — the user re-uploads, sees "already
+ * imported", and the defect survives.
+ */
 function findDuplicate(userId: string, batchId: string, sha256: string) {
   return withUserDb(userId, async (tx) => {
     const [batch] = await tx
@@ -483,6 +491,7 @@ function findDuplicate(userId: string, batchId: string, sha256: string) {
         and(
           eq(importBatches.userId, userId),
           eq(importBatches.fileSha256, sha256),
+          eq(importBatches.importerVersion, IMPORTER_PIPELINE_VERSION),
           ne(importBatches.id, batchId),
           notInArray(importBatches.status, [
             ...NON_REUSABLE_IMPORT_BATCH_STATUSES,

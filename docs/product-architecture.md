@@ -39,8 +39,9 @@ routes, browser imports, and sharing use persisted owner-scoped PostgreSQL data.
 - `user_profiles`: display preferences and independently controlled `profile_visibility`.
 - `map_shares`, `map_share_flights`: one opt-in public username URL, redacted projection, and server-derived whole-map snapshot membership; source flights never inherit share access.
 - `airports`: canonical ICAO/IATA/local identifiers, coordinates, country, first-level region, aliases, dataset/version.
-- `flights`: user-owned canonical record; date/time precision, origin/destination airport IDs, kind, aircraft/registration, flight number, duration/distance, notes, visibility, timestamps.
-- `import_batches`: user, adapter/version, status, original object key, file hash, counts, timestamps, expiry.
+- `flights`: user-owned canonical record; date/time precision, origin/destination airport IDs, kind, aircraft/registration, flight number, duration/distance, notes, visibility, timestamps. `fingerprint_version` and `source_row_key` carry import identity so an adopted flight can be recognised across fingerprint versions.
+- `flight_stops`: the ordered path of one flight. `stop_kind` is `landing` or `waypoint` and `source_field` is `endpoint`, `route`, or `manual`. **Only `landing` stops feed statistics, dedupe identity, and the public share contract**; waypoints are presentation-only. Rows that predate this split migrate as `landing`/`endpoint`.
+- `import_batches`: user, adapter/version, status, original object key, file hash, `importer_version`, counts, timestamps, expiry. File-hash reuse is scoped by importer version so a deployed pipeline fix can reach bytes that were already staged.
 - `import_rows`: minimal source snapshot, parsed fields, validation state, match confidence, proposed flight.
 - `flight_sources`: many-to-one provenance from canonical flight to batch/row, source type, external stable ID, source timestamps.
 - `flight_overrides`: field, original value, corrected value, actor, reason, timestamp. Canonical values update transactionally, but source truth remains immutable.
@@ -58,13 +59,36 @@ All user-owned tables carry `user_id`; repository/service queries require it. Pr
 ## Import and reconciliation
 
 1. Browser requests a scoped upload URL; object is private and size/type limited.
-2. Create `import_batch`; worker identifies the explicit adapter and parses into a versioned intermediate schema.
-3. Normalize dates/time zones, airport identifiers, whitespace/case, aircraft registrations, and flight numbers. Preserve raw values and adapter version.
+2. Create `import_batch` stamped with the current importer version; worker identifies the explicit adapter and parses into a versioned intermediate schema.
+3. Normalize dates/time zones, airport identifiers, whitespace/case, aircraft registrations, and flight numbers. Preserve raw values, the raw route text, and adapter version.
 4. Resolve airports by canonical identifiers and aliases. Ambiguous or unknown locations enter review; never guess silently.
-5. Build deterministic fingerprints within one user: date/time precision + origin + destination + flight number/registration + kind. Source stable IDs and file hashes are stronger signals. Fuzzy matches produce candidates, not automatic deletion.
+5. Build deterministic fingerprints within one user: date/time precision + ordered **landing** airports + flight number/registration + kind. Source stable IDs and file hashes are stronger signals. Fuzzy matches produce candidates, not automatic deletion.
 6. Present new, duplicate, ambiguous, and invalid rows. User decisions are idempotent.
 7. Commit accepted rows and provenance in one transaction. Re-imports attach provenance or remain no-ops.
 8. Corrections select a canonical airport and append an override audit entry. Future imports may propose the saved alias, but cannot overwrite the user's correction without review.
+
+### Route waypoints are not landings
+
+A `Route` column answers "which airports were on the flight plan", never "where did the pilot land". Two questions, two mechanisms, never conflated:
+
+- **Is this token an airport?** The classifier (`src/lib/import/route-normalization.ts`) tokenizes the raw route, rejects airway/procedure/nav-fix shapes, resolves the remainder through airport aliases, and applies a namespace guard so a token qualifies only when it names the winning airport through an ICAO / FAA-LID / GPS / ident alias. The guard reads the airport's *whole* alias-type set for that code, not the priority winner, so `BFI` (IATA and FAA-LID) qualifies while an IATA-only match such as `OED` (Medford VOR) does not. A qualifying token becomes `stop_kind = 'waypoint'`.
+- **Did the pilot land there?** Only an explicit source endpoint/landing field, or a deliberate user action, produces `stop_kind = 'landing'`.
+
+**Scope.** Only the ForeFlight adapter calls the classifier today. Generic/mapped CSV imports keep explicit airport-sequence columns as landings; reclassifying them would change the meaning of already-committed stops with no migration, so extending waypoint classification to another provider is a deliberate migration rather than a new call site.
+
+Unresolved or rejected tokens — including IATA/navaid collisions — survive in the preserved raw route text and raise a row warning; they never invalidate the row and never create an airport marker. The ordered path is deduped at the endpoints and across adjacent repeats, keeps non-adjacent repeats, and is capped at 32 nodes.
+
+Because identity and statistics read landings only, adding, removing, or re-resolving waypoints across thousands of flights can never manufacture or collapse a flight. Waypoints are exposed to callers as a flight's presentation-only `routePath`; rendering them is a separate change.
+
+### Import identity and version-aware reprocessing
+
+- `sourceRowKey` hashes a fixed projection of the row's identity fields (date, times, endpoints, flight number, registration, aircraft) plus a 1-based occurrence counter within the file. It replaces an ordinal, so neither inserting an unrelated row above a leg nor adding a column nor editing a remark changes that leg's identity.
+- Row fingerprint v3 appends `sourceRowKey` **only when the departure time is blank** — exactly the collision class where several same-day legs over the same route previously produced one digest and the unique index silently kept one flight. Timed rows keep a content-only digest, so the same flight logged in two providers still collapses.
+- Flights committed under v1/v2 are adopted, not duplicated: dedupe tries the current digest, then `sourceRowKey`, then a superseded fingerprint version. Migration 0018 backfills `flights.fingerprint_version` to 2 for flights with more than two committed stops, matching what the pre-v3 function actually produced.
+- A deliberately accepted duplicate (`accept_new`) is a second flight for one source row, so it omits `sourceRowKey` rather than contending for it.
+- Batch uniqueness is `(user_id, file_sha256, importer_version)`, and the importer version is stamped when the upload row is created, not when its hash is learned. Re-uploading the same bytes after an importer bump restages them automatically; `POST /api/import/batches/{id}/reprocess` does the same explicitly while the private original is retained, copying the stored object so both batches own their own file.
+- `GET /api/import/attention` is a read-only aggregate intended as the single definition of the pending-import badge. It performs no cleanup: the retention sweep runs on write paths and its scheduled job, never on a counter read.
+- Commit invariant violations are typed and map to `409`/`422`, never `503`. Conditions that are our own defect stay untyped and surface as `500` with a correlation id.
 
 The included `flightFingerprint` is only the first deterministic seam; production matching needs time-precision semantics and rule versioning.
 

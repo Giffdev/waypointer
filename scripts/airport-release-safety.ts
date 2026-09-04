@@ -6,6 +6,7 @@ import {
   sha256Bytes,
 } from "./airport-release-provenance.ts";
 import { AirportCatalogSafetyError } from "./postgres-diagnostics.ts";
+import type { AirportMigrationState } from "./airport-release-migrations.ts";
 import { AIRPORT_RELEASE_LOCK_KEYS } from "../src/lib/db/release-lock.ts";
 
 export const AIRPORT_RELEASE_CONFIRMATION_PREFIX =
@@ -113,7 +114,7 @@ export interface AirportProductionPreflightEvidence {
   };
   migration: {
     manifestSha256: string;
-    boundary: "0014" | "0015" | "0016" | "0017";
+    boundary: Exclude<AirportMigrationState["boundary"], "empty">;
   };
   snapshot: {
     id: string;

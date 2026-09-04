@@ -166,6 +166,12 @@
         "tag": "0017_public_share_handles",
         "createdAt": 1787329397148,
         "sha256": "bd016dac8f7adf2ee38bd5a15b769a27711f1408dcec96948c6730fea98632d6"
+      },
+      {
+        "order": 19,
+        "tag": "0018_import_identity_and_route_waypoints",
+        "createdAt": 1788556000000,
+        "sha256": "8114e5af33324b209beb66e15daa63cf888cd15dd47122aa6324ecddfe523814"
       }
     ],
     "permittedBefore": [
@@ -188,6 +194,11 @@
         "tag": "0017_public_share_handles",
         "appliedCount": 19,
         "ledgerSha256": "f26a3293a6528580a789d2adb869e1e5717cc6f40f622846406376dc1a4dbe00"
+      },
+      {
+        "tag": "0018_import_identity_and_route_waypoints",
+        "appliedCount": 20,
+        "ledgerSha256": "a58955d5109907a5a165f32b4edfb66330dffcdad7b1a1ff9fdac7018c9ec6a5"
       }
     ],
     "expectedAfter": {

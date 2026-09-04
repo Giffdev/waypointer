@@ -26,6 +26,17 @@ export type Flight = {
   origin: Airport;
   destination: Airport;
   airportSequence?: Airport[];
+  /**
+   * Presentation-only ordered path including route waypoints.
+   *
+   * Deliberately separate from `airportSequence`: statistics, uniqueness
+   * counts, and sharing all read the landings-only sequence, so adding
+   * waypoints to a flight cannot move a single number. Anything that counts
+   * must use `flightAirportSequence`, never this.
+   */
+  routePath?: Array<{ airport: Airport; kind: "landing" | "waypoint" }>;
+  /** Verbatim source route text, preserved for display. */
+  routeRaw?: string;
   kind: FlightKind;
   role: FlightRole;
   aircraft: string;
@@ -118,6 +129,22 @@ export function flightLegs(
     index,
     origin,
     destination: sequence[index + 1],
+  }));
+}
+
+/**
+ * The ordered path a flight actually drew on the map, including waypoints.
+ *
+ * Falls back to the landings sequence when a flight has no route, so callers
+ * never have to branch. Presentation only — never an input to a count.
+ */
+export function flightRoutePath(
+  flight: Pick<Flight, "origin" | "destination" | "airportSequence" | "routePath">,
+): Array<{ airport: Airport; kind: "landing" | "waypoint" }> {
+  if (flight.routePath && flight.routePath.length >= 2) return flight.routePath;
+  return flightAirportSequence(flight).map((airport) => ({
+    airport,
+    kind: "landing" as const,
   }));
 }
 

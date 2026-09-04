@@ -9,7 +9,7 @@ import {
 } from "../flights/service";
 import type { Airport, Flight } from "../flight-data";
 import { applyProposalCorrection } from "./corrections";
-import { createRowFingerprint } from "./fingerprint";
+import { createLegacyRowFingerprint, createRowFingerprint } from "./fingerprint";
 import {
   GENERIC_CSV_PRESETS,
   inspectGenericCsv,
@@ -138,19 +138,27 @@ describe("multi-stop flight contract", () => {
     });
   });
 
-  it("fingerprints the full directed sequence and preserves simple v1 compatibility", () => {
+  it("fingerprints the full directed sequence and adopts pre-v3 records", () => {
     const forward = proposal(["AAA", "BBB", "CCC", "DDD", "AAA"]);
     const reverse = proposal(["AAA", "DDD", "CCC", "BBB", "AAA"]);
     const repeated = proposal(["AAA", "BBB", "AAA", "BBB"]);
+    const simple = proposal(["AAA", "BBB"]);
 
     expect(createRowFingerprint("user", forward)).not.toEqual(
       createRowFingerprint("user", reverse),
     );
     expect(createRowFingerprint("user", repeated)).not.toEqual(
-      createRowFingerprint("user", proposal(["AAA", "BBB"])),
+      createRowFingerprint("user", simple),
     );
-    expect(createRowFingerprint("user", proposal(["AAA", "BBB"]))?.version)
-      .toBe(1);
+    // Every new fingerprint is v3. Compatibility with the v1 digests already
+    // in the database is carried by the adoption chain rather than by
+    // continuing to emit the old version, so a simple two-stop route still
+    // recomputes byte-identically to its stored v1 value.
+    expect(createRowFingerprint("user", simple)?.version).toBe(3);
+    expect(createLegacyRowFingerprint("user", simple)?.version).toBe(1);
+    expect(createLegacyRowFingerprint("user", simple)?.value).toBe(
+      createLegacyRowFingerprint("user", proposal(["AAA", "BBB"]))?.value,
+    );
   });
 
   it("projects every ordered leg while counting duration and parent once", () => {

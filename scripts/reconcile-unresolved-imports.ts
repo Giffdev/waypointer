@@ -24,11 +24,15 @@ export async function runAirportReconciliationForOwners(
 ): Promise<AirportReconciliationCounts> {
   const candidates: AirportReconciliationCandidate[] = [];
   for (const ownerId of ownerIds) {
-    const batches = await repository.listBatches(ownerId);
+    // Ids and statuses only. The airport release deliberately runs against a
+    // database pinned to an older migration boundary, so this step must not
+    // depend on the current row shape: reading the full batch row made every
+    // future column addition break the release for databases that had not yet
+    // applied it, which is precisely the coupling the pinned boundary exists
+    // to avoid.
+    const batchIds = await repository.listReviewBatchIds(ownerId);
     candidates.push(
-      ...batches
-        .filter((batch) => batch.status === "review")
-        .map((batch) => ({ userId: ownerId, batchId: batch.id })),
+      ...batchIds.map((batchId) => ({ userId: ownerId, batchId })),
     );
   }
   return reconcileUnresolvedAirportImports(candidates, {

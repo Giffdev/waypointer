@@ -5,6 +5,7 @@ import type {
   StoredImportRow,
   UpdateImportRowRequest,
 } from "./types";
+import { withDerivedLandingProjection } from "./invariants";
 
 const EDITABLE_TEXT_FIELDS = [
   "aircraft",
@@ -106,8 +107,14 @@ export function applyProposalCorrection(
   patch: ResolvedProposalPatch,
   correctedAt: string,
 ): StoredImportRow {
-  const proposedFlight = structuredClone(row.proposedFlight);
+  let proposedFlight = structuredClone(row.proposedFlight);
   const corrections = [...(row.corrections ?? [])];
+  // `routeNodes` is the canonical ordered path; `origin`/`destination`/
+  // `airportMatches` are a derived landings-only projection of it. Patching
+  // only the projection leaves the canonical path stale, which is how a
+  // corrected row still committed its original airport and stopped matching
+  // its own fingerprint. Correct the nodes, then re-derive.
+  const usesRouteNodes = Boolean(proposedFlight.routeNodes?.length);
 
   if (patch.origin) {
     recordCorrection(
@@ -117,14 +124,18 @@ export function applyProposalCorrection(
       patch.origin,
       correctedAt,
     );
-    proposedFlight.origin = patch.origin;
-    proposedFlight.originIdentifier = patch.origin.identifier;
-    if (proposedFlight.airportMatches?.length) {
-      proposedFlight.airportMatches[0] = patch.origin;
-      proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
-        ({ identifier }) => identifier,
-      );
-      proposedFlight.airportIdentifiers[0] = patch.origin.identifier;
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, 0, patch.origin);
+    } else {
+      proposedFlight.origin = patch.origin;
+      proposedFlight.originIdentifier = patch.origin.identifier;
+      if (proposedFlight.airportMatches?.length) {
+        proposedFlight.airportMatches[0] = patch.origin;
+        proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
+          ({ identifier }) => identifier,
+        );
+        proposedFlight.airportIdentifiers[0] = patch.origin.identifier;
+      }
     }
   }
   if (patch.destination) {
@@ -135,15 +146,19 @@ export function applyProposalCorrection(
       patch.destination,
       correctedAt,
     );
-    proposedFlight.destination = patch.destination;
-    proposedFlight.destinationIdentifier = patch.destination.identifier;
-    if (proposedFlight.airportMatches?.length) {
-      const last = proposedFlight.airportMatches.length - 1;
-      proposedFlight.airportMatches[last] = patch.destination;
-      proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
-        ({ identifier }) => identifier,
-      );
-      proposedFlight.airportIdentifiers[last] = patch.destination.identifier;
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, -1, patch.destination);
+    } else {
+      proposedFlight.destination = patch.destination;
+      proposedFlight.destinationIdentifier = patch.destination.identifier;
+      if (proposedFlight.airportMatches?.length) {
+        const last = proposedFlight.airportMatches.length - 1;
+        proposedFlight.airportMatches[last] = patch.destination;
+        proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
+          ({ identifier }) => identifier,
+        );
+        proposedFlight.airportIdentifiers[last] = patch.destination.identifier;
+      }
     }
   }
   if (patch.resolvedRouteStop) {
@@ -166,14 +181,21 @@ export function applyProposalCorrection(
       airport,
       correctedAt,
     );
-    matches[index] = airport;
-    identifiers[index] = airport.identifier;
-    proposedFlight.airportMatches = matches;
-    proposedFlight.airportIdentifiers = identifiers;
-    proposedFlight.origin = matches[0];
-    proposedFlight.destination = matches.at(-1);
-    proposedFlight.originIdentifier = identifiers[0];
-    proposedFlight.destinationIdentifier = identifiers.at(-1);
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, index, airport);
+    } else {
+      matches[index] = airport;
+      identifiers[index] = airport.identifier;
+      proposedFlight.airportMatches = matches;
+      proposedFlight.airportIdentifiers = identifiers;
+      proposedFlight.origin = matches[0];
+      proposedFlight.destination = matches.at(-1);
+      proposedFlight.originIdentifier = identifiers[0];
+      proposedFlight.destinationIdentifier = identifiers.at(-1);
+    }
+  }
+  if (usesRouteNodes) {
+    proposedFlight = withDerivedLandingProjection(proposedFlight);
   }
   for (const [field, value] of Object.entries(patch)) {
     if (
@@ -211,6 +233,38 @@ export function applyProposalCorrection(
     decidedAt: undefined,
     duplicateCandidate: undefined,
   };
+}
+
+/**
+ * Replaces the resolved airport on the nth landing node (negative index counts
+ * from the end). Waypoints are skipped, so a landing index from the review UI
+ * always addresses the landing the user is looking at even when the row also
+ * carries overflown route waypoints.
+ */
+function correctLandingNode(
+  flight: ProposedImportFlight,
+  landingIndex: number,
+  airport: ImportAirportMatch,
+): void {
+  const nodes = flight.routeNodes;
+  if (!nodes?.length) return;
+  const landingPositions = nodes.flatMap((node, position) =>
+    node.kind === "landing" ? [position] : [],
+  );
+  const position =
+    landingIndex < 0
+      ? landingPositions.at(landingIndex)
+      : landingPositions[landingIndex];
+  if (position === undefined) {
+    throw new Error("Route stop index is out of range");
+  }
+  const target = nodes[position];
+  if (target.kind !== "landing") return;
+  flight.routeNodes = nodes.with(position, {
+    ...target,
+    identifier: airport.identifier,
+    match: airport,
+  });
 }
 
 function recordCorrection(
