@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -19,14 +21,10 @@ vi.mock("@/lib/sharing/service", () => ({
   toLegacyPublicMapProjection: mocks.toLegacyPublicMapProjection,
   toV3PublicMapProjection: mocks.toV3PublicMapProjection,
   ShareNotFoundError: class ShareNotFoundError extends Error {},
-  ShareRepublishRequiredError: class ShareRepublishRequiredError extends Error {},
 }));
 
 import { GET, POST } from "./route";
-import {
-  ShareNotFoundError,
-  ShareRepublishRequiredError,
-} from "@/lib/sharing/service";
+import { ShareNotFoundError } from "@/lib/sharing/service";
 
 describe("public shared map API", () => {
   beforeEach(() => {
@@ -80,7 +78,20 @@ describe("public shared map API", () => {
     expect(mocks.toV3PublicMapProjection).not.toHaveBeenCalled();
   });
 
-  it("downgrades a freshly republished waypoint snapshot to the frozen contract=3 shape", async () => {
+  it("has no republish-required response left to send", async () => {
+    // The 409 existed only for a stored snapshot too old to serve. Nothing
+    // stored is read any more, so an unserveable handle is a 404 and a
+    // failing derivation is a 503 — never an instruction to press a button
+    // that no longer exists.
+    const source = readFileSync(
+      fileURLToPath(new URL("./route.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(source).not.toMatch(/republish/i);
+    expect(source).not.toContain("409");
+  });
+
+  it("downgrades a waypoint-carrying live map to the frozen contract=3 shape", async () => {
     const canonical = {
       schemaVersion: 4,
       owner: { displayName: "Waypoint Pilot" },
@@ -251,24 +262,6 @@ describe("public shared map API", () => {
     expect(JSON.stringify(body)).not.toMatch(
       /email|session|accountId|userId|notes|fingerprint|flightId/i,
     );
-  });
-
-  it("tells viewers when an old projection must be republished", async () => {
-    mocks.getPublicMapProjection.mockRejectedValueOnce(
-      new ShareRepublishRequiredError(),
-    );
-    const response = await GET(
-      new Request("https://example.test/api/shared/legacy"),
-      { params: Promise.resolve({ handle: "legacy" }) },
-    );
-
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: {
-        code: "republish-required",
-        message: "This shared map must be republished to show real airports.",
-      },
-    });
   });
 
   it("reads a public username with no token and no-store caching", async () => {

@@ -34,14 +34,13 @@ and drawn as a dashed path through a hollow, labelled point on your private map
 through KRBG in both places. They never count as a landing, never change
 `airportSequence`, never affect unique-airport, route, or landing statistics,
 and never become an airport marker — that marker means "you have been here".
-The public share publishes the path geometry and nothing else: every published
+The public share carries the path geometry and nothing else: every shared
 count is still built from landing stops alone. Only an explicit endpoint/landing
 column, or a deliberate user action, creates a landing.
 
-Your public map is a snapshot taken when you last published it. A map shared
-before route waypoints existed keeps drawing straight lines until you republish
-it from **Settings → Sharing**; republishing changes nothing else about what is
-shared.
+Your public map is a live view of your current map. Route points added by a
+later re-import appear on your share link within about half a minute, with no
+republish step and no change to the link itself.
 
 Generic and mapped CSV imports are deliberately **not** routed through this
 classifier. Their multi-airport columns are explicit airport-sequence fields

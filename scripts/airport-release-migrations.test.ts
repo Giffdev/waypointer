@@ -37,6 +37,7 @@ describe("airport release migration ledger targeting", () => {
       "0016_serialize_owner_flight_sharing",
       "0017_public_share_handles",
       "0018_import_identity_and_route_waypoints",
+      "0019_live_shared_maps",
     ]);
     expect(manifest.releaseScope).toEqual(AIRPORT_RELEASE_SCOPE);
     expect(() =>
@@ -85,6 +86,13 @@ describe("airport release migration ledger targeting", () => {
         "production",
       ),
     ).toBe("0018");
+    expect(
+      validateAirportMigrationLedger(
+        rowsThrough("0019_live_shared_maps"),
+        manifest,
+        "production",
+      ),
+    ).toBe("0019");
   });
 
   it("always admits the newest migration as a before-boundary", async () => {

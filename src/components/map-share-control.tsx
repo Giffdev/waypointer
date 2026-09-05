@@ -14,7 +14,7 @@ import { useOwnerSharingStatus } from "@/lib/sharing/owner-sharing-client";
 /**
  * Lightweight map-page discoverability entry point for sharing. Shows
  * status and the essentials (enable, copy, open) without duplicating the
- * full management surface, which stays in Settings (disable/republish).
+ * full management surface, which stays in Settings (disable).
  */
 export function MapShareControl() {
   const popupId = useId();
@@ -110,7 +110,7 @@ export function MapShareControl() {
           {!loading && !failed && !status?.enabled && (
             <>
               <p>
-                Sharing publishes your entire map at{" "}
+                Sharing shares your entire map at{" "}
                 <strong>/{status?.publicHandle ?? "username"}</strong>. Anyone
                 who knows or finds your username can open it.
               </p>
@@ -136,6 +136,10 @@ export function MapShareControl() {
                   onFocus={(event) => event.currentTarget.select()}
                 />
               </label>
+              <p className="sharing-live-note">
+                This link stays current with your map until you disable
+                sharing.
+              </p>
               <div className="sharing-actions">
                 <button
                   type="button"

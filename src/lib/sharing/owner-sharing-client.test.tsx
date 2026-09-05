@@ -121,7 +121,7 @@ function statusResponse(options: {
         enabled: options.enabled,
         publicHandle: "test-pilot",
         sharePath: options.sharePath,
-        publishedFlightCount: options.flights,
+        sharedFlightCount: options.flights,
       },
     }),
     { headers: { "content-type": "application/json" } },

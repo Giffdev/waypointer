@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
-import { asc, and, count, eq, sql } from "drizzle-orm";
-import { getDb, withUserDb, type DatabaseTransaction } from "@/lib/db";
+import { count, eq, sql } from "drizzle-orm";
 import {
-  airportAliases,
+  getDb,
+  withPublicShareDb,
+  withUserDb,
+  type DatabaseTransaction,
+} from "@/lib/db";
+import {
   airports,
   flightStops,
   flights,
@@ -12,7 +16,6 @@ import {
 } from "@/lib/db/schema";
 import { isValidPublicHandle, normalizeUsername } from "@/lib/auth/username";
 import {
-  airportExactIdentity,
   deriveRouteDirectionMode,
   type Airport,
   type RouteDirectionMode,
@@ -30,10 +33,9 @@ import {
   PublicMapProjectionValidationError,
 } from "./client-projection";
 
-const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLIC_COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
-const STORED_MAP_PROJECTION_SCHEMA_VERSION = 2;
+
 // `PublicMapProjection` (this constant) is the *current* wire contract,
 // carrying `routePath`. It must only ever gain a version bump, never a field
 // added under an existing number: contract=3 was already shipped without
@@ -51,8 +53,8 @@ type PublicAirport = Pick<
 
 /**
  * Exact row shape the public projection reads an airport from. Declared once
- * so the snapshot query, the display-code selector, and its tests cannot drift
- * into passing `undefined` for an identifier field.
+ * so the live public query, the display-code selector, and its tests cannot
+ * drift into passing `undefined` for an identifier field.
  */
 export type PublicAirportRow = {
   sourceIdent: string | null;
@@ -73,6 +75,12 @@ export type OwnerShareStatus = {
   sharePath: string | null;
   enabledAt: string | null;
   disabledAt: string | null;
+  /** Flights the live shared map currently covers. */
+  sharedFlightCount: number;
+  /**
+   * @deprecated Same value as `sharedFlightCount`, kept so a browser still
+   * running the pre-live bundle does not render an empty count mid-deploy.
+   */
   publishedFlightCount: number;
 };
 
@@ -163,7 +171,6 @@ export class ShareValidationError extends Error {
   }
 }
 export class ShareEmptyMapError extends Error {}
-export class ShareRepublishRequiredError extends Error {}
 
 export function formatHandleSharePath(handle: string): string {
   return `/${handle}`;
@@ -187,10 +194,15 @@ export async function getOwnerShareStatus(
       .limit(1);
     if (!owner) throw new Error("Authentication is required.");
     const publicHandle = owner.username;
-    const [selected] = await tx
+    // Counted from the owner's *current* flights, because that is what the
+    // link shows. Counting membership rows would report the flight set as it
+    // stood when sharing was enabled, which is exactly the frozen view this
+    // feature removed.
+    const [shared] = await tx
       .select({ flightCount: count() })
-      .from(mapShareFlights)
-      .where(eq(mapShareFlights.userId, userId));
+      .from(flights)
+      .where(eq(flights.userId, userId));
+    const sharedFlightCount = shared?.flightCount ?? 0;
     if (!share) {
       return {
         enabled: false,
@@ -198,7 +210,8 @@ export async function getOwnerShareStatus(
         sharePath: null,
         enabledAt: null,
         disabledAt: null,
-        publishedFlightCount: 0,
+        sharedFlightCount,
+        publishedFlightCount: sharedFlightCount,
       };
     }
     const enabled = Boolean(share.enabledAt && !share.disabledAt);
@@ -208,7 +221,8 @@ export async function getOwnerShareStatus(
       sharePath: enabled ? formatHandleSharePath(publicHandle) : null,
       enabledAt: share.enabledAt?.toISOString() ?? null,
       disabledAt: share.disabledAt?.toISOString() ?? null,
-      publishedFlightCount: selected?.flightCount ?? 0,
+      sharedFlightCount,
+      publishedFlightCount: sharedFlightCount,
     };
   });
 }
@@ -226,20 +240,29 @@ export async function enableMapSharing(
       .where(eq(users.id, userId))
       .limit(1);
     if (!owner) throw new Error("Authentication is required.");
-    const snapshot = await createSnapshot(tx, userId);
+    // Enabling derives the map once even though nothing durable depends on
+    // it: it is what turns "this logbook cannot be published safely" into an
+    // error the owner sees while they are looking at the button, rather than
+    // a 503 a stranger sees on the link. It also refuses to publish an empty
+    // map, exactly as it did before.
+    const rows = await readOwnerMapRows(tx, userId);
+    if (rows.flights.length === 0) throw new ShareEmptyMapError();
+    const projection = buildPublicMapProjection(rows);
     const now = new Date();
     await tx
       .insert(mapShares)
       .values({
         userId,
-        projection: snapshot.projection,
+        // Deprecated rollback document, never read by the live public path.
+        // See `rollbackCompatibleStoredProjection`.
+        projection: rollbackCompatibleStoredProjection(projection),
         enabledAt: now,
         disabledAt: null,
       })
       .onConflictDoUpdate({
         target: mapShares.userId,
         set: {
-          projection: snapshot.projection,
+          projection: rollbackCompatibleStoredProjection(projection),
           enabledAt: now,
           disabledAt: null,
           updatedAt: now,
@@ -265,7 +288,7 @@ export async function enableMapSharing(
       )
       select count(*)::integer as "flightCount" from inserted
     `);
-    if (inserted[0]?.flightCount !== snapshot.flightIds.length) {
+    if (inserted[0]?.flightCount !== rows.flights.length) {
       throw new ShareValidationError("membership-count-mismatch");
     }
   });
@@ -289,6 +312,21 @@ export async function disableMapSharing(
   return getOwnerShareStatus(userId);
 }
 
+/**
+ * Serves a shared map as a live view of the owner's map right now.
+ *
+ * Two steps, in this order, and the order is the security boundary. First the
+ * handle is resolved to an owner id through `public_share_owner_by_handle`,
+ * which answers at all only for an enabled, unrevoked share on a live
+ * account. Only then is the projection derived, inside a read-only
+ * owner-scoped transaction. An unknown, reserved, disabled, or revoked handle
+ * never reaches a row: it fails at resolution with the same generic
+ * `ShareNotFoundError` every other miss produces.
+ *
+ * Nothing stored is consulted. A flight imported, enriched with route
+ * waypoints, edited, or deleted a second ago is reflected on the next
+ * request, without the owner republishing anything.
+ */
 export async function getPublicMapProjection(
   identifier: string,
 ): Promise<PublicMapProjection> {
@@ -296,192 +334,18 @@ export async function getPublicMapProjection(
   if (!handle || !isValidPublicHandle(handle)) {
     throw new ShareNotFoundError();
   }
-  const result = await getDb().execute<{
-    projection: unknown;
-  }>(sql`select public_map_projection_by_handle(${handle}) as projection`);
-  const projection = result[0]?.projection;
-  if (!projection) throw new ShareNotFoundError();
-  if (
-    !projection ||
-    typeof projection !== "object" ||
-    Reflect.get(projection, "schemaVersion") !==
-      STORED_MAP_PROJECTION_SCHEMA_VERSION
-  ) {
-    throw new ShareRepublishRequiredError();
-  }
-  const { routes: storedRoutes, flights: publicFlights } =
-    normalizeStoredPublicProjection(
-      Reflect.get(projection, "canonicalRoutes") ??
-        Reflect.get(projection, "routes"),
-      Reflect.get(projection, "flights"),
-    );
-  const { routes: publicRoutes, flights: relabelledFlights } =
-    await relabelledPublicProjection(storedRoutes, publicFlights);
-  const owner = Reflect.get(projection, "owner");
-  const summary = Reflect.get(projection, "summary");
-  return validatePublicMapProjection({
-    schemaVersion: PUBLIC_MAP_PROJECTION_SCHEMA_VERSION,
-    owner: {
-      displayName:
-        owner && typeof owner === "object"
-          ? Reflect.get(owner, "displayName")
-          : undefined,
-    },
-    summary: {
-      flightCount:
-        summary && typeof summary === "object"
-          ? Reflect.get(summary, "flightCount")
-          : undefined,
-      routeCount:
-        publicRoutes.length,
-    },
-    routes: publicRoutes,
-    flights: relabelledFlights,
-  });
+  const resolved = await getDb().execute<{ ownerId: string | null }>(
+    sql`select public_share_owner_by_handle(${handle}) as "ownerId"`,
+  );
+  const ownerId = resolved[0]?.ownerId;
+  if (typeof ownerId !== "string" || !ownerId) throw new ShareNotFoundError();
+  return withPublicShareDb(ownerId, async (tx) =>
+    buildPublicMapProjection(await readOwnerMapRows(tx, ownerId)),
+  );
 }
 
 export function publicHandleRateLimitKey(identifier: string): string {
   return normalizeUsername(identifier);
-}
-
-type AirportLabelRow = Pick<
-  PublicAirportRow,
-  "sourceIdent" | "icao" | "iata" | "localCode"
-> & {
-  aliasCode: string;
-  id: string;
-  latitude: number;
-  longitude: number;
-};
-
-/**
- * A published projection is frozen JSON: every airport's display code was
- * captured at publish time. Airport codes are labels rather than identities,
- * so the public read re-derives them from the live airport catalog and
- * substitutes the ones that have changed. Already-published maps therefore
- * pick up a display-code correction (Bandon State's `BDY` becoming `S05`)
- * without the owner republishing, without rewriting stored snapshots, and
- * without invalidating the schema-v2 rollback view.
- *
- * A stored airport is only relabelled when exactly one catalog airport carries
- * the published code as an identifier alias *at the published coordinates*.
- * Unknown, ambiguous, or moved airports keep their published label, so this can
- * never invent or cross-assign a code.
- *
- * The relabel is cosmetic, so it fails open: if the catalog lookup errors the
- * published map is still served with its stored labels rather than turning a
- * readable shared map into a 503.
- */
-async function relabelledPublicProjection(
-  routes: PublicMapProjection["routes"],
-  flights: PublicMapProjection["flights"],
-): Promise<Pick<PublicMapProjection, "routes" | "flights">> {
-  // One lookup for every published label on the map, route endpoints and
-  // overflown waypoints alike. Relabelling only the routes would let the same
-  // airport render as `S05` on a route and `BDY` on a path through it.
-  const codes = [
-    ...new Set([
-      ...routes.flatMap((route) => [
-        route.origin.code.toUpperCase(),
-        route.destination.code.toUpperCase(),
-      ]),
-      ...flights.flatMap((flight) =>
-        (flight.routePath ?? []).map((node) =>
-          node.airport.code.toUpperCase(),
-        ),
-      ),
-    ]),
-  ];
-  if (codes.length === 0) return { routes, flights };
-  const rows = await airportLabelRows(codes);
-  const byCode = new Map<string, AirportLabelRow[]>();
-  for (const row of rows) {
-    if (
-      typeof row?.aliasCode !== "string" ||
-      typeof row.latitude !== "number" ||
-      typeof row.longitude !== "number"
-    ) {
-      continue;
-    }
-    const matches = byCode.get(row.aliasCode) ?? [];
-    matches.push(row);
-    byCode.set(row.aliasCode, matches);
-  }
-  if (byCode.size === 0) return { routes, flights };
-  return {
-    routes: routes.map((route) => ({
-      ...route,
-      origin: relabelledPublicAirport(route.origin, byCode),
-      destination: relabelledPublicAirport(route.destination, byCode),
-    })),
-    flights: flights.map((flight) =>
-      flight.routePath
-        ? {
-            ...flight,
-            routePath: flight.routePath.map((node) => ({
-              ...node,
-              airport: relabelledPublicAirport(node.airport, byCode),
-            })),
-          }
-        : flight,
-    ),
-  };
-}
-
-function relabelledPublicAirport(
-  airport: PublicAirport,
-  byCode: Map<string, AirportLabelRow[]>,
-): PublicAirport {
-  const candidates = (byCode.get(airport.code.toUpperCase()) ?? []).filter(
-    (row) =>
-      normalizePublicZero(row.latitude) === airport.lat &&
-      normalizePublicZero(row.longitude) === airport.lon,
-  );
-  if (new Set(candidates.map(({ id }) => id)).size !== 1) return airport;
-  const code = preferredAirportCode(candidates[0]!);
-  return code && code !== airport.code ? { ...airport, code } : airport;
-}
-
-/**
- * Reads the catalog rows that carry any of `codes` as an identifier alias.
- *
- * `airport_aliases.code` is written upper-cased by the only writer of that
- * table (`airportIdentifierAliases` upper-cases every alias it emits) and the
- * lookup codes are upper-cased above, so the column is compared directly
- * rather than through `upper(...)`: wrapping it discards the
- * `airport_aliases_code_priority_idx` index and forces a sequential scan on
- * every public map read. This matches how the import repository resolves an
- * alias (`eq(airportAliases.code, normalized)`).
- *
- * A failure here means the *label refresh* is unavailable, not the map. The
- * caller treats an empty result as "nothing to relabel", so an error degrades
- * to the stored published labels instead of failing the whole read.
- */
-async function airportLabelRows(
-  codes: string[],
-): Promise<readonly AirportLabelRow[]> {
-  try {
-    return await getDb().execute<AirportLabelRow>(sql`
-      select
-        ${airportAliases.code} as "aliasCode",
-        ${airports.id} as id,
-        ${airports.sourceIdent} as "sourceIdent",
-        ${airports.icao} as icao,
-        ${airports.iata} as iata,
-        ${airports.localCode} as "localCode",
-        ${airports.latitude} as latitude,
-        ${airports.longitude} as longitude
-      from ${airports}
-      join ${airportAliases}
-        on ${airportAliases.airportId} = ${airports.id}
-      where ${airportAliases.code} in (${sql.join(
-        codes.map((code) => sql`${code}`),
-        sql`, `,
-      )})
-    `);
-  } catch {
-    return [];
-  }
 }
 
 /**
@@ -593,75 +457,78 @@ function legacyRouteId(
     .digest("hex");
 }
 
-async function createSnapshot(
+/**
+ * Every row the public projection is derived from, for exactly one owner.
+ *
+ * Read as plain rows and handed to a pure builder so the shape of a shared
+ * map can be asserted without a database, and so the read path is provably
+ * three bounded owner-scoped queries rather than anything per-flight.
+ */
+export type OwnerMapRows = {
+  flights: readonly OwnerFlightRow[];
+  /** Every stop, landings and waypoints, ordered by flight then stop order. */
+  stops: readonly OwnerStopRow[];
+  airports: ReadonlyArray<PublicAirportRow & { id: string }>;
+};
+
+type OwnerFlightRow = {
+  id: string;
+  date: string;
+  kind: string;
+  role: string;
+  aircraft: string | null;
+  aircraftType: string | null;
+  registration: string | null;
+  originAirportId: string;
+  destinationAirportId: string;
+};
+
+type OwnerStopRow = {
+  flightId: string;
+  airportId: string;
+  stopOrder: number;
+  stopKind: string;
+};
+
+/**
+ * The one bounded query path a public map read is allowed to take: three
+ * owner-scoped statements, no matter how large the logbook is and regardless
+ * of how many flights, stops, or airports it contains. Nothing here loops.
+ *
+ * Every statement carries its own `user_id` predicate even though row-level
+ * security already restricts the transaction to this owner. The predicate is
+ * what keeps the owner-scoped indices in play; RLS is the thing that makes a
+ * mistake in the predicate harmless.
+ */
+async function readOwnerMapRows(
   tx: DatabaseTransaction,
   userId: string,
-): Promise<{ projection: unknown; flightIds: string[] }> {
-  const selectedFlights = await tx
-    .select({
-      id: flights.id,
-      date: flights.date,
-      kind: flights.kind,
-      role: flights.role,
-      aircraft: flights.aircraft,
-      aircraftType: flights.aircraftType,
-      registration: flights.registration,
-      originAirportId: flights.originAirportId,
-      destinationAirportId: flights.destinationAirportId,
-    })
-    .from(flights)
-    .where(eq(flights.userId, userId))
-    .orderBy(asc(flights.id));
-  if (selectedFlights.length === 0) {
-    throw new ShareEmptyMapError();
-  }
-  const flightIds = selectedFlights.map(({ id }) => id);
-  // Two reads of the same table, for two different questions.
-  //
-  // `selectedStops` is landings only and is the *only* input to routes,
-  // route legs, and the summary: a shared map's airport, route, and flight
-  // counts are claims about where someone has been, and a waypoint is not a
-  // place they went.
-  //
-  // `pathStops` is the full ordered path and feeds only the presentation-only
-  // `routePath`. Keeping them as separate queries is what makes it impossible
-  // for a waypoint to reach a count by accident.
-  const selectedStops = await tx
-    .select({
-      flightId: flightStops.flightId,
-      airportId: flightStops.airportId,
-      stopOrder: flightStops.stopOrder,
-    })
-    .from(flightStops)
-    .where(
-      and(
-        eq(flightStops.userId, userId),
-        eq(flightStops.stopKind, "landing"),
-      ),
-    )
-    .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
-  const pathStops = await tx
-    .select({
-      flightId: flightStops.flightId,
-      airportId: flightStops.airportId,
-      stopOrder: flightStops.stopOrder,
-      stopKind: flightStops.stopKind,
-    })
-    .from(flightStops)
-    .where(eq(flightStops.userId, userId))
-    .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
-  const pathStopsByFlight = new Map<string, typeof pathStops>();
-  for (const stop of pathStops) {
-    const stops = pathStopsByFlight.get(stop.flightId) ?? [];
-    stops.push(stop);
-    pathStopsByFlight.set(stop.flightId, stops);
-  }
-  const stopsByFlight = new Map<string, typeof selectedStops>();
-  for (const stop of selectedStops) {
-    const stops = stopsByFlight.get(stop.flightId) ?? [];
-    stops.push(stop);
-    stopsByFlight.set(stop.flightId, stops);
-  }
+): Promise<OwnerMapRows> {
+  const ownerFlights = await tx.execute<OwnerFlightRow>(sql`
+    select
+      ${flights.id} as id,
+      ${flights.date} as date,
+      ${flights.kind} as kind,
+      ${flights.role} as role,
+      ${flights.aircraft} as aircraft,
+      ${flights.aircraftType} as "aircraftType",
+      ${flights.registration} as registration,
+      ${flights.originAirportId} as "originAirportId",
+      ${flights.destinationAirportId} as "destinationAirportId"
+    from ${flights}
+    where ${flights.userId} = ${userId}::uuid
+    order by ${flights.id} asc
+  `);
+  const ownerStops = await tx.execute<OwnerStopRow>(sql`
+    select
+      ${flightStops.flightId} as "flightId",
+      ${flightStops.airportId} as "airportId",
+      ${flightStops.stopOrder} as "stopOrder",
+      ${flightStops.stopKind} as "stopKind"
+    from ${flightStops}
+    where ${flightStops.userId} = ${userId}::uuid
+    order by ${flightStops.flightId} asc, ${flightStops.stopOrder} asc
+  `);
   const airportRows = await tx.execute<PublicAirportRow & { id: string }>(sql`
     select
       ${airports.id} as id,
@@ -690,13 +557,57 @@ async function createSnapshot(
       where ${flightStops.userId} = ${userId}::uuid
     )
   `);
-  const airportById = new Map(airportRows.map((airport) => [airport.id, airport]));
+  return {
+    flights: [...ownerFlights],
+    stops: [...ownerStops],
+    airports: [...airportRows],
+  };
+}
+
+/**
+ * Builds the public projection from an owner's current rows.
+ *
+ * Pure, and deliberately so: this is the single definition of what a shared
+ * map contains, used both by the public read on every request and by the
+ * enable action's up-front validation. There is no second builder that could
+ * drift, and no stored document that could disagree with it.
+ *
+ * An owner with no flights produces an empty map rather than an error — a
+ * live view of an empty logbook is empty, not broken.
+ */
+export function buildPublicMapProjection(
+  rows: OwnerMapRows,
+): PublicMapProjection {
+  // One read of the stops, split two ways for two different questions.
+  //
+  // `landingsByFlight` is the *only* input to routes, route legs, and the
+  // summary: a shared map's airport, route, and flight counts are claims
+  // about where someone has been, and a waypoint is not a place they went.
+  //
+  // `pathByFlight` is the full ordered path and feeds only the
+  // presentation-only `routePath`. Splitting on `stopKind` here — rather than
+  // trusting a caller to pass the right list — is what keeps a waypoint out
+  // of a count.
+  const landingsByFlight = new Map<string, OwnerStopRow[]>();
+  const pathByFlight = new Map<string, OwnerStopRow[]>();
+  for (const stop of rows.stops) {
+    const path = pathByFlight.get(stop.flightId) ?? [];
+    path.push(stop);
+    pathByFlight.set(stop.flightId, path);
+    if (stop.stopKind !== "landing") continue;
+    const landings = landingsByFlight.get(stop.flightId) ?? [];
+    landings.push(stop);
+    landingsByFlight.set(stop.flightId, landings);
+  }
+  const airportById = new Map(
+    rows.airports.map((airport) => [airport.id, airport]),
+  );
   const routeCounts = new Map<
     string,
     PublicMapProjection["routes"][number]
   >();
   const publicFlights: NonNullable<PublicMapProjection["flights"]> = [];
-  for (const flight of selectedFlights) {
+  for (const flight of rows.flights) {
     if (
       (flight.kind !== "commercial" && flight.kind !== "private") ||
       (flight.role !== "passenger" && flight.role !== "pilot") ||
@@ -705,7 +616,7 @@ async function createSnapshot(
       throw new ShareValidationError("invalid-flight-facts");
     }
     const stopIds =
-      stopsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
+      landingsByFlight.get(flight.id)?.map(({ airportId }) => airportId) ?? [
         flight.originAirportId,
         flight.destinationAirportId,
       ];
@@ -772,15 +683,15 @@ async function createSnapshot(
         flight.aircraft,
       ]),
       registration: normalizeRegistrationMetadata(flight.registration) ?? null,
-      ...(publicRoutePath(pathStopsByFlight.get(flight.id), airportById) ?? {}),
+      ...(publicRoutePath(pathByFlight.get(flight.id), airportById) ?? {}),
       routeLegs,
     });
   }
-  const publicProjection = validatePublicMapProjection({
+  return validatePublicMapProjection({
     schemaVersion: PUBLIC_MAP_PROJECTION_SCHEMA_VERSION,
     owner: { displayName: null },
     summary: {
-      flightCount: selectedFlights.length,
+      flightCount: rows.flights.length,
       routeCount: routeCounts.size,
     },
     routes: [...routeCounts.values()].toSorted((left, right) =>
@@ -788,12 +699,18 @@ async function createSnapshot(
     ),
     flights: publicFlights,
   });
-  return {
-    flightIds,
-    projection: rollbackCompatibleStoredProjection(publicProjection),
-  };
 }
 
+/**
+ * The deprecated rollback document written to `map_shares.projection` when
+ * sharing is enabled.
+ *
+ * It is never read back: the live path derives the map from current owner
+ * rows, so this exists only so that a rolled-back build — which does read the
+ * column — still finds a map it can serve instead of an empty share. It is
+ * consequently as stale as the last enable, and is not a fallback for the
+ * live read.
+ */
 export function rollbackCompatibleStoredProjection(
   projection: PublicMapProjection,
 ): unknown {
@@ -819,8 +736,8 @@ export function rollbackCompatibleStoredProjection(
  * The presentation-only path for one flight, or nothing.
  *
  * Returns `undefined` unless the flight actually overflew somewhere, so a
- * logbook without route waypoints publishes a byte-identical snapshot to the
- * one it published before this shipped.
+ * logbook without route waypoints produces a byte-identical projection to the
+ * one it produced before waypoints shipped.
  */
 function publicRoutePath(
   stops:
@@ -911,287 +828,20 @@ function isPublicDate(value: unknown): value is string {
   );
 }
 
-function normalizeStoredPublicProjection(
-  routeValue: unknown,
-  flightValue: unknown,
-): Pick<PublicMapProjection, "routes" | "flights"> {
-  if (!Array.isArray(routeValue) || routeValue.length === 0) {
-    throw new ShareValidationError();
-  }
-  const storedIds = new Set<string>();
-  const storedRoutes = routeValue.map((candidate) => {
-    if (!candidate || typeof candidate !== "object") {
-      throw new ShareValidationError();
-    }
-    const id = Reflect.get(candidate, "id");
-    const kind = Reflect.get(candidate, "kind");
-    const flightCount = Reflect.get(candidate, "flightCount");
-    if (
-      typeof id !== "string" ||
-      !PUBLIC_ROUTE_ID_PATTERN.test(id) ||
-      storedIds.has(id) ||
-      (kind !== "commercial" && kind !== "private") ||
-      typeof flightCount !== "number" ||
-      !Number.isSafeInteger(flightCount) ||
-      flightCount < 1
-    ) {
-      throw new ShareValidationError();
-    }
-    storedIds.add(id);
-    const hasDirection = Object.hasOwn(candidate, "directionMode");
-    return {
-      id,
-      kind,
-      flightCount,
-      origin: sanitizeStoredPublicPlace(Reflect.get(candidate, "origin")),
-      destination: sanitizeStoredPublicPlace(
-        Reflect.get(candidate, "destination"),
-      ),
-      hasDirection,
-      forwardFlightCount: Reflect.get(candidate, "forwardFlightCount"),
-      reverseFlightCount: Reflect.get(candidate, "reverseFlightCount"),
-      directionMode: Reflect.get(candidate, "directionMode"),
-    };
-  });
-  const isLegacy = storedRoutes.every((route) => !route.hasDirection);
-  if (!isLegacy && storedRoutes.some((route) => !route.hasDirection)) {
-    throw new ShareValidationError();
-  }
-  const routeReferenceByStoredId = new Map<
-    string,
-    {
-      routeId: string;
-      direction: "forward" | "reverse" | "none";
-    }
-  >();
-  let routes: PublicMapProjection["routes"];
-  if (isLegacy) {
-    const canonicalRoutes = new Map<
-      string,
-      PublicMapProjection["routes"][number]
-    >();
-    for (const route of storedRoutes) {
-      const originKey = publicAirportKey(route.origin);
-      const destinationKey = publicAirportKey(route.destination);
-      const sameAirport = originKey === destinationKey;
-      const forward = sameAirport || originKey.localeCompare(destinationKey) < 0;
-      const first = forward ? route.origin : route.destination;
-      const second = forward ? route.destination : route.origin;
-      const canonicalKey = JSON.stringify([
-        route.kind,
-        publicAirportKey(first),
-        publicAirportKey(second),
-      ]);
-      const direction = sameAirport
-        ? "none"
-        : forward
-          ? "forward"
-          : "reverse";
-      const existing = canonicalRoutes.get(canonicalKey);
-      const canonicalId = existing?.id ?? route.id;
-      if (existing) {
-        existing.flightCount += route.flightCount;
-        if (direction === "forward") {
-          existing.forwardFlightCount += route.flightCount;
-        }
-        if (direction === "reverse") {
-          existing.reverseFlightCount += route.flightCount;
-        }
-        existing.directionMode = deriveRouteDirectionMode(
-          existing.forwardFlightCount,
-          existing.reverseFlightCount,
-          sameAirport,
-        );
-      } else {
-        canonicalRoutes.set(canonicalKey, {
-          id: canonicalId,
-          kind: route.kind,
-          flightCount: route.flightCount,
-          forwardFlightCount:
-            direction === "forward" ? route.flightCount : 0,
-          reverseFlightCount:
-            direction === "reverse" ? route.flightCount : 0,
-          directionMode: deriveRouteDirectionMode(
-            direction === "forward" ? route.flightCount : 0,
-            direction === "reverse" ? route.flightCount : 0,
-            sameAirport,
-          ),
-          origin: first,
-          destination: second,
-        });
-      }
-      routeReferenceByStoredId.set(route.id, {
-        routeId: canonicalId,
-        direction,
-      });
-    }
-    routes = [...canonicalRoutes.values()].toSorted((left, right) =>
-      left.id.localeCompare(right.id),
-    );
-  } else {
-    routes = storedRoutes.map((route) => {
-      const forwardFlightCount = route.forwardFlightCount;
-      const reverseFlightCount = route.reverseFlightCount;
-      const sameAirport =
-        publicAirportKey(route.origin) === publicAirportKey(route.destination);
-      if (
-        typeof forwardFlightCount !== "number" ||
-        !Number.isSafeInteger(forwardFlightCount) ||
-        forwardFlightCount < 0 ||
-        typeof reverseFlightCount !== "number" ||
-        !Number.isSafeInteger(reverseFlightCount) ||
-        reverseFlightCount < 0 ||
-        route.directionMode !==
-          deriveRouteDirectionMode(
-            forwardFlightCount,
-            reverseFlightCount,
-            sameAirport,
-          ) ||
-        (sameAirport
-          ? forwardFlightCount !== 0 || reverseFlightCount !== 0
-          : forwardFlightCount + reverseFlightCount !== route.flightCount)
-      ) {
-        throw new ShareValidationError();
-      }
-      return {
-        id: route.id,
-        kind: route.kind,
-        flightCount: route.flightCount,
-        forwardFlightCount,
-        reverseFlightCount,
-        directionMode: route.directionMode,
-        origin: route.origin,
-        destination: route.destination,
-      };
-    });
-  }
-  const routeById = new Map(routes.map((route) => [route.id, route]));
-  if (!Array.isArray(flightValue)) throw new ShareValidationError();
-  const publicFlights: PublicMapProjection["flights"] = flightValue.map(
-    (candidate) => {
-      if (
-        !candidate ||
-        typeof candidate !== "object" ||
-        !isPublicDate(Reflect.get(candidate, "date")) ||
-        (Reflect.get(candidate, "kind") !== "commercial" &&
-          Reflect.get(candidate, "kind") !== "private") ||
-        (Reflect.get(candidate, "role") !== "passenger" &&
-          Reflect.get(candidate, "role") !== "pilot")
-      ) {
-        throw new ShareValidationError();
-      }
-      const kind = Reflect.get(candidate, "kind") as
-        | "commercial"
-        | "private";
-      const aircraft = Reflect.get(candidate, "aircraft");
-      const registration = Reflect.get(candidate, "registration");
-      if (
-        !Array.isArray(aircraft) ||
-        aircraft.some((item) => typeof item !== "string") ||
-        (registration !== null && typeof registration !== "string")
-      ) {
-        throw new ShareValidationError();
-      }
-      let routeLegs: PublicMapProjection["flights"][number]["routeLegs"];
-      if (isLegacy) {
-        const routeIds = Reflect.get(candidate, "routeIds");
-        if (!Array.isArray(routeIds) || routeIds.length === 0) {
-          throw new ShareValidationError();
-        }
-        routeLegs = routeIds.map((routeId) => {
-          if (typeof routeId !== "string") throw new ShareValidationError();
-          const reference = routeReferenceByStoredId.get(routeId);
-          if (!reference || routeById.get(reference.routeId)?.kind !== kind) {
-            throw new ShareValidationError();
-          }
-          return reference;
-        });
-      } else {
-        const storedLegs = Reflect.get(candidate, "routeLegs");
-        if (!Array.isArray(storedLegs) || storedLegs.length === 0) {
-          throw new ShareValidationError();
-        }
-        routeLegs = storedLegs.map((leg) => {
-          if (!leg || typeof leg !== "object") {
-            throw new ShareValidationError();
-          }
-          const routeId = Reflect.get(leg, "routeId");
-          const direction = Reflect.get(leg, "direction");
-          if (
-            typeof routeId !== "string" ||
-            (direction !== "forward" &&
-              direction !== "reverse" &&
-              direction !== "none") ||
-            routeById.get(routeId)?.kind !== kind
-          ) {
-            throw new ShareValidationError();
-          }
-          return { routeId, direction };
-        });
-      }
-      if (
-        new Set(routeLegs.map(({ routeId }) => routeId)).size !==
-        routeLegs.length
-      ) {
-        throw new ShareValidationError();
-      }
-      return {
-        date: Reflect.get(candidate, "date") as string,
-        kind,
-        role: Reflect.get(candidate, "role") as "passenger" | "pilot",
-        aircraft: normalizePublicAircraft(aircraft),
-        registration:
-          registration === null
-            ? null
-            : normalizeRegistrationMetadata(registration) ?? null,
-        ...storedRoutePath(Reflect.get(candidate, "routePath")),
-        routeLegs,
-      };
-    },
-  );
-  return { routes, flights: publicFlights };
-}
-
-/**
- * Reads a stored `routePath`, or nothing.
- *
- * A snapshot published before waypoints shipped simply has no such key, and
- * that is not an error — it is a map that renders exactly as it always did.
- * A *present but malformed* path is an error: this projection is what the
- * public map draws, so silently discarding a broken path would publish a
- * flight's route as a straight line and never say why.
- */
-function storedRoutePath(
-  value: unknown,
-): Pick<PublicMapProjection["flights"][number], "routePath"> {
-  if (value === undefined) return {};
-  if (!Array.isArray(value) || value.length < 2) {
-    throw new ShareValidationError();
-  }
-  const routePath = value.map((node) => {
-    if (!node || typeof node !== "object") throw new ShareValidationError();
-    const kind = Reflect.get(node, "kind");
-    if (!isRouteNodeKind(kind)) throw new ShareValidationError();
-    return {
-      airport: sanitizeStoredPublicPlace(Reflect.get(node, "airport")),
-      kind,
-    };
-  });
-  if (
-    routePath[0]!.kind !== "landing" ||
-    routePath.at(-1)!.kind !== "landing" ||
-    !routePath.some((node) => node.kind === "waypoint")
-  ) {
-    throw new ShareValidationError();
-  }
-  return { routePath };
-}
-
 function isRouteNodeKind(value: unknown): value is "landing" | "waypoint" {
   return value === "landing" || value === "waypoint";
 }
 
-function sanitizeStoredPublicPlace(
+/**
+ * The public airport allowlist, applied to every place on the map.
+ *
+ * Nothing reaches a shared map except the seven fields named here, and each
+ * one has to survive its own check. This is the last gate between the owner's
+ * catalog rows and a stranger's browser, so an airport that cannot produce a
+ * usable public identifier or clean display metadata fails the read rather
+ * than being published with whatever it had.
+ */
+function sanitizePublicPlace(
   value: unknown,
 ): PublicMapProjection["routes"][number]["origin"] {
   if (!value || typeof value !== "object") {
@@ -1240,7 +890,7 @@ function sanitizeStoredPublicPlace(
 
 export function publicAirportFromRow(row: PublicAirportRow): PublicAirport {
   try {
-    return sanitizeStoredPublicPlace({
+    return sanitizePublicPlace({
       code: preferredAirportCode({
         iata: row.iata,
         localCode: row.localCode,
@@ -1260,10 +910,6 @@ export function publicAirportFromRow(row: PublicAirportRow): PublicAirport {
     }
     throw error;
   }
-}
-
-function publicAirportKey(airport: PublicAirport): string {
-  return airportExactIdentity(airport);
 }
 
 function normalizePublicZero(value: number): number {

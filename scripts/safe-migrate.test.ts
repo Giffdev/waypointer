@@ -18,8 +18,9 @@ describe("production migration runtime grants", () => {
     );
   });
 
-  it("grants only the current public handle projection", () => {
+  it("grants the live owner resolution and the rollback projection, and nothing else", () => {
     expect(runtimeProjectionGrantStatements("flight_map_runtime")).toEqual([
+      'GRANT EXECUTE ON FUNCTION public_share_owner_by_handle(text) TO "flight_map_runtime"',
       'GRANT EXECUTE ON FUNCTION public_map_projection_by_handle(text) TO "flight_map_runtime"',
     ]);
   });

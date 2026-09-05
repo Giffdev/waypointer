@@ -172,6 +172,12 @@
         "tag": "0018_import_identity_and_route_waypoints",
         "createdAt": 1788556000000,
         "sha256": "a391a16bc35c19506244eaed4f392146a55cd940aff2dda0177d854b00c2af71"
+      },
+      {
+        "order": 20,
+        "tag": "0019_live_shared_maps",
+        "createdAt": 1788999000000,
+        "sha256": "41afe8284a62ab2b7b1fac77075e593d4295ced2ce4413dc050667bf1b6af5e8"
       }
     ],
     "permittedBefore": [
@@ -199,6 +205,11 @@
         "tag": "0018_import_identity_and_route_waypoints",
         "appliedCount": 20,
         "ledgerSha256": "696146a763cce7bd1a22c80dcf387922429abde448f1b4439802ddc0e466aef2"
+      },
+      {
+        "tag": "0019_live_shared_maps",
+        "appliedCount": 21,
+        "ledgerSha256": "73c6ab32fdde2fa4b208cd9f72257eaf2553012662d46ed10dd510f7bbf2d4ab"
       }
     ],
     "expectedAfter": {

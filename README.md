@@ -80,13 +80,15 @@ $env:DATABASE_URL = "<least-privilege runtime role>"
 npm run db:migrate
 ```
 
-`MIGRATION_DATABASE_URL` applies migration `0017_public_share_handles.sql`.
-`DATABASE_URL` is used only to identify the runtime role: the migration runner
-revokes that role's access to the obsolete
-legacy projection functions and grants
-`EXECUTE` on `public_map_projection_by_handle(text)`. Do not grant the
-runtime role function ownership or schema-creation rights. Confirm the
-migration ledger boundary is `0017` before application deployment.
+`MIGRATION_DATABASE_URL` applies migrations through
+`0019_live_shared_maps.sql`. `DATABASE_URL` is used only to identify the
+runtime role: the migration runner revokes that role's access to the obsolete
+legacy projection functions and grants `EXECUTE` on
+`public_share_owner_by_handle(text)` (the live public read) and on
+`public_map_projection_by_handle(text)` (retained only so a rollback can still
+serve maps). Do not grant the runtime role function ownership or
+schema-creation rights. Confirm the migration ledger boundary is `0019` before
+application deployment.
 
 Production still requires provisioned PostgreSQL, `AUTH_SECRET`, and a real
 `AUTH_URL`. Account deletion remains fail-closed and unavailable unless both

@@ -109,7 +109,7 @@ test("enables the entire public map and returns an absolute username link", asyn
             enabled: true,
             publicHandle: "readable-pilot",
             sharePath: "/readable-pilot",
-            publishedFlightCount: 3,
+            sharedFlightCount: 3,
           },
         },
       });
@@ -123,7 +123,7 @@ test("enables the entire public map and returns an absolute username link", asyn
             enabled: false,
             publicHandle: "readable-pilot",
             sharePath: null,
-            publishedFlightCount: 0,
+            sharedFlightCount: 0,
           },
         },
       });
@@ -135,7 +135,7 @@ test("enables the entire public map and returns an absolute username link", asyn
           enabled: false,
           publicHandle: "readable-pilot",
           sharePath: null,
-          publishedFlightCount: 0,
+          sharedFlightCount: 0,
         },
       },
     });
@@ -173,7 +173,7 @@ test("focuses and scrolls the sharing section on #sharing-title deep-link arriva
           enabled: false,
           publicHandle: "readable-pilot",
           sharePath: null,
-          publishedFlightCount: 0,
+          sharedFlightCount: 0,
         },
       },
     }),

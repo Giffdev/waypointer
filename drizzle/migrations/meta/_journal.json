@@ -141,6 +141,13 @@
       "when": 1788556000000,
       "tag": "0018_import_identity_and_route_waypoints",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788999000000,
+      "tag": "0019_live_shared_maps",
+      "breakpoints": true
     }
   ]
 }

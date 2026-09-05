@@ -32,7 +32,6 @@ export function SharedMapView({ handle }: { handle: string }) {
     | "loading"
     | "ready"
     | "not-found"
-    | "republish-required"
     | "rate-limited"
     | "error"
   >("loading");
@@ -67,16 +66,6 @@ export function SharedMapView({ handle }: { handle: string }) {
           if (response.status === 404) {
             setProjection(null);
             setState("not-found");
-            return;
-          }
-          if (
-            response.status === 409 &&
-            isRecord(body) &&
-            isRecord(body.error) &&
-            body.error.code === "republish-required"
-          ) {
-            setProjection(null);
-            setState("republish-required");
             return;
           }
           if (response.status === 429) {
@@ -146,17 +135,6 @@ export function SharedMapView({ handle }: { handle: string }) {
       <main className="shared-map-state">
         <h1>Shared map not found</h1>
         <p>This link is unavailable. It may have been disabled or replaced.</p>
-      </main>
-    );
-  }
-  if (state === "republish-required") {
-    return (
-      <main className="shared-map-state">
-        <h1>Shared map needs republishing</h1>
-        <p>
-          The owner must republish this map before it can show real airport
-          names and codes.
-        </p>
       </main>
     );
   }
@@ -277,8 +255,8 @@ export function SharedMapProjectionView({
           selectedRouteId=""
         />
         <p className="shared-map-airport-label-note">
-          Airport labels and route details use published airport codes and
-          names.
+          Airport labels and route details use the owner’s current airport
+          codes and names.
         </p>
       </section>
       <section

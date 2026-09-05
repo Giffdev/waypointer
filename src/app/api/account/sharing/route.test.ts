@@ -29,7 +29,7 @@ const status = {
   sharePath: "/pilot",
   enabledAt: "2026-08-14T19:00:00.000Z",
   disabledAt: null,
-  publishedFlightCount: 3,
+  sharedFlightCount: 3,
 };
 
 describe("owner sharing API", () => {

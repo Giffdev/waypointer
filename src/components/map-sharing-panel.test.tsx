@@ -21,7 +21,7 @@ describe("MapSharingPanel", () => {
             enabled,
             publicHandle: "test-pilot",
             sharePath: enabled ? "/test-pilot" : null,
-            publishedFlightCount: enabled ? 3 : 0,
+            sharedFlightCount: enabled ? 3 : 0,
           },
         });
       }),
@@ -57,26 +57,24 @@ describe("MapSharingPanel", () => {
     expect(write?.[1]).toEqual({ method: "POST" });
   });
 
-  it("republishes an enabled snapshot without disabling its public URL", async () => {
-    const user = userEvent.setup();
+  it("offers no republish action and says the shared map stays current", async () => {
     enabled = true;
     render(<MapSharingPanel />);
     await screen.findByText("Public sharing is on");
 
-    await user.click(screen.getByRole("button", { name: "Republish map" }));
-
+    // The product decision, asserted where a user would notice it: there is
+    // no refresh step, and the panel says why.
     expect(
-      await screen.findByText(
-        "Public map republished with the latest flights and airports.",
-      ),
-    ).toBeVisible();
-    expect(screen.getByText("Public sharing is on")).toBeVisible();
+      screen.queryByRole("button", { name: /republish/i }),
+    ).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/republish/i);
+    expect(document.body).not.toHaveTextContent(/snapshot/i);
+    expect(screen.getByText(/stays current/i)).toBeVisible();
+    expect(screen.getByText(/nothing to refresh/i)).toBeVisible();
+    // The link itself is unchanged by any of this.
     expect(screen.getByRole("textbox", { name: "Public map link" })).toHaveValue(
       "https://waypointer-app.vercel.app/test-pilot",
     );
-    expect(
-      vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === "POST"),
-    ).toBe(true);
   });
 
   it("links to the full public URL in a safe new tab and disables sharing", async () => {
@@ -150,7 +148,7 @@ describe("MapSharingPanel", () => {
             enabled: false,
             publicHandle: "test-pilot",
             sharePath: null,
-            publishedFlightCount: 0,
+            sharedFlightCount: 0,
           },
         }),
         { headers: { "content-type": "application/json" } },

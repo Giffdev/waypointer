@@ -14,7 +14,6 @@ export function MapSharingPanel() {
     error,
     retryStatus,
     toggleSharing,
-    republishSharing,
     copyLink,
   } = useOwnerSharingStatus();
 
@@ -49,35 +48,36 @@ export function MapSharingPanel() {
       </div>
 
       <p>
-        Enabling sharing publishes your entire map at{" "}
+        Enabling sharing shares your entire map at{" "}
         <strong>/{status?.publicHandle ?? "username"}</strong>. The page is
         intentionally public and can be opened by anyone who knows or finds
         your username.
       </p>
       <small>
         Individual flights cannot be selected or hidden, and Waypointer does
-        not cap or truncate the published map. Viewers receive airport codes,
+        not cap or truncate the shared map. Viewers receive airport codes,
         names, cities, countries, and public map locations plus flight dates,
         roles, aircraft, and tail numbers so they can filter their view. Notes,
         account details, and other private flight metadata stay private.
       </small>
 
       {status?.enabled && (
-        <p className="sharing-snapshot" role="status">
-          Public map: <strong>{status.publishedFlightCount}</strong>{" "}
-          {status.publishedFlightCount === 1 ? "flight" : "flights"} represented.
+        <p className="sharing-shared-count" role="status">
+          Public map: <strong>{status.sharedFlightCount}</strong>{" "}
+          {status.sharedFlightCount === 1 ? "flight" : "flights"} represented.
         </p>
       )}
 
       {status?.enabled && (
-        // A published map is a frozen snapshot, so a map shared before route
-        // waypoints existed keeps drawing straight lines until it is
-        // republished. Saying so is the difference between a stale map and a
-        // map that looks broken for no stated reason.
-        <p className="sharing-snapshot-note">
-          Your public map is a snapshot taken when you last published. If your
-          flights have overflown route points that your own map draws but your
-          shared map does not, republish to refresh it.
+        // The one sentence that replaces the old Republish button. A shared
+        // map reads the owner's current flights on every request, so there is
+        // nothing to refresh — and saying so is what stops someone hunting
+        // for a button that no longer exists.
+        <p className="sharing-live-note">
+          Your public map stays current. Flights you import, edit, enrich with
+          route points, or delete appear on the link within about half a
+          minute — there is nothing to refresh. Disable sharing to take the
+          link offline.
         </p>
       )}
 
@@ -94,16 +94,6 @@ export function MapSharingPanel() {
               ? "Disable sharing"
               : "Share my map"}
         </button>
-        {status?.enabled && (
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={busy}
-            onClick={republishSharing}
-          >
-            Republish map
-          </button>
-        )}
       </div>
 
       {status?.enabled && shareUrl && (
