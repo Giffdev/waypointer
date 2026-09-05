@@ -90,6 +90,24 @@ export type ReadCsvRecordsResult = {
   syntaxError?: CsvSyntaxError;
 };
 
+/**
+ * Default detection budget: 2 000 logical records **or** 1 MiB of input,
+ * whichever is reached first.
+ *
+ * This is a deliberate *increase* over the 256 KiB the old physical-line
+ * window read, not a re-expression of it, and the reason is the ForeFlight
+ * Aircraft Table. It precedes the `Flights Table` marker, one record per
+ * aircraft, and its size is unbounded by anything we control. A pilot with a
+ * few hundred aircraft — a club, a flight school, an instructor — pushed the
+ * marker past 256 KiB and past 256 physical lines, and the file was reported
+ * as an unsupported format. 2 000 records clears any realistic aircraft table
+ * by a wide margin; 1 MiB is 10% of `DEFAULT_MAX_IMPORT_BYTES` and bounds the
+ * work a single unauthenticated-shaped detection call can cost, which is the
+ * property the ceiling exists for.
+ *
+ * Reaching either bound sets `truncated`, so detection reports "we stopped
+ * reading" rather than "we don't support this".
+ */
 export const DEFAULT_INSPECTION_RECORDS = 2000;
 export const DEFAULT_INSPECTION_CHARACTERS = 1024 * 1024;
 
@@ -100,9 +118,12 @@ export const DEFAULT_INSPECTION_CHARACTERS = 1024 * 1024;
  * export with a large Aircraft Table — or any export with a multi-line quoted
  * remark — pushed the `Flights Table` marker past that window, the confidence
  * never reached the threshold, and a perfectly valid logbook was reported as
- * an unsupported format. Records, not lines, are the unit that matters, and
- * the budget is expressed in records and characters so the DoS ceiling is
- * preserved.
+ * an unsupported format. Records, not lines, are the unit that matters.
+ *
+ * Both bounds are exact and inclusive: an input of exactly `maxCharacters`
+ * characters, or one that ends on record number `maxRecords`, is read in full
+ * and reported as **not** truncated. Only input that actually remains unread
+ * sets the flag.
  */
 export function readCsvRecords(
   input: string,

@@ -272,7 +272,14 @@ async function mapParsedRows(
           originIdentifier: flight.originIdentifier,
           destinationIdentifier: flight.destinationIdentifier,
           registration: flight.registration,
-          aircraft: flight.aircraftDisplayName,
+          // The verbatim flight-row `AircraftID` cell, never
+          // `aircraftDisplayName`. The display name is resolved out of the
+          // export's Aircraft Table, so renaming a type code — or exporting
+          // the same logbook from a ForeFlight account whose aircraft table
+          // has since been edited — rewrote the identity of every flight
+          // flown in that aircraft. The reimport then failed to recognise
+          // its own rows and committed a second copy of each one.
+          aircraft: flight.provenance.original.aircraftId,
         },
       })),
     );
@@ -311,7 +318,6 @@ async function mapParsedRows(
             ? { routeRejections: route.rejections }
             : {}),
           ...(route.routeRaw ? { routeRaw: route.routeRaw } : {}),
-          ...(flight.landings ? { landingCounts: flight.landings } : {}),
           ...defaults,
           aircraft: flight.aircraftDisplayName,
           aircraftType: flight.aircraftType,

@@ -49,13 +49,20 @@ Token acceptance is deliberately narrow:
 - a token must name its airport through an ICAO, FAA-LID, GPS, or ident alias.
   The whole alias-type set for the winning airport is considered, not just the
   highest-priority one, so `BFI` (IATA *and* FAA-LID for Boeing Field) is
-  accepted while an IATA-only match such as `OED` — the Medford VOR — is not;
+  accepted while an IATA-only match such as `OED` — the Medford VOR — is not.
+  A match that reports no namespaces at all is refused, not assumed;
 - endpoints and adjacent repeats are deduped, non-adjacent repeats are kept,
   and the path is capped at 32 nodes.
 
 Anything not accepted stays in the preserved raw route text and produces a row
 warning, including a rejected IATA/navaid collision. It never invalidates the
 row and never places an airport marker.
+
+ForeFlight's landing-count columns (`AllLandings`, `DayLandingsFullStop`,
+`NightLandingsFullStop`) are not read. They report how many landings a leg had,
+never where, so they cannot place a stop without guessing — and they cannot
+honestly drive a warning either, because a lesson flown in the pattern
+legitimately logs ten landings against a single `From`/`To` pair.
 
 ## Re-importing after an importer fix
 
@@ -66,8 +73,12 @@ row's `sourceRowKey`, or an older fingerprint version, adopts the existing
 flight rather than creating a second one. While the private original is still
 retained, `POST /api/import/batches/{batchId}/reprocess` performs the same
 restage without a re-upload; it copies the stored file so the original batch
-keeps its own, and repeat calls return the batch the first call created. Once
-the retention window has expired the file can simply be uploaded again.
+keeps its own, and repeat calls return the batch the first call created. That
+idempotency is scoped to the source batch *and* the importer version, so a
+later importer fix produces a new result rather than handing back the previous
+one, and a result that has since expired does not leave the batch permanently
+un-reprocessable. Once the retention window has expired the file can simply be
+uploaded again.
 
 ## Presets
 

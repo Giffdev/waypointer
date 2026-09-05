@@ -8,16 +8,17 @@
 -- Runner constraints this file is written to:
 --   * The migration runner splits this file on the statement-breakpoint marker
 --     and executes each chunk inside a transaction, so CREATE INDEX
---     CONCURRENTLY and a post-hoc constraint validation are not available
---     here. Every index below is therefore a plain CREATE INDEX. That is
---     acceptable: these are per-user tables with an owner-scoped working set,
---     and the write lock is held only for the build.
---   * CHECK constraints are added NOT VALID so the ALTER TABLE does not scan
---     the whole table while holding ACCESS EXCLUSIVE. They are correct by
---     construction — the columns are created in this same migration with
---     defaults that satisfy them — and they are enforced for every subsequent
---     write. Validating the pre-existing rows is left to a later
---     out-of-transaction step; nothing depends on it.
+--     CONCURRENTLY is not available here. Every index below is therefore a
+--     plain CREATE INDEX. That is acceptable: these are per-user tables with
+--     an owner-scoped working set, and the write lock is held only for the
+--     build.
+--   * CHECK and FOREIGN KEY constraints are added NOT VALID so the ALTER TABLE
+--     does not scan the whole table while holding ACCESS EXCLUSIVE, and are
+--     then validated in a following statement. VALIDATE CONSTRAINT is
+--     transaction-safe and takes only SHARE UPDATE EXCLUSIVE, so the scan runs
+--     without blocking reads or writes. The two-step is the point: this
+--     migration leaves behind fully validated constraints, not a promise of a
+--     later manual step that nothing schedules and nobody runs.
 --   * Nothing in this file, including comments, may contain the marker text
 --     itself: the splitter is textual, so a marker inside a comment cuts the
 --     file in the wrong place and the fragment fails to parse.
@@ -58,10 +59,14 @@ ALTER TABLE "flight_stops" DROP CONSTRAINT IF EXISTS "flight_stops_stop_kind_val
 ALTER TABLE "flight_stops" ADD CONSTRAINT "flight_stops_stop_kind_valid"
   CHECK ("stop_kind" IN ('landing', 'waypoint')) NOT VALID;
 --> statement-breakpoint
+ALTER TABLE "flight_stops" VALIDATE CONSTRAINT "flight_stops_stop_kind_valid";
+--> statement-breakpoint
 ALTER TABLE "flight_stops" DROP CONSTRAINT IF EXISTS "flight_stops_source_field_valid";
 --> statement-breakpoint
 ALTER TABLE "flight_stops" ADD CONSTRAINT "flight_stops_source_field_valid"
   CHECK ("source_field" IN ('endpoint', 'route', 'manual')) NOT VALID;
+--> statement-breakpoint
+ALTER TABLE "flight_stops" VALIDATE CONSTRAINT "flight_stops_source_field_valid";
 --> statement-breakpoint
 -- Statistics read landings only; this keeps that read cheap once route
 -- waypoints start sharing the table.
@@ -91,6 +96,8 @@ BEGIN
       NOT VALID;
   END IF;
 END $$;
+--> statement-breakpoint
+ALTER TABLE "import_batches" VALIDATE CONSTRAINT "import_batches_reprocessed_from_batch_id_fk";
 --> statement-breakpoint
 -- The uniqueness fix. The old index made "same bytes" permanently mean "same
 -- outcome": a file staged by a broken importer could never be re-staged by the

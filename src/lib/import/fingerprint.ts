@@ -5,7 +5,33 @@ import type { ProposedImportFlight, VersionedFingerprint } from "./types";
 export const FILE_FINGERPRINT_VERSION = 1 as const;
 export const ROW_FINGERPRINT_VERSION = 3 as const;
 export const SOURCE_ROW_KEY_VERSION = 1 as const;
-export const ACCEPTED_DUPLICATE_FINGERPRINT_VERSION = 1 as const;
+
+/**
+ * Accepted-duplicate digests are versioned in a reserved high range.
+ *
+ * `flights.fingerprint_version` has exactly one job: say which algorithm
+ * produced the digest stored beside it. A deliberately-accepted duplicate's
+ * digest is **not** a row fingerprint — it is derived from one, keyed by the
+ * import row id — so stamping it with the row-fingerprint version made the
+ * column state something false, and the adoption chain (which reads
+ * `version < ROW_FINGERPRINT_VERSION` as "superseded row algorithm") had no
+ * way to tell the two apart.
+ *
+ * Reserving 1000+ keeps a single integer column honest for both families:
+ * an accepted-duplicate version can never be mistaken for a row version, and
+ * can never drift into the range as row versions increment.
+ */
+export const ACCEPTED_DUPLICATE_FINGERPRINT_VERSION_BASE = 1000 as const;
+const ACCEPTED_DUPLICATE_FINGERPRINT_ALGORITHM_VERSION = 1 as const;
+export const ACCEPTED_DUPLICATE_FINGERPRINT_VERSION =
+  (ACCEPTED_DUPLICATE_FINGERPRINT_VERSION_BASE +
+    ACCEPTED_DUPLICATE_FINGERPRINT_ALGORITHM_VERSION) as 1001;
+
+export function isAcceptedDuplicateFingerprintVersion(
+  version: number,
+): boolean {
+  return version >= ACCEPTED_DUPLICATE_FINGERPRINT_VERSION_BASE;
+}
 
 function digest(parts: Array<string | Uint8Array>): string {
   const hash = createHash("sha256");
@@ -56,6 +82,18 @@ export type SourceRowIdentityProjection = {
   airportIdentifiers?: readonly string[];
   flightNumber?: string;
   registration?: string;
+  /**
+   * The source's own verbatim aircraft cell (ForeFlight `AircraftID`,
+   * FR24 model, generic mapped column) — never a value resolved out of a
+   * secondary lookup table in the same export.
+   *
+   * ForeFlight's flight rows carry an `AircraftID`; the human-readable name
+   * and type code live in a separate Aircraft Table earlier in the file.
+   * Projecting the *resolved* display name made a type-code edit in that
+   * table change the identity of every flight flown in that aircraft, so the
+   * next import of the same logbook recognised none of its own rows and
+   * committed a duplicate of each one.
+   */
   aircraft?: string;
 };
 
@@ -212,7 +250,7 @@ export function createAcceptedDuplicateFingerprint(
     algorithm: "sha256",
     version: ACCEPTED_DUPLICATE_FINGERPRINT_VERSION,
     value: digest([
-      `flight-map:accepted-duplicate:v${ACCEPTED_DUPLICATE_FINGERPRINT_VERSION}`,
+      `flight-map:accepted-duplicate:v${ACCEPTED_DUPLICATE_FINGERPRINT_ALGORITHM_VERSION}`,
       userId,
       rowId,
       fingerprint.value,

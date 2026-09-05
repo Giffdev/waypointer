@@ -4,7 +4,10 @@ import type {
   StoredImportRow,
   VersionedFingerprint,
 } from "./types";
-import { ROW_FINGERPRINT_VERSION } from "./fingerprint";
+import {
+  isAcceptedDuplicateFingerprintVersion,
+  ROW_FINGERPRINT_VERSION,
+} from "./fingerprint";
 
 export const DUPLICATE_RULE_VERSION = 2 as const;
 export const DUPLICATE_SCORE_THRESHOLD = 0.7;
@@ -73,6 +76,18 @@ export function applyDuplicateCandidates(
   });
 }
 
+function isSupersededRowFingerprint(
+  fingerprint: VersionedFingerprint | undefined,
+): boolean {
+  if (!fingerprint) return false;
+  // Accepted-duplicate digests live above the reserved base and are *not*
+  // superseded row fingerprints. Comparing on `< ROW_FINGERPRINT_VERSION`
+  // alone happens to exclude them today only because the base is larger;
+  // saying so explicitly keeps that true if either number moves.
+  if (isAcceptedDuplicateFingerprintVersion(fingerprint.version)) return false;
+  return fingerprint.version < ROW_FINGERPRINT_VERSION;
+}
+
 /**
  * The adoption chain, in priority order: current fingerprint, then source-row
  * key, then a superseded fingerprint version. A hit on any key means "this is
@@ -92,7 +107,7 @@ function identityMatch(
   }
   return Boolean(
     row.legacyRowFingerprint &&
-      candidate.fingerprint.version < ROW_FINGERPRINT_VERSION &&
+      isSupersededRowFingerprint(candidate.fingerprint) &&
       candidate.fingerprint.value === row.legacyRowFingerprint.value,
   );
 }
@@ -159,9 +174,8 @@ function assessCandidate(
     });
   } else if (
     row.legacyRowFingerprint &&
-    candidate.fingerprint &&
-    candidate.fingerprint.version < ROW_FINGERPRINT_VERSION &&
-    candidate.fingerprint.value === row.legacyRowFingerprint.value
+    isSupersededRowFingerprint(candidate.fingerprint) &&
+    candidate.fingerprint?.value === row.legacyRowFingerprint.value
   ) {
     // Adoption key 3. Flights committed before v3 carry a v1/v2 digest that a
     // v3 row can never equal. Without this branch, the first re-import after

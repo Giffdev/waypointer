@@ -169,15 +169,59 @@ describe("record-aware detection window", () => {
     expect(readCsvRecords(content, { maxRecords: 10 }).truncated).toBe(true);
     expect(readCsvRecords("a,b\n1,2").truncated).toBe(false);
   });
+
+  it("treats both budgets as exact and inclusive at the boundary", () => {
+    // "Exactly the budget" must not be reported as truncation. Detection maps
+    // `truncated` to "we stopped reading", and saying that about a file we
+    // read to the last byte is the same class of lie the old line window told
+    // in the other direction.
+    const threeRecords = "a,b\n1,2\n3,4";
+    const exact = readCsvRecords(threeRecords, {
+      maxRecords: 3,
+      maxCharacters: threeRecords.length,
+    });
+    expect(exact.records).toHaveLength(3);
+    expect(exact.truncated).toBe(false);
+
+    // The same input with a trailing newline still ends on record 3.
+    const trailing = readCsvRecords(`${threeRecords}\n`, {
+      maxRecords: 3,
+      maxCharacters: threeRecords.length + 1,
+    });
+    expect(trailing.records).toHaveLength(3);
+    expect(trailing.truncated).toBe(false);
+
+    // One record over, and one character short, are both truncation.
+    expect(readCsvRecords(`${threeRecords}\n5,6`, { maxRecords: 3 }).truncated)
+      .toBe(true);
+    const oneShort = readCsvRecords(threeRecords, {
+      maxCharacters: threeRecords.length - 1,
+    });
+    expect(oneShort.truncated).toBe(true);
+    // The record the character budget cut in half is dropped, never emitted
+    // half-parsed: a caller cannot tell a partial record from a real one.
+    expect(oneShort.records).toHaveLength(2);
+  });
+
+  it("clears any realistic ForeFlight Aircraft Table within the default budget", () => {
+    // The documented bound is 2 000 records or 1 MiB. The Aircraft Table
+    // precedes the `Flights Table` marker and its size is not something we
+    // control, so the number that matters is how large a table can be and
+    // still be detected. 1 500 aircraft is far beyond any real logbook and is
+    // still read.
+    const detection = detectFlightImportFormat(
+      foreFlightExport({ aircraftRows: 1_500 }),
+    );
+    expect(detection.status).toBe("recognized");
+  });
 });
 
 describe("ForeFlight flight rows", () => {
-  it("reads Route, landing counts, and preserves the raw route text", () => {
+  it("reads Route and preserves the raw route text", () => {
     const parsed = parseForeFlightCsv(foreFlightExport());
     expect(parsed.flights).toHaveLength(1);
     const [flight] = parsed.flights;
     expect(flight.routeRaw).toBe("KMFR KRBG KEUG");
-    expect(flight.landings).toEqual({ all: 2, fullStop: 1 });
     // The endpoints are still, and only, the endpoints.
     expect([flight.originIdentifier, flight.destinationIdentifier]).toEqual([
       "KMFR",
@@ -185,7 +229,22 @@ describe("ForeFlight flight rows", () => {
     ]);
   });
 
-  it("degrades silently when Route and landing columns are absent", () => {
+  it("does not parse the landing-count columns into any field", () => {
+    // ForeFlight reports how many landings a leg had, never where. A count
+    // cannot add a stop without inventing a place, and it cannot honestly
+    // raise a warning either: a pattern lesson logs ten landings against a
+    // single From/To pair, so comparing the count to the landing-airport
+    // count would flag routine training as a problem. Parsing it into a field
+    // nothing reads is worse than not parsing it — it implies behaviour that
+    // does not ship.
+    const parsed = parseForeFlightCsv(foreFlightExport());
+    expect(parsed.flights[0]).not.toHaveProperty("landings");
+    expect(parsed.flights[0].provenance.original).not.toHaveProperty(
+      "allLandings",
+    );
+  });
+
+  it("degrades silently when the Route column is absent", () => {
     const parsed = parseForeFlightCsv(
       [
         "ForeFlight Logbook Import",
@@ -200,7 +259,6 @@ describe("ForeFlight flight rows", () => {
       ].join("\n"),
     );
     expect(parsed.flights[0].routeRaw).toBeUndefined();
-    expect(parsed.flights[0].landings).toBeUndefined();
     expect(parsed.flights[0].issues).toEqual([]);
   });
 

@@ -71,12 +71,16 @@ describe("migration 0018", () => {
     expect(updates[0]).toMatch(/WHERE f\."fingerprint_version" <> 2/);
   });
 
-  it("takes CHECK constraints NOT VALID to avoid a blocking full-table scan", () => {
+  it("adds constraints NOT VALID, then validates them in a separate statement", () => {
     // `ADD CONSTRAINT ... CHECK` without `NOT VALID` scans the whole table
     // while holding ACCESS EXCLUSIVE, blocking every read and write for the
-    // duration. The constraints are correct by construction — the columns are
-    // created in this same migration with satisfying defaults — so the scan
-    // buys nothing and costs availability.
+    // duration. Splitting the work is what keeps the migration both cheap and
+    // honest: the ADD takes ACCESS EXCLUSIVE for an instant, and the VALIDATE
+    // takes only SHARE UPDATE EXCLUSIVE while it scans. What must not happen
+    // is what happened before — adding NOT VALID and promising a later
+    // out-of-transaction validation that nothing schedules, leaving the
+    // database permanently holding constraints it does not enforce for
+    // pre-existing rows.
     for (const constraint of [
       "flight_stops_stop_kind_valid",
       "flight_stops_source_field_valid",
@@ -84,19 +88,43 @@ describe("migration 0018", () => {
       expect(migration).toMatch(
         new RegExp(`ADD CONSTRAINT "${constraint}"[\\s\\S]*?NOT VALID`),
       );
+      expect(migrationSql).toMatch(
+        new RegExp(
+          `ADD CONSTRAINT "${constraint}"[\\s\\S]*?NOT VALID;[\\s\\S]*?VALIDATE CONSTRAINT "${constraint}"`,
+        ),
+      );
     }
     expect(migration).toMatch(
       /import_batches_reprocessed_from_batch_id_fk[\s\S]*?NOT VALID/,
     );
+    expect(migrationSql).toMatch(
+      /VALIDATE CONSTRAINT "import_batches_reprocessed_from_batch_id_fk"/,
+    );
+  });
+
+  it("validates every constraint it adds NOT VALID", () => {
+    // Guards the general rule rather than the three names above: a fourth
+    // NOT VALID constraint added later without a matching VALIDATE would slip
+    // past the assertions above and reintroduce the unenforced-constraint
+    // promise.
+    const notValidated = [
+      ...migrationSql.matchAll(/ADD CONSTRAINT "([^"]+)"[\s\S]*?NOT VALID/g),
+    ]
+      .map(([, name]) => name)
+      .filter(
+        (name) => !migrationSql.includes(`VALIDATE CONSTRAINT "${name}"`),
+      );
+    expect(notValidated).toEqual([]);
   });
 
   it("never uses CONCURRENTLY, which the transactional runner cannot execute", () => {
     // The runner wraps each statement chunk in a transaction, and
     // `CREATE INDEX CONCURRENTLY` is rejected inside one. Reaching for it here
     // would fail the deploy at apply time rather than in review, so the
-    // limitation is asserted, not remembered.
+    // limitation is asserted, not remembered. `VALIDATE CONSTRAINT` carries no
+    // such restriction — it is transaction-safe — which is why the two-step
+    // constraint path above is available and CONCURRENTLY is not.
     expect(migrationSql).not.toMatch(/CONCURRENTLY/i);
-    expect(migrationSql).not.toMatch(/VALIDATE CONSTRAINT/i);
   });
 
   it("defaults existing stops to landing/endpoint", () => {
@@ -179,6 +207,9 @@ describe("migration 0018", () => {
       const guarded =
         /IF NOT EXISTS|IF EXISTS|DO \$\$/.test(statement) ||
         (added !== null && dropped.has(added[1])) ||
+        // Validating an already-valid constraint is a no-op, so the
+        // constraint-validation half of the two-step replays safely.
+        /^ALTER TABLE [\s\S]*VALIDATE CONSTRAINT/.test(statement) ||
         // Self-excluding backfill: replaying it selects no rows.
         /^UPDATE[\s\S]*"fingerprint_version" <> 2/.test(statement);
       expect(

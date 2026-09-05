@@ -108,6 +108,11 @@ export class DrizzleImportRepository
         .values({
           userId,
           fingerprint: input.fingerprint.value,
+          // The version belongs with the digest. Leaving it on the column
+          // default made every manually added flight claim a v1 algorithm
+          // produced a v3 digest, which is the same untruth the accepted-
+          // duplicate path had.
+          fingerprintVersion: input.fingerprint.version,
           date,
           originAirportId,
           destinationAirportId,
@@ -312,9 +317,11 @@ export class DrizzleImportRepository
         identifier: normalized,
         airportId: match.id,
         airport: toAirport(match),
-        // Surfaced so the route classifier can tell an airport namespace hit
-        // from an IATA/navaid collision. Statistics never read it.
-        ...(matchedCodeTypes.length > 0 ? { matchedCodeTypes } : {}),
+        // Always present, even when empty. An omitted set used to read as
+        // "no opinion" and the classifier assumed airport, so a resolver bug
+        // disabled the navaid/IATA guard for every token at once. An empty
+        // array is the honest answer and the classifier refuses it.
+        matchedCodeTypes,
       };
     });
   }
@@ -335,6 +342,12 @@ export class DrizzleImportRepository
             identifier: airportCode(match),
             airportId: match.id,
             airport: toAirport(match),
+            // Lookup by id, not by code: nothing here resolved an identifier
+            // through an alias, so there is no namespace evidence to report.
+            // Empty is the honest answer, and the route classifier refuses
+            // it — the safe direction for a value that never came from a
+            // route token in the first place.
+            matchedCodeTypes: [],
           }
         : null;
     });
@@ -1283,10 +1296,15 @@ export class DrizzleImportRepository
           // it; the source row key stays with the original flight.
           const acceptedNew =
             row.duplicateCandidate?.resolution === "accept_new";
-          const fingerprint = acceptedNew
+          // The digest and the version travel together. Stamping the row
+          // fingerprint's version beside an accepted-duplicate digest made
+          // `fingerprint_version` state which algorithm produced a value it
+          // did not produce, and left the adoption chain unable to tell a
+          // superseded row digest from a deliberate second copy.
+          const committedFingerprint = acceptedNew
             ? createAcceptedDuplicateFingerprint(userId, row.id, rowFingerprint)
-                .value
-            : rowFingerprint.value;
+            : rowFingerprint;
+          const fingerprint = committedFingerprint.value;
           const sourceRowKey = acceptedNew
             ? undefined
             : row.provenance?.sourceRowKey;
@@ -1306,7 +1324,7 @@ export class DrizzleImportRepository
               .values({
                 userId,
                 fingerprint,
-                fingerprintVersion: rowFingerprint.version,
+                fingerprintVersion: committedFingerprint.version,
                 ...(sourceRowKey ? { sourceRowKey } : {}),
                 ...(row.proposedFlight.routeRaw
                   ? { routeRaw: row.proposedFlight.routeRaw }
@@ -1728,7 +1746,8 @@ function toAirport(row: AirportRow): Airport {
  * This is the single choke point that keeps route waypoints out of identity,
  * dedupe, and every statistic: a flight that gains ten waypoints still has the
  * same landing sequence, so it is still the same flight and still counts the
- * same airports. Callers that want the drawable path use `routePathAirportIds`.
+ * same airports. Callers that want the drawable path read `flight_stops`
+ * directly (see `listFlights`), which is presentation-only.
  */
 function routeAirportIds(
   row: FlightRow,
@@ -1740,20 +1759,19 @@ function routeAirportIds(
     : [row.originAirportId, row.destinationAirportId];
 }
 
-/** Presentation-only ordered path, landings and waypoints together. */
-function routePathAirportIds(
-  row: FlightRow,
-  stopRows?: Array<typeof flightStops.$inferSelect>,
-): string[] {
-  return stopRows && stopRows.length >= 2
-    ? stopRows.map(({ airportId }) => airportId)
-    : [row.originAirportId, row.destinationAirportId];
-}
 
-// Duplicate assessment is read-only enrichment: a candidate whose catalog
-// metadata is missing or unusable is reported instead of thrown so one bad
-// stored flight cannot fail an entire import. Returns the airport ids that
-// databaseFlightProposal would not be able to render.
+/**
+ * Landing airports only.
+ *
+ * Duplicate assessment is read-only enrichment: a candidate whose catalog
+ * metadata is missing or unusable is reported instead of thrown so one bad
+ * stored flight cannot fail an entire import. Returns the airport ids that
+ * `databaseFlightProposal` would not be able to render — and it renders
+ * landings only. Including waypoints here meant one overflown airport with
+ * unusable catalog metadata suppressed the candidate's proposal, which drops
+ * every route/temporal signal and silently downgrades a real duplicate to
+ * "probably new" — the opposite of what a rendering problem should cost.
+ */
 function unresolvableRouteAirportIds(
   row: FlightRow,
   airportById: Map<string, AirportRow>,
@@ -1762,7 +1780,7 @@ function unresolvableRouteAirportIds(
   const required = [
     row.originAirportId,
     row.destinationAirportId,
-    ...routePathAirportIds(row, stopRows),
+    ...routeAirportIds(row, stopRows),
   ];
   return [
     ...new Set(
@@ -1784,6 +1802,10 @@ function databaseFlightProposal(
   if (!origin || !destination) {
     throw new Error("A duplicate candidate references a missing airport");
   }
+  // Reconstructed from committed rows, not resolved from a route token, so
+  // there is no alias namespace to report. These matches are landings and are
+  // never re-classified; an empty set keeps the route guard failing closed if
+  // one ever were.
   const airportMatches = routeAirportIds(row, stopRows).map((airportId) => {
     const airport = airportById.get(airportId);
     if (!airport) {
@@ -1794,6 +1816,7 @@ function databaseFlightProposal(
       identifier: airportCode(airport),
       airportId: airport.id,
       airport: toAirport(airport),
+      matchedCodeTypes: [],
     };
   });
   return {
@@ -1806,12 +1829,14 @@ function databaseFlightProposal(
       identifier: airportCode(origin),
       airportId: origin.id,
       airport: toAirport(origin),
+      matchedCodeTypes: [],
     },
     destination: {
       status: "resolved",
       identifier: airportCode(destination),
       airportId: destination.id,
       airport: toAirport(destination),
+      matchedCodeTypes: [],
     },
     airportIdentifiers: airportMatches.map(({ identifier }) => identifier),
     airportMatches,

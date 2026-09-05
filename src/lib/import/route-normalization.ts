@@ -7,6 +7,7 @@ import {
   type ImportRouteRejectionReason,
 } from "./types";
 import { MAX_ROUTE_PATH_NODES } from "./invariants";
+import { ImportInvariantError } from "./errors";
 
 /**
  * The route classifier.
@@ -121,13 +122,17 @@ export function rejectRouteTokenShape(
  * rejected that airport. Judging the whole set accepts `BFI` (IATA + FAA-LID)
  * and still rejects `OED` (Medford VOR's IATA code, IATA-only), which is the
  * collision the guard exists for.
+ *
+ * **Fails closed.** A resolved match with no namespaces is not evidence that
+ * the token names an airport, it is evidence that the resolver did not say.
+ * Treating that as "airport" turned the guard off for every token the moment
+ * any resolver forgot to propagate the set — which is exactly the failure a
+ * guard must not have. Legacy persisted matches are unaffected: this runs
+ * only on freshly resolved staging output, never on stored rows.
  */
 export function isAirportNamespaceMatch(match: ImportAirportMatch): boolean {
   if (match.status !== "resolved") return false;
-  // A match persisted before the namespace guard shipped carries no code
-  // types. Treating it as an airport keeps pre-existing rows rendering
-  // unchanged; new waypoint promotion always has the set available.
-  if (!match.matchedCodeTypes?.length) return true;
+  if (!match.matchedCodeTypes?.length) return false;
   return match.matchedCodeTypes.some((type) =>
     AIRPORT_ROUTE_NAMESPACE_TYPES.includes(type),
   );
@@ -246,6 +251,16 @@ export async function normalizeFlightRoute(
       (node) => node.tokenIndex,
     ),
   );
+  // Recorded as rejections in their own right, with their own reason. They
+  // were previously reported as `adjacent-duplicate`, which is a different
+  // fact about a different pair of tokens.
+  for (const node of [...accepted.slice(0, lead), ...accepted.slice(trail)]) {
+    rejections.push({
+      identifier: node.identifier,
+      tokenIndex: node.tokenIndex,
+      reason: "endpoint-duplicate",
+    });
+  }
   let interior = accepted.slice(lead, trail);
 
   // Stage 5.3 — adjacent duplicates collapse with a warning rather than
@@ -253,6 +268,7 @@ export async function normalizeFlightRoute(
   // reason to lose a leg. Non-adjacent repeats are legal and preserved:
   // KMFR KRBG KMFR is a real out-and-back.
   const collapsed = new Set<number>();
+  const endpointDropped = new Set<number>(boundaryDropped);
   const deduped: typeof interior = [];
   let previous: ImportAirportMatch | undefined = originNode?.match;
   for (const node of interior) {
@@ -277,11 +293,13 @@ export async function normalizeFlightRoute(
   interior = deduped;
   if (sameAirport(interior.at(-1)?.match, destinationNode?.match)) {
     const last = interior.at(-1)!;
-    collapsed.add(last.tokenIndex);
+    // Also an endpoint restatement, not an adjacent duplicate: the token
+    // matches `To`, which is a different node from the one before it.
+    endpointDropped.add(last.tokenIndex);
     rejections.push({
       identifier: last.identifier,
       tokenIndex: last.tokenIndex,
-      reason: "adjacent-duplicate",
+      reason: "endpoint-duplicate",
     });
     interior = interior.slice(0, -1);
   }
@@ -317,8 +335,8 @@ export async function normalizeFlightRoute(
   // landing/waypoint; nothing is ever removed.
   const keptWaypointIndexes = new Set(interior.map((node) => node.tokenIndex));
   const droppedReasonByIndex = new Map<number, ImportRouteRejectionReason>([
-    ...[...boundaryDropped].map(
-      (index) => [index, "adjacent-duplicate"] as const,
+    ...[...endpointDropped].map(
+      (index) => [index, "endpoint-duplicate"] as const,
     ),
     ...[...collapsed].map((index) => [index, "adjacent-duplicate"] as const),
     ...[...overflow].map((index) => [index, "route-too-long"] as const),
@@ -326,12 +344,23 @@ export async function normalizeFlightRoute(
   const tokenNodes: ImportRouteNode[] = classified.map((node) => {
     if (node.kind !== "waypoint") return node;
     if (keptWaypointIndexes.has(node.tokenIndex)) return node;
+    const reason = droppedReasonByIndex.get(node.tokenIndex);
+    if (!reason) {
+      // Every drop above records its own reason. Reaching here would mean a
+      // token vanished from the path with no recorded cause, which is exactly
+      // the kind of silent loss this module exists to prevent.
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "A route token was dropped without a recorded reason.",
+        { identifier: node.identifier, tokenIndex: node.tokenIndex },
+      );
+    }
     return {
       kind: "unmatched",
       identifier: node.identifier,
       sourceField: "Route",
       tokenIndex: node.tokenIndex,
-      reason: droppedReasonByIndex.get(node.tokenIndex) ?? "adjacent-duplicate",
+      reason,
     };
   });
 
@@ -346,26 +375,6 @@ export async function normalizeFlightRoute(
     rejections,
     issues,
     routeRaw: input.routeRaw?.trim() || undefined,
-  };
-}
-
-/**
- * Landing-count columns are informational only. They may drive a neutral
- * note; they never add a stop, never change a stop's kind, and never fire as
- * an error. Absent columns degrade silently.
- */
-export function landingCountNote(
-  landingCounts: { all?: number; fullStop?: number } | undefined,
-  landingStopCount: number,
-): ImportIssue | undefined {
-  const logged = landingCounts?.all ?? landingCounts?.fullStop;
-  if (logged === undefined || !Number.isFinite(logged)) return undefined;
-  if (logged <= landingStopCount) return undefined;
-  return {
-    code: "route-landing-count-mismatch",
-    field: "landings",
-    message: `Your logbook records ${logged} landings on this row; this flight has ${landingStopCount} recorded landing airports.`,
-    severity: "warning",
   };
 }
 

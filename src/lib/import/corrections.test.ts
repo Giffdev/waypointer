@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Airport } from "../flight-data";
 import { applyProposalCorrection, validateProposalPatch } from "./corrections";
+import { isImportInvariantError } from "./errors";
 import type { ImportAirportMatch, StoredImportRow } from "./types";
 
 const airport: Airport = {
@@ -61,6 +62,7 @@ describe("staged corrections", () => {
           identifier: "KSEA",
           airportId: "airport-sea",
           airport,
+          matchedCodeTypes: ["icao"],
         },
       },
       "2026-08-12T18:00:00.000Z",
@@ -87,6 +89,7 @@ describe("staged corrections", () => {
           identifier: "KSEA",
           airportId: "airport-sea",
           airport,
+          matchedCodeTypes: ["icao"],
         },
       },
       "2026-08-12T18:00:00.000Z",
@@ -140,6 +143,7 @@ describe("staged corrections", () => {
       identifier: "KRBG",
       airportId: "airport-rbg",
       airport: { ...airport, code: "RBG", name: "Roseburg Regional" },
+      matchedCodeTypes: ["icao"],
     };
     source.proposedFlight.routeNodes = [
       {
@@ -173,6 +177,7 @@ describe("staged corrections", () => {
           identifier: "KSEA",
           airportId: "airport-sea",
           airport,
+          matchedCodeTypes: ["icao"],
         },
       },
       "2026-08-12T18:00:00.000Z",
@@ -215,6 +220,7 @@ describe("staged corrections", () => {
           identifier: "KRBG",
           airportId: "airport-rbg",
           airport: { ...airport, code: "RBG", name: "Roseburg Regional" },
+          matchedCodeTypes: ["icao"],
         },
         sourceField: "Route",
         tokenIndex: 1,
@@ -242,6 +248,7 @@ describe("staged corrections", () => {
             identifier: "KSEA",
             airportId: "airport-sea",
             airport,
+            matchedCodeTypes: ["icao"],
           },
         },
       },
@@ -257,6 +264,127 @@ describe("staged corrections", () => {
     });
     expect(corrected.proposedFlight.destination).toMatchObject({
       airportId: "airport-sea",
+    });
+  });
+
+  describe("route stop bounds", () => {
+    // The index arrives from a request body. It is bounded here, before it
+    // addresses anything, and it is bounded on *both* sides: a negative index
+    // reaching the node correction counts from the end, so `-1` would silently
+    // rewrite the destination the caller never asked about. And the failure is
+    // a typed 422 rather than a bare `Error`, which the API catch-all reported
+    // as 503 — "retry later" for a condition that will never resolve.
+    const routedRow = (): StoredImportRow => {
+      const source = unresolvedRow();
+      source.proposedFlight.routeNodes = [
+        {
+          kind: "landing",
+          identifier: "KXXX",
+          match: { status: "not-found", identifier: "KXXX" },
+          sourceField: "From",
+          tokenIndex: 0,
+        },
+        {
+          kind: "waypoint",
+          identifier: "KRBG",
+          match: {
+            status: "resolved",
+            identifier: "KRBG",
+            airportId: "airport-rbg",
+            airport: { ...airport, code: "RBG", name: "Roseburg Regional" },
+            matchedCodeTypes: ["icao"],
+          },
+          sourceField: "Route",
+          tokenIndex: 1,
+        },
+        {
+          kind: "landing",
+          identifier: "KJFK",
+          match: { status: "not-found", identifier: "KJFK" },
+          sourceField: "To",
+          tokenIndex: 2,
+        },
+      ];
+      source.proposedFlight.airportMatches = [
+        source.proposedFlight.origin!,
+        source.proposedFlight.destination!,
+      ];
+      return source;
+    };
+
+    const correction = (index: number) => ({
+      resolvedRouteStop: {
+        index,
+        airport: {
+          status: "resolved" as const,
+          identifier: "KSEA",
+          airportId: "airport-sea",
+          airport,
+          matchedCodeTypes: ["icao" as const],
+        },
+      },
+    });
+
+    it.each([
+      ["above the landing count", 2],
+      ["far above the landing count", 99],
+      ["negative", -1],
+      ["not an integer", 0.5],
+    ])("refuses an index %s with a typed 422 invariant", (_label, index) => {
+      // 2 is the count of *landings*, not of nodes: the row has three nodes
+      // and the waypoint is not addressable.
+      let thrown: unknown;
+      try {
+        applyProposalCorrection(
+          routedRow(),
+          correction(index),
+          "2026-08-12T18:00:00.000Z",
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isImportInvariantError(thrown)).toBe(true);
+      expect(thrown).toMatchObject({
+        code: "route-stop-invalid",
+        status: 422,
+      });
+    });
+
+    it("still refuses an out-of-range index on a legacy row with no nodes", () => {
+      const legacy = unresolvedRow();
+      legacy.proposedFlight.airportMatches = [
+        legacy.proposedFlight.origin!,
+        legacy.proposedFlight.destination!,
+      ];
+      expect(() =>
+        applyProposalCorrection(
+          legacy,
+          correction(2),
+          "2026-08-12T18:00:00.000Z",
+        ),
+      ).toThrow(/out of range/);
+      expect(() =>
+        applyProposalCorrection(
+          legacy,
+          correction(-1),
+          "2026-08-12T18:00:00.000Z",
+        ),
+      ).toThrow(/out of range/);
+    });
+
+    it("leaves the row untouched when the index is refused", () => {
+      // The throw happens before any correction is recorded, so a rejected
+      // request cannot half-apply.
+      const source = routedRow();
+      const before = structuredClone(source);
+      expect(() =>
+        applyProposalCorrection(
+          source,
+          correction(5),
+          "2026-08-12T18:00:00.000Z",
+        ),
+      ).toThrow();
+      expect(source).toEqual(before);
     });
   });
 });

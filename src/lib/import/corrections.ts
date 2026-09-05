@@ -5,7 +5,8 @@ import type {
   StoredImportRow,
   UpdateImportRowRequest,
 } from "./types";
-import { withDerivedLandingProjection } from "./invariants";
+import { landingStopsOf, withDerivedLandingProjection } from "./invariants";
+import { ImportInvariantError } from "./errors";
 
 const EDITABLE_TEXT_FIELDS = [
   "aircraft",
@@ -162,6 +163,25 @@ export function applyProposalCorrection(
     }
   }
   if (patch.resolvedRouteStop) {
+    const { index, airport } = patch.resolvedRouteStop;
+    // Bounded above *and* below, before anything is applied. The lower bound
+    // is not redundant with request validation: a negative index reaching
+    // `correctLandingNode` counts from the end, so `-1` would silently
+    // rewrite the destination instead of failing. The upper bound is measured
+    // against the landing sequence the caller is actually editing — the
+    // canonical nodes when they exist, the legacy projection otherwise —
+    // because a row carrying waypoints has more nodes than landings.
+    const landingCount = usesRouteNodes
+      ? landingStopsOf(proposedFlight).length
+      : (proposedFlight.airportMatches?.length ??
+        (proposedFlight.origin && proposedFlight.destination ? 2 : 0));
+    if (!Number.isSafeInteger(index) || index < 0 || index >= landingCount) {
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "Route stop index is out of range",
+        { index, landingCount },
+      );
+    }
     const matches =
       proposedFlight.airportMatches ??
       (proposedFlight.origin && proposedFlight.destination
@@ -170,9 +190,12 @@ export function applyProposalCorrection(
     const identifiers =
       proposedFlight.airportIdentifiers ??
       matches.map(({ identifier }) => identifier);
-    const { index, airport } = patch.resolvedRouteStop;
-    if (index >= matches.length || matches.length < 2) {
-      throw new Error("Route stop index is out of range");
+    if (landingCount < 2) {
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "Route stop index is out of range",
+        { index, landingCount },
+      );
     }
     recordCorrection(
       corrections,
@@ -256,7 +279,11 @@ function correctLandingNode(
       ? landingPositions.at(landingIndex)
       : landingPositions[landingIndex];
   if (position === undefined) {
-    throw new Error("Route stop index is out of range");
+    throw new ImportInvariantError(
+      "route-stop-invalid",
+      "Route stop index is out of range",
+      { landingIndex },
+    );
   }
   const target = nodes[position];
   if (target.kind !== "landing") return;

@@ -23,6 +23,7 @@ const stop = (code: string): ImportAirportMatch => ({
   identifier: code,
   airportId: `airport-${code.toLowerCase()}`,
   airport: airport(code),
+  matchedCodeTypes: ["icao"],
 });
 
 const unresolved = (identifier: string): ImportAirportMatch => ({

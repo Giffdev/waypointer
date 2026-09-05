@@ -378,4 +378,163 @@ postgresDescribe("PostgreSQL version-aware reprocessing", () => {
       reprocessDurableImport(stranger, source.batchId),
     ).rejects.toMatchObject({ status: 404, code: "batch-not-found" });
   });
+
+  it("recovers after the previous reprocess result expired", async () => {
+    // `import_batches_user_idempotency_unique` is not scoped by status, so an
+    // expired earlier attempt keeps owning a fixed idempotency key forever.
+    // With a fixed key the insert conflicts, the conflict lookup skips the
+    // expired row (an expired batch has had its rows and object removed, so
+    // it is not a usable result), and the user is left with a permanent 409
+    // for a recovery that is entirely legitimate.
+    const userId = await createUser("reprocess-expired");
+    const source = await seedLegacyBatch(userId, { fileSha256: sha("ee11ee") });
+
+    const first = await reprocessDurableImport(userId, source.batchId);
+    await withUserDb(userId, (tx) =>
+      tx
+        .update(importBatches)
+        .set({ status: "expired" })
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.id, first.batchId),
+          ),
+        ),
+    );
+
+    const second = await reprocessDurableImport(userId, source.batchId);
+    expect(second.reused).toBe(false);
+    expect(second.batchId).not.toBe(first.batchId);
+    expect(second.reprocessedFromBatchId).toBe(source.batchId);
+
+    // Repeat reprocess is still idempotent against the *live* result, so the
+    // recovery did not trade one defect for unbounded batch creation.
+    const third = await reprocessDurableImport(userId, source.batchId);
+    expect(third.reused).toBe(true);
+    expect(third.batchId).toBe(second.batchId);
+
+    const live = await withUserDb(userId, (tx) =>
+      tx
+        .select({ id: importBatches.id, status: importBatches.status })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.reprocessedFromBatchId, source.batchId),
+          ),
+        ),
+    );
+    expect(live).toHaveLength(2);
+    expect(
+      live.filter(({ status }) => status !== "expired").map(({ id }) => id),
+    ).toEqual([second.batchId]);
+  });
+
+  it("creates a new result for a future importer version instead of returning the old one", async () => {
+    // Keyed on the source batch alone, the first reprocess would be handed
+    // back forever and the *next* importer fix could never reach this file —
+    // the same "a deployed fix cannot reach the data it fixes" defect that
+    // version stamping exists to remove, moved one level up.
+    const userId = await createUser("reprocess-next-version");
+    const source = await seedLegacyBatch(userId, { fileSha256: sha("f00d11") });
+
+    // A result left behind by an earlier importer. Its `file_sha256` differs
+    // from the source's only so the fixture can hold two live rows while
+    // `IMPORTER_PIPELINE_VERSION` is still 1: a real timeline (source at 0,
+    // old result at 1, new result at 2) never puts two rows on the same
+    // version, and the hash plays no part in the lookup under test.
+    const staleId = randomUUID();
+    await withUserDb(userId, (tx) =>
+      tx.insert(importBatches).values({
+        id: staleId,
+        userId,
+        adapterId: "foreflight-v1",
+        adapterVersion: 1,
+        importerVersion: IMPORTER_PIPELINE_VERSION - 1,
+        reprocessedFromBatchId: source.batchId,
+        status: "review",
+        originalObjectKey: canonicalImportObjectKey(
+          userId,
+          staleId,
+          sha("f00d12"),
+        ),
+        originalFileName: "legacy.csv",
+        declaredContentType: "text/csv",
+        fileSha256: sha("f00d12"),
+        fileSizeBytes: 13,
+        idempotencyKey: `reprocess:${source.batchId}:v${IMPORTER_PIPELINE_VERSION - 1}`,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+        uploadCompletedAt: new Date(),
+        scanStatus: "clean",
+      }),
+    );
+
+    const result = await reprocessDurableImport(userId, source.batchId);
+    expect(result.reused).toBe(false);
+    expect(result.batchId).not.toBe(staleId);
+
+    const [created] = await withUserDb(userId, (tx) =>
+      tx
+        .select({ importerVersion: importBatches.importerVersion })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.id, result.batchId),
+          ),
+        ),
+    );
+    expect(created.importerVersion).toBe(IMPORTER_PIPELINE_VERSION);
+
+    // The stale result is left exactly as it was: reprocessing is additive,
+    // and rewriting somebody's earlier batch is not this call's business.
+    const [stale] = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          status: importBatches.status,
+          importerVersion: importBatches.importerVersion,
+        })
+        .from(importBatches)
+        .where(
+          and(eq(importBatches.userId, userId), eq(importBatches.id, staleId)),
+        ),
+    );
+    expect(stale).toMatchObject({
+      status: "review",
+      importerVersion: IMPORTER_PIPELINE_VERSION - 1,
+    });
+  });
+
+  it("elects one winner when two reprocess calls race, and orphans no object", async () => {
+    const userId = await createUser("reprocess-race");
+    const source = await seedLegacyBatch(userId, { fileSha256: sha("ba5eba") });
+
+    const [left, right] = await Promise.all([
+      reprocessDurableImport(userId, source.batchId),
+      reprocessDurableImport(userId, source.batchId),
+    ]);
+    expect(left.batchId).toBe(right.batchId);
+    expect([left.reused, right.reused].filter(Boolean)).toHaveLength(1);
+
+    const created = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          id: importBatches.id,
+          objectKey: importBatches.originalObjectKey,
+        })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.reprocessedFromBatchId, source.batchId),
+          ),
+        ),
+    );
+    expect(created).toHaveLength(1);
+    // The loser deletes its copy: an orphaned object is a retained copy of
+    // the user's logbook that no batch will ever clean up.
+    expect([...store.keys()].toSorted()).toEqual(
+      [source.objectKey, created[0].objectKey].toSorted(),
+    );
+  });
 });

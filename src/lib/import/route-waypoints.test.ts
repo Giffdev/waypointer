@@ -9,7 +9,6 @@ import { hasUnresolvedRouteToken } from "./attention";
 import { isImportInvariantError } from "./errors";
 import {
   isAirportNamespaceMatch,
-  landingCountNote,
   normalizeFlightRoute,
   rejectRouteTokenShape,
   tokenizeRoute,
@@ -144,18 +143,25 @@ describe("airport namespace guard", () => {
     );
   });
 
-  it("treats a match with no recorded code type as an airport", () => {
-    // Rows persisted before the guard shipped carry no code type; they must
-    // keep rendering exactly as they did.
-    const legacy: ImportAirportMatch = {
+  it("refuses a match with no recorded code type", () => {
+    // Fails closed. A resolved match that reports no namespaces is not
+    // evidence that the token names an airport, it is evidence that the
+    // resolver did not say. Treating absence as "airport" is what let a
+    // single resolver omission disable this guard for every token at once,
+    // with nothing failing to show it.
+    const silent = {
       status: "resolved",
       identifier: "KRBG",
       airportId: "airport-krbg",
       airport: airport("KRBG"),
-    };
-    expect(isAirportNamespaceMatch(legacy)).toBe(true);
+      matchedCodeTypes: [],
+    } as const satisfies ImportAirportMatch;
+    expect(isAirportNamespaceMatch(silent)).toBe(false);
     expect(
-      isAirportNamespaceMatch({ ...legacy, matchedCodeTypes: [] }),
+      isAirportNamespaceMatch({
+        ...silent,
+        matchedCodeTypes: ["icao"],
+      }),
     ).toBe(true);
   });
 });
@@ -272,6 +278,10 @@ describe("normalizeFlightRoute", () => {
       ["ITIDE", "nav-fix-shape"],
       ["ZZZZ", "not-found"],
       ["V23", "airway-or-procedure"],
+      // The route restates its own endpoints. That is normal route notation,
+      // not a malformed repeat, and it is reported as what it is.
+      ["KMFR", "endpoint-duplicate"],
+      ["KEUG", "endpoint-duplicate"],
     ]);
     // Warnings, never errors: an unrecognised route point must not stop a
     // flight the pilot actually flew from being imported.
@@ -332,6 +342,47 @@ describe("normalizeFlightRoute", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("names the endpoint restatement and the adjacent repeat differently", async () => {
+    // Two different facts about two different pairs of tokens. Reporting the
+    // boundary drop as `adjacent-duplicate` told the user their route text
+    // repeated a point when it had simply named its own endpoints, which is
+    // how routes are written, and left the genuine adjacent repeat
+    // indistinguishable from it in the rejection list.
+    const entries = {
+      KMFR: resolved("KMFR"),
+      KRBG: resolved("KRBG"),
+      KEUG: resolved("KEUG"),
+    };
+    const route = await normalizeFlightRoute({
+      routeRaw: "KMFR KRBG KRBG KEUG",
+      ...endpoints("KMFR", "KEUG", entries),
+      resolve: catalog(entries),
+    });
+    expect(
+      route.rejections.map(({ identifier, reason, tokenIndex }) => [
+        identifier,
+        tokenIndex,
+        reason,
+      ]),
+    ).toEqual([
+      ["KMFR", 0, "endpoint-duplicate"],
+      ["KEUG", 3, "endpoint-duplicate"],
+      ["KRBG", 2, "adjacent-duplicate"],
+    ]);
+    // The node kept in place for a boundary drop carries the same reason the
+    // rejection does, so a renderer and the rejection list cannot disagree.
+    const droppedNodes = route.nodes.filter(
+      (node) => node.kind === "unmatched",
+    );
+    expect(
+      droppedNodes.map(({ identifier, reason }) => [identifier, reason]),
+    ).toEqual([
+      ["KMFR", "endpoint-duplicate"],
+      ["KRBG", "adjacent-duplicate"],
+      ["KEUG", "endpoint-duplicate"],
+    ]);
+  });
+
   it("caps the path and warns rather than invalidating the row", async () => {
     const identifiers = Array.from({ length: 40 }, (_, index) =>
       `K${String(index).padStart(3, "0")}`,
@@ -371,18 +422,6 @@ describe("normalizeFlightRoute", () => {
     ]);
     expect(route.issues).toEqual([]);
     expect(route.routeRaw).toBeUndefined();
-  });
-});
-
-describe("landing count columns", () => {
-  it("notes a shortfall without adding a stop or raising an error", () => {
-    expect(landingCountNote({ all: 4 }, 2)).toMatchObject({
-      severity: "warning",
-      code: "route-landing-count-mismatch",
-    });
-    expect(landingCountNote({ all: 2 }, 2)).toBeUndefined();
-    expect(landingCountNote(undefined, 2)).toBeUndefined();
-    expect(landingCountNote({}, 2)).toBeUndefined();
   });
 });
 

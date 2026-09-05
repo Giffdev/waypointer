@@ -463,6 +463,7 @@ function resolved(index: number): ImportAirportMatch {
     identifier: airports[index].code,
     airportId: airportIds[index],
     airport: airports[index],
+    matchedCodeTypes: ["icao"],
   };
 }
 

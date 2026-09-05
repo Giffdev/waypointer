@@ -171,7 +171,7 @@
         "order": 19,
         "tag": "0018_import_identity_and_route_waypoints",
         "createdAt": 1788556000000,
-        "sha256": "8114e5af33324b209beb66e15daa63cf888cd15dd47122aa6324ecddfe523814"
+        "sha256": "a391a16bc35c19506244eaed4f392146a55cd940aff2dda0177d854b00c2af71"
       }
     ],
     "permittedBefore": [
@@ -198,7 +198,7 @@
       {
         "tag": "0018_import_identity_and_route_waypoints",
         "appliedCount": 20,
-        "ledgerSha256": "a58955d5109907a5a165f32b4edfb66330dffcdad7b1a1ff9fdac7018c9ec6a5"
+        "ledgerSha256": "696146a763cce7bd1a22c80dcf387922429abde448f1b4439802ddc0e466aef2"
       }
     ],
     "expectedAfter": {

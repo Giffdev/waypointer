@@ -28,7 +28,13 @@ export const FLIGHT_IMPORT_DETECTION_THRESHOLD = 0.9;
  * physical lines: a quoted remark spanning newlines and a several-hundred-row
  * Aircraft Table are both normal, and the old 256-physical-line window pushed
  * the `Flights Table` marker out of range and reported a valid export as an
- * unsupported format. The size ceiling is preserved, only the unit changed.
+ * unsupported format.
+ *
+ * The true bound is 2 000 records or 1 MiB, whichever comes first — larger
+ * than the 256 KiB the line-based window read, because the Aircraft Table
+ * that precedes the marker has no size we control. See
+ * `DEFAULT_INSPECTION_RECORDS` for why that trade is the right one. Exceeding
+ * either bound is reported as truncation, never as "unsupported format".
  */
 const MAX_INSPECTION_CHARACTERS = DEFAULT_INSPECTION_CHARACTERS;
 const MAX_INSPECTION_RECORDS = DEFAULT_INSPECTION_RECORDS;

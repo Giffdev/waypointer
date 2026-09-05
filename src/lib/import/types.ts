@@ -19,11 +19,10 @@ export type ImportIssue = {
     | "ambiguous-aircraft"
     | "invalid-row"
     // Route tokens never invalidate a row: a token we cannot place must
-    // not cost the user the flight, so all four codes are always warnings.
+    // not cost the user the flight, so all three codes are always warnings.
     | "route-token-unmatched"
     | "route-token-ambiguous"
-    | "route-token-navaid-collision"
-    | "route-landing-count-mismatch";
+    | "route-token-navaid-collision";
   field: string;
   message: string;
   severity: "error" | "warning";
@@ -106,9 +105,14 @@ export type ImportAirportMatch =
        * actually means: "is there any airport-namespace route by which this
        * token names this airport?"
        *
-       * Absent on matches produced before the guard shipped.
+       * **Required, and required to be complete.** It was optional once, and
+       * the route classifier treated its absence as "assume airport" — so any
+       * resolver that forgot to populate it disabled the navaid/IATA
+       * collision guard silently, for every token, with no failing test. A
+       * resolver that cannot report its namespaces must report `[]`, which
+       * the classifier refuses.
        */
-      matchedCodeTypes?: readonly AirportIdentifierType[];
+      matchedCodeTypes: readonly AirportIdentifierType[];
     }
   | {
       status: "not-found";
@@ -171,6 +175,14 @@ export type ImportRouteRejectionReason =
   | "navaid-or-iata-collision"
   | "ambiguous"
   | "not-found"
+  /**
+   * The token repeats the leg's own `From`/`To` endpoint at the matching end
+   * of the route. Distinct from `adjacent-duplicate`, which is a repeat of
+   * the *previous route point*: reporting an endpoint restatement as an
+   * adjacent duplicate told the user their route text was malformed when
+   * `KMFR KRBG KEUG` on a KMFR→KEUG leg is exactly how routes are written.
+   */
+  | "endpoint-duplicate"
   | "adjacent-duplicate"
   | "route-too-long";
 
@@ -205,11 +217,6 @@ export type ProposedImportFlight = {
   routeRejections?: ImportRouteRejection[];
   /** Verbatim source route text. Where non-airport nav fixes are preserved. */
   routeRaw?: string;
-  /**
-   * Informational only. Never adds a stop, never changes a `stop_kind`, and
-   * never fires as an error.
-   */
-  landingCounts?: { all?: number; fullStop?: number };
   kind: FlightKind;
   role: FlightRole;
   aircraft?: string;

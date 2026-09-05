@@ -47,9 +47,6 @@ export type ForeFlightProvenance = {
     totalTime: string;
     /** Verbatim `Route` cell. Optional column; blank when absent. */
     route: string;
-    allLandings: string;
-    dayLandingsFullStop: string;
-    nightLandingsFullStop: string;
   };
 };
 
@@ -66,8 +63,6 @@ export type ForeFlightFlight = {
    * is not an airport is preserved here as text with no marker.
    */
   routeRaw?: string;
-  /** Informational only; never adds a stop and never changes a stop kind. */
-  landings?: { all?: number; fullStop?: number };
   distanceNauticalMiles?: number;
   totalTimeHours?: number;
   totalTimeStatus: StatsValueStatus;
@@ -136,33 +131,17 @@ function firstCell(record: CsvRecord): string {
 }
 
 /**
- * Landing counts are read for display only. They never create a stop and
- * never change a stop kind: ForeFlight reports *how many* landings a leg had,
- * never *where*, so inferring a place from a count would be a guess.
+ * ForeFlight's landing columns (`AllLandings`, `DayLandingsFullStop`,
+ * `NightLandingsFullStop`) are deliberately **not** read.
+ *
+ * They report *how many* landings a leg had, never *where*, so they cannot
+ * add a stop or change a stop's kind without guessing a place. And they
+ * cannot honestly drive a warning either: a lesson flown in the pattern
+ * legitimately logs ten landings against a single From/To pair, so comparing
+ * the count to the landing-airport count would flag routine training rows as
+ * problems. Parsing them into a field nothing reads is worse than not parsing
+ * them — it implies a behaviour that does not ship.
  */
-function landingCounts(raw: {
-  allLandings: string;
-  dayLandingsFullStop: string;
-  nightLandingsFullStop: string;
-}): { all?: number; fullStop?: number } | undefined {
-  const count = (value: string): number | undefined => {
-    const parsed = Number.parseInt(value.trim(), 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-  };
-  const all = count(raw.allLandings);
-  const day = count(raw.dayLandingsFullStop);
-  const night = count(raw.nightLandingsFullStop);
-  const fullStop =
-    day === undefined && night === undefined
-      ? undefined
-      : (day ?? 0) + (night ?? 0);
-  if (all === undefined && fullStop === undefined) return undefined;
-  return {
-    ...(all === undefined ? {} : { all }),
-    ...(fullStop === undefined ? {} : { fullStop }),
-  };
-}
-
 function isEmptyRecord(record: CsvRecord): boolean {
   return record.cells.every((cell) => cell.trim() === "");
 }
@@ -465,17 +444,6 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         timeOut: value(record, flightIndexes, "TimeOut"),
         totalTime: value(record, flightIndexes, "TotalTime"),
         route: value(record, flightIndexes, "Route"),
-        allLandings: value(record, flightIndexes, "AllLandings"),
-        dayLandingsFullStop: value(
-          record,
-          flightIndexes,
-          "DayLandingsFullStop",
-        ),
-        nightLandingsFullStop: value(
-          record,
-          flightIndexes,
-          "NightLandingsFullStop",
-        ),
       };
       const rawDistance = raw.distance;
       const rawTotalTime = raw.totalTime;
@@ -515,7 +483,6 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
       );
       const registration = registrationFromForeFlightAircraftId(raw.aircraftId);
       const routeRaw = raw.route.trim();
-      const landings = landingCounts(raw);
 
       return {
         sourceRowNumber: record.rowNumber,
@@ -524,7 +491,6 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         originIdentifier,
         destinationIdentifier,
         ...(routeRaw ? { routeRaw } : {}),
-        ...(landings ? { landings } : {}),
         distanceNauticalMiles,
         totalTimeHours,
         totalTimeStatus: valueStatus(rawTotalTime, totalTimeHours),

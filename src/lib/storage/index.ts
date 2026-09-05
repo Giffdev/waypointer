@@ -215,11 +215,28 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
   }
 
   async move(sourceKey: string, destinationKey: string): Promise<void> {
-    await this.copy(sourceKey, destinationKey);
+    // Deliberately no `ServerSideEncryption` override. `move` relocates an
+    // object that already exists in this bucket — a quarantined upload
+    // becoming a canonical one — and forcing an algorithm here would rewrite
+    // the encryption of an object we did not create (presigned browser
+    // uploads land under the bucket default, which may be SSE-KMS). Copy and
+    // move are separate operations with separate options precisely so this
+    // cannot leak from one into the other again.
+    await this.copyObject(sourceKey, destinationKey, {});
     await this.delete(validateKey(sourceKey));
   }
 
   async copy(sourceKey: string, destinationKey: string): Promise<void> {
+    // Same reasoning as `move`: the source object's encryption is whatever it
+    // was written with, and a duplicate of it should not silently change.
+    await this.copyObject(sourceKey, destinationKey, {});
+  }
+
+  private async copyObject(
+    sourceKey: string,
+    destinationKey: string,
+    options: { serverSideEncryption?: "AES256" },
+  ): Promise<void> {
     const source = validateKey(sourceKey);
     const destination = validateKey(destinationKey);
     await this.client.send(
@@ -227,7 +244,9 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
         Bucket: this.bucket,
         CopySource: `${this.bucket}/${source}`,
         Key: destination,
-        ServerSideEncryption: "AES256",
+        ...(options.serverSideEncryption
+          ? { ServerSideEncryption: options.serverSideEncryption }
+          : {}),
       }),
     );
   }

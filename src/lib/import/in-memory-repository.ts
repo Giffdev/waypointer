@@ -18,6 +18,7 @@ import type {
 } from "@/lib/db/repositories/import-repository";
 import {
   IMPORT_CONTRACT_VERSION,
+  type AirportIdentifierType,
   type AirportSearchResult,
   type ImportAirportMatch,
   type ImportBatchCounts,
@@ -53,14 +54,32 @@ type FlightRecord = {
   id: string;
   userId: string;
   fingerprint: VersionedFingerprint;
+  /**
+   * Mirrors `flights.source_row_key`. The Drizzle repository returns it with
+   * every duplicate candidate, so the adoption chain can recognise a
+   * re-exported source row whose content moved. Omitting it here made this
+   * double silently disagree with production about what counts as the same
+   * flight.
+   */
+  sourceRowKey?: string;
   flight: ProposedImportFlight;
   sources: Array<{ batchId: string; rowId: string }>;
 };
 
+/**
+ * A bare string alias is an airport identifier by construction — the in-memory
+ * catalog has no navaid rows — so it is reported as the `ident` namespace.
+ * A test that needs to reproduce a navaid/airline collision (`OED`, `SEA`)
+ * declares the namespace explicitly.
+ */
+export type InMemoryAirportAlias =
+  | string
+  | { code: string; type: AirportIdentifierType };
+
 export type InMemoryAirportSeed = {
   id: string;
   airport: Airport;
-  aliases: string[];
+  aliases: InMemoryAirportAlias[];
 };
 
 export class InMemoryImportRepository
@@ -90,7 +109,10 @@ export class InMemoryImportRepository
 
   private readonly batches = new Map<string, BatchRecord>();
   private readonly flights = new Map<string, FlightRecord>();
-  private readonly airports = new Map<string, InMemoryAirportSeed[]>();
+  private readonly airports = new Map<
+    string,
+    Array<{ seed: InMemoryAirportSeed; codeTypes: AirportIdentifierType[] }>
+  >();
   private readonly overrides: Array<{
     userId: string;
     flightId: string;
@@ -105,11 +127,24 @@ export class InMemoryImportRepository
   replaceAirportCatalog(airports: InMemoryAirportSeed[]): void {
     this.airports.clear();
     for (const seed of airports) {
-      for (const alias of new Set([seed.airport.code, ...seed.aliases])) {
-        const key = normalize(alias);
-        const matches = this.airports.get(key) ?? [];
-        matches.push(seed);
-        this.airports.set(key, matches);
+      // The catalog is keyed by code, and each key carries every namespace
+      // that code names this airport through — the same contract the Drizzle
+      // resolver reports from `airport_aliases`. Reporting only one namespace
+      // would reproduce the BFI defect (IATA winner hides the FAA-LID row) in
+      // every test that uses this repository.
+      const byCode = new Map<string, Set<AirportIdentifierType>>();
+      for (const alias of [seed.airport.code, ...seed.aliases]) {
+        const code = normalize(typeof alias === "string" ? alias : alias.code);
+        const type: AirportIdentifierType =
+          typeof alias === "string" ? "ident" : alias.type;
+        const types = byCode.get(code) ?? new Set<AirportIdentifierType>();
+        types.add(type);
+        byCode.set(code, types);
+      }
+      for (const [code, types] of byCode) {
+        const matches = this.airports.get(code) ?? [];
+        matches.push({ seed, codeTypes: [...types] });
+        this.airports.set(code, matches);
       }
     }
   }
@@ -129,10 +164,10 @@ export class InMemoryImportRepository
       return {
         status: "ambiguous",
         identifier: normalized,
-        candidates: matches.map(({ id, airport }) => ({
-          airportId: id,
-          code: airport.code,
-          name: airport.name,
+        candidates: matches.map(({ seed }) => ({
+          airportId: seed.id,
+          code: seed.airport.code,
+          name: seed.airport.name,
         })),
       };
     }
@@ -141,8 +176,9 @@ export class InMemoryImportRepository
     return {
       status: "resolved",
       identifier: normalized,
-      airportId: match.id,
-      airport: clone(match.airport),
+      airportId: match.seed.id,
+      airport: clone(match.seed.airport),
+      matchedCodeTypes: match.codeTypes,
     };
   }
 
@@ -153,13 +189,17 @@ export class InMemoryImportRepository
     requireUser(userId);
     const match = [...this.airports.values()]
       .flat()
-      .find((candidate) => candidate.id === airportId);
+      .find((candidate) => candidate.seed.id === airportId);
     return match
       ? {
           status: "resolved",
-          identifier: match.airport.code,
-          airportId: match.id,
-          airport: clone(match.airport),
+          identifier: match.seed.airport.code,
+          airportId: match.seed.id,
+          airport: clone(match.seed.airport),
+          // Lookup by id, not by code: no identifier was resolved, so there
+          // is no namespace evidence to report. Empty is the honest answer
+          // and the route classifier refuses it, which is the safe direction.
+          matchedCodeTypes: [],
         }
       : null;
   }
@@ -173,11 +213,19 @@ export class InMemoryImportRepository
     const normalized = normalize(query);
     const unique = new Map<string, InMemoryAirportSeed>();
     for (const matches of this.airports.values()) {
-      for (const match of matches) unique.set(match.id, match);
+      for (const match of matches) unique.set(match.seed.id, match.seed);
     }
     return [...unique.values()]
       .filter(({ airport, aliases }) =>
-        [airport.code, airport.name, airport.city, airport.country, ...aliases]
+        [
+          airport.code,
+          airport.name,
+          airport.city,
+          airport.country,
+          ...aliases.map((alias) =>
+            typeof alias === "string" ? alias : alias.code,
+          ),
+        ]
           .join(" ")
           .toUpperCase()
           .includes(normalized),
@@ -511,6 +559,7 @@ export class InMemoryImportRepository
       .map((flight) => ({
         flightId: flight.id,
         fingerprint: clone(flight.fingerprint),
+        ...(flight.sourceRowKey ? { sourceRowKey: flight.sourceRowKey } : {}),
         flight: clone(flight.flight),
       }));
   }
@@ -601,14 +650,15 @@ export class InMemoryImportRepository
           throw new Error("The selected duplicate target is unavailable");
         }
       } else {
-        const fingerprint =
-          row.duplicateCandidate?.resolution === "accept_new"
-            ? createAcceptedDuplicateFingerprint(
-                userId,
-                row.id,
-                row.rowFingerprint,
-              )
-            : row.rowFingerprint;
+        const acceptedNew =
+          row.duplicateCandidate?.resolution === "accept_new";
+        const fingerprint = acceptedNew
+          ? createAcceptedDuplicateFingerprint(
+              userId,
+              row.id,
+              row.rowFingerprint,
+            )
+          : row.rowFingerprint;
         existing = [...this.flights.values()].find(
           (flight) =>
             flight.userId === userId &&
@@ -620,6 +670,13 @@ export class InMemoryImportRepository
             id,
             userId,
             fingerprint: clone(fingerprint),
+            // A deliberately-accepted duplicate is a second flight for one
+            // source row, so it does not claim that row's stable identity —
+            // the same rule the Drizzle repository enforces with a partial
+            // unique index.
+            ...(acceptedNew || !row.provenance?.sourceRowKey
+              ? {}
+              : { sourceRowKey: row.provenance.sourceRowKey }),
             flight: clone(row.proposedFlight),
             sources: [{ batchId: input.batch.id, rowId: row.id }],
           };

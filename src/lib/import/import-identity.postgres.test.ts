@@ -17,6 +17,12 @@ import { aggregateStatsSlice, type StatsPeriod } from "@/lib/flight-statistics";
 import { statsFactsFromFlights } from "@/lib/flight-insights";
 import { commitImportBatch, decideImportRows, getUserImportBatch } from "./service";
 import { stageFlightImport } from "./worker";
+import { isAirportNamespaceMatch } from "./route-normalization";
+import {
+  ACCEPTED_DUPLICATE_FINGERPRINT_VERSION,
+  isAcceptedDuplicateFingerprintVersion,
+  ROW_FINGERPRINT_VERSION,
+} from "./fingerprint";
 import { IMPORTER_PIPELINE_VERSION } from "./version";
 
 const enabled =
@@ -91,8 +97,24 @@ function foreflightCsv(flightRows: string[], header = "Date,AircraftID,From,To,R
   ].join("\n");
 }
 
-function upload(fileName: string, content: string) {
-  return {
+/**
+ * A letter-only synthetic code suffix.
+ *
+ * Hex suffixes are not safe for codes that go into a `Route` cell: the
+ * classifier rejects airway shapes (`[VJQTAB]\d{1,3}`) *before* any catalog
+ * lookup, so a randomly all-numeric suffix behind a `B` produced `B123` and
+ * the token was refused for a reason the test was not about. That failed
+ * roughly one run in ten.
+ */
+function alphaSuffix(): string {
+  const letters = "CDEFGHKLMNPRSUWXYZ";
+  return Array.from(
+    { length: 3 },
+    () => letters[Math.floor(Math.random() * letters.length)],
+  ).join("");
+}
+
+function upload(fileName: string, content: string) {  return {
     fileName,
     mimeType: "text/csv",
     sizeBytes: Buffer.byteLength(content),
@@ -155,7 +177,7 @@ postgresDescribe("PostgreSQL import identity and route waypoints", () => {
 
   it("persists a Route airport as stop_kind='waypoint' without touching landing statistics", async () => {
     const userId = await createUser("route-waypoint");
-    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const suffix = alphaSuffix();
     const [origin, waypoint, destination] = await seedAirports([
       `K${suffix}`,
       `R${suffix}`,
@@ -251,8 +273,77 @@ postgresDescribe("PostgreSQL import identity and route waypoints", () => {
     expect(withWaypoint.metrics).toEqual(withoutWaypoint.metrics);
   });
 
-  it("keeps two same-day same-route blank-time rows as distinct flights", async () => {
-    const userId = await createUser("blank-time-legs");
+  it("does not downgrade a duplicate because a waypoint airport cannot be rendered", async () => {
+    // Duplicate assessment used to check resolvability across the *whole*
+    // path. A single overflown airport whose catalog metadata became unusable
+    // then suppressed the candidate's proposal, which drops every route and
+    // temporal signal — so a real duplicate scored as new and the pilot got a
+    // second copy of a flight, because of a rendering problem at a place they
+    // never landed.
+    const userId = await createUser("waypoint-duplicate");
+    const suffix = alphaSuffix();
+    const [origin, waypoint, destination] = await seedAirports([
+      `K${suffix}`,
+      `R${suffix}`,
+      `P${suffix}`,
+    ]);
+    const repository = new DrizzleImportRepository();
+
+    await stageAndCommitAll(
+      userId,
+      repository,
+      foreflightCsv([
+        `2026-04-02,SYNTH-A,${origin.code},${destination.code},${origin.code} ${waypoint.code} ${destination.code},120,9:00,1.5`,
+      ]),
+      "committed.csv",
+    );
+    expect(await repository.listFlights(userId)).toHaveLength(1);
+
+    // The waypoint's catalog row loses every public identifier, so it can no
+    // longer be turned into a proposal airport. The landings are untouched.
+    await getDb()
+      .delete(airportAliases)
+      .where(eq(airportAliases.airportId, waypoint.id));
+    await getDb()
+      .update(airports)
+      .set({
+        icao: null,
+        iata: null,
+        localCode: null,
+        sourceIdent: null,
+        sourceIdentProvenance: null,
+      })
+      .where(eq(airports.id, waypoint.id));
+
+    // A near-duplicate, not an exact one: the departure time differs, so the
+    // decision has to come from the route and temporal signals rather than a
+    // fingerprint or source-row-key hit.
+    const staged = await stageFlightImport(
+      userId,
+      upload(
+        "near-duplicate.csv",
+        foreflightCsv([
+          `2026-04-02,SYNTH-A,${origin.code},${destination.code},,120,9:30,1.5`,
+        ]),
+      ),
+      { imports: repository, flights: repository, airports: repository },
+    );
+    const detail = await getUserImportBatch(
+      userId,
+      staged.batchId,
+      1,
+      100,
+      repository,
+    );
+    const [row] = detail?.rows.rows ?? [];
+    expect(row).toBeDefined();
+    expect(row.duplicateCandidate?.scope).toBe("existing-flight");
+    expect(
+      row.duplicateCandidate?.signals.map(({ code }) => code),
+    ).toContain("same-route");
+  });
+
+  it("keeps two same-day same-route blank-time rows as distinct flights", async () => {    const userId = await createUser("blank-time-legs");
     const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
     const [origin, destination] = await seedAirports([`K${suffix}`, `P${suffix}`]);
     const repository = new DrizzleImportRepository();
@@ -561,5 +652,287 @@ postgresDescribe("PostgreSQL import identity and route waypoints", () => {
     expect(attention.reviewBatches).toBe(1);
     expect(attention.pendingRows).toBeGreaterThan(0);
     expect(attention.href).toBe("/import");
+  });
+
+  it("reports every alias namespace a code resolves through, not the winner", async () => {
+    // The namespace guard asks "is there ANY airport-namespace alias under
+    // which this code names this airport?". Alias priority ranks IATA above
+    // FAA-LID, so Boeing Field's `BFI` resolves through its IATA row even
+    // though the identical code is also its FAA-LID. A resolver that reported
+    // only the winning row said `["iata"]` and the guard rejected a real
+    // airport.
+    const userId = await createUser("namespace-set");
+    const repository = new DrizzleImportRepository();
+    const suffix = alphaSuffix();
+    const dualCode = `B${suffix}`;
+    const [dual] = await seedAirports([dualCode], "iata");
+    await getDb()
+      .insert(airportAliases)
+      .values({
+        airportId: dual.id,
+        code: dualCode,
+        codeType: "faa-lid",
+        priority: 30,
+      });
+
+    const match = await repository.resolveIdentifier(userId, dualCode);
+    expect(match.status).toBe("resolved");
+    if (match.status !== "resolved") return;
+    expect([...(match.matchedCodeTypes ?? [])].toSorted()).toEqual([
+      "faa-lid",
+      "iata",
+    ]);
+    expect(isAirportNamespaceMatch(match)).toBe(true);
+
+    // An IATA-only code is the collision the guard exists for: `OED` is the
+    // Medford VOR's identifier as well as an airline code.
+    const iataOnly = `O${suffix}`;
+    await seedAirports([iataOnly], "iata");
+    const navaidish = await repository.resolveIdentifier(userId, iataOnly);
+    expect(navaidish.status).toBe("resolved");
+    if (navaidish.status !== "resolved") return;
+    expect(navaidish.matchedCodeTypes).toEqual(["iata"]);
+    expect(isAirportNamespaceMatch(navaidish)).toBe(false);
+  });
+
+  it("never resolves an identifier without saying which namespaces named it", async () => {
+    // The classifier fails closed on an empty namespace set. Through *this*
+    // resolver that case is unreachable, and deliberately so: an airport is
+    // only reachable by code through `airport_aliases`, and
+    // `airport_aliases_type_valid` restricts `code_type` to the six known
+    // namespaces, so a resolved match always carries at least one. This test
+    // pins that structural guarantee, so a future release that loosens the
+    // constraint — or a resolver that stops reading `code_type` — is caught
+    // here rather than by discovering the guard has quietly stopped guarding.
+    const userId = await createUser("namespace-nonempty");
+    const repository = new DrizzleImportRepository();
+    const suffix = alphaSuffix();
+    const [seeded] = await seedAirports([`K${suffix}`]);
+
+    await expect(
+      getDb().insert(airportAliases).values({
+        airportId: seeded.id,
+        code: `W${suffix}`,
+        codeType: "future-namespace",
+        priority: 10,
+      }),
+    ).rejects.toMatchObject({
+      cause: { constraint_name: "airport_aliases_type_valid" },
+    });
+
+    const match = await repository.resolveIdentifier(userId, seeded.code);
+    expect(match.status).toBe("resolved");
+    if (match.status !== "resolved") return;
+    expect(match.matchedCodeTypes.length).toBeGreaterThan(0);
+  });
+
+  it("refuses an IATA-only route token and discloses why, but accepts a dual-namespace one", async () => {
+    // End to end through the real resolver: the classifier's answer has to
+    // survive the database, not just a stub. And the refusal is *disclosed* —
+    // silently discarding a token that did resolve to an airport is
+    // indistinguishable, from outside, from never having seen it.
+    const userId = await createUser("namespace-route");
+    const repository = new DrizzleImportRepository();
+    const suffix = alphaSuffix();
+    const [origin, destination] = await seedAirports([
+      `K${suffix}`,
+      `P${suffix}`,
+    ]);
+    const iataOnly = `O${suffix}`;
+    await seedAirports([iataOnly], "iata");
+    const dualCode = `B${suffix}`;
+    const [dual] = await seedAirports([dualCode], "iata");
+    await getDb()
+      .insert(airportAliases)
+      .values({
+        airportId: dual.id,
+        code: dualCode,
+        codeType: "faa-lid",
+        priority: 30,
+      });
+
+    const staged = await stageFlightImport(
+      userId,
+      upload(
+        "namespace-route.csv",
+        foreflightCsv([
+          `2026-10-01,SYNTH-A,${origin.code},${destination.code},"${iataOnly} ${dualCode}",120,10:00,1.6`,
+        ]),
+      ),
+      { imports: repository, flights: repository, airports: repository },
+    );
+    const detail = await getUserImportBatch(
+      userId,
+      staged.batchId,
+      1,
+      100,
+      repository,
+    );
+    const [row] = detail?.rows.rows ?? [];
+    expect(row).toBeDefined();
+
+    const waypoints = (row.proposedFlight.routeNodes ?? []).filter(
+      (node) => node.kind === "waypoint",
+    );
+    expect(waypoints.map((node) => node.identifier)).toEqual([dualCode]);
+    expect(
+      (row.proposedFlight.routeRejections ?? []).map(
+        ({ identifier, reason }) => [identifier, reason],
+      ),
+    ).toEqual([[iataOnly, "navaid-or-iata-collision"]]);
+    expect(
+      row.issues.map(({ code, severity }) => [code, severity]),
+    ).toContainEqual(["route-token-navaid-collision", "warning"]);
+    // A refused route token is never an error: it must not cost the pilot a
+    // flight they actually flew.
+    expect(row.issues.every(({ severity }) => severity !== "error")).toBe(true);
+  });
+
+  it("stamps fingerprint_version with the algorithm that produced the digest", async () => {
+    // `fingerprint_version` has exactly one job: say which algorithm produced
+    // the value beside it. An accepted duplicate's digest comes from the
+    // accepted-duplicate function, not the row fingerprint, so stamping the
+    // row-fingerprint version there stated something false in the one column
+    // the adoption chain reads to decide whether a digest is superseded.
+    const userId = await createUser("fingerprint-version");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const [origin, destination] = await seedAirports([
+      `K${suffix}`,
+      `P${suffix}`,
+    ]);
+    const repository = new DrizzleImportRepository();
+    const row = `2026-11-02,SYNTH-A,${origin.code},${destination.code},,60,15:40,1.1`;
+
+    await stageAndCommitAll(userId, repository, foreflightCsv([row]), "first.csv");
+    const [committed] = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          fingerprintVersion: flights.fingerprintVersion,
+          sourceRowKey: flights.sourceRowKey,
+        })
+        .from(flights)
+        .where(eq(flights.userId, userId)),
+    );
+    expect(committed.fingerprintVersion).toBe(ROW_FINGERPRINT_VERSION);
+
+    const second = await stageFlightImport(
+      userId,
+      upload("second.csv", `${foreflightCsv([row])}\n`),
+      { imports: repository, flights: repository, airports: repository },
+    );
+    const detail = await getUserImportBatch(userId, second.batchId, 1, 100, repository);
+    const staged = detail?.rows.rows ?? [];
+    await decideImportRows(
+      userId,
+      second.batchId,
+      {
+        decisions: [
+          {
+            rowId: staged[0].id,
+            action: "accepted" as const,
+            duplicateResolution: "accept_new" as const,
+          },
+        ],
+      },
+      repository,
+    );
+    await commitImportBatch(userId, second.batchId, repository, repository);
+
+    const rows = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          fingerprintVersion: flights.fingerprintVersion,
+          sourceRowKey: flights.sourceRowKey,
+        })
+        .from(flights)
+        .where(eq(flights.userId, userId)),
+    );
+    expect(rows).toHaveLength(2);
+    const acceptedNew = rows.find(({ sourceRowKey }) => sourceRowKey === null);
+    expect(acceptedNew?.fingerprintVersion).toBe(
+      ACCEPTED_DUPLICATE_FINGERPRINT_VERSION,
+    );
+    // The reserved range is what keeps a single integer column honest for
+    // both families: it can never be read as a superseded row version, so the
+    // adoption chain will not offer this flight as a legacy match.
+    expect(acceptedNew?.fingerprintVersion).toBeGreaterThan(
+      ROW_FINGERPRINT_VERSION,
+    );
+    expect(
+      isAcceptedDuplicateFingerprintVersion(committed.fingerprintVersion),
+    ).toBe(false);
+  });
+
+  it("backfills fingerprint_version from the stop count the old algorithm used", async () => {
+    // Migration 0018's one deliberate write. The pre-v3 function used version
+    // 2 for any flight with more than two committed stops and version 1
+    // otherwise, so leaving every historical row on the `1` default would
+    // have made the column lie about every multi-stop flight.
+    const userId = await createUser("fingerprint-backfill");
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 3).toUpperCase();
+    const [a, b, c] = await seedAirports([
+      `K${suffix}`,
+      `R${suffix}`,
+      `P${suffix}`,
+    ]);
+    const twoStopId = randomUUID();
+    const threeStopId = randomUUID();
+    await withUserDb(userId, async (tx) => {
+      for (const [id, stops] of [
+        [twoStopId, [a, c]],
+        [threeStopId, [a, b, c]],
+      ] as const) {
+        await tx.insert(flights).values({
+          id,
+          userId,
+          fingerprint: `legacy-${id}`,
+          // Deliberately the pre-migration default, as a historical row has.
+          fingerprintVersion: 1,
+          date: "2020-01-01",
+          originAirportId: stops[0].id,
+          destinationAirportId: stops.at(-1)!.id,
+          kind: "private",
+          role: "pilot",
+          roleOrigin: "source-default",
+          sourceType: "CSV",
+        });
+        await tx.insert(flightStops).values(
+          stops.map((stop, stopOrder) => ({
+            userId,
+            flightId: id,
+            stopOrder,
+            airportId: stop.id,
+          })),
+        );
+      }
+    });
+
+    // The migration statement, replayed verbatim against these rows.
+    await withUserDb(userId, (tx) =>
+      tx.execute(sql`
+        UPDATE "flights" f
+        SET "fingerprint_version" = 2
+        WHERE f."fingerprint_version" <> 2
+          AND (
+            SELECT count(*) FROM "flight_stops" s WHERE s."flight_id" = f."id"
+          ) > 2
+      `),
+    );
+
+    const versions = new Map(
+      (
+        await withUserDb(userId, (tx) =>
+          tx
+            .select({
+              id: flights.id,
+              fingerprintVersion: flights.fingerprintVersion,
+            })
+            .from(flights)
+            .where(eq(flights.userId, userId)),
+        )
+      ).map(({ id, fingerprintVersion }) => [id, fingerprintVersion]),
+    );
+    expect(versions.get(twoStopId)).toBe(1);
+    expect(versions.get(threeStopId)).toBe(2);
   });
 });
