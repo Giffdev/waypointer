@@ -421,6 +421,37 @@ body:has(.runtime-mode) .map-stage {
   border-radius: 18px;
   padding: 22px;
 }
+/* Import work the pipeline set aside. Deliberately the first thing in the
+   overlay: a row held back for review is invisible on the map itself, so the
+   notice has to come before the map's own story rather than after it. */
+.import-attention {
+  border-radius: 16px;
+  border-color: rgba(226, 178, 92, .45);
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+}
+.import-attention-headline {
+  align-items: center;
+  color: var(--gold);
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  margin: 0;
+}
+.import-attention-detail {
+  color: #9db3b8;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.import-attention-link {
+  color: var(--teal);
+  font-size: 12px;
+  font-weight: 700;
+  justify-self: start;
+  text-decoration: underline;
+}
 .eyebrow {
   color: var(--teal);
   font-size: 10px;

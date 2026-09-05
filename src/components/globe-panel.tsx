@@ -1,13 +1,20 @@
 "use client";
 
 import FlightGlobe from "./flight-globe";
-import type { Airport, FlightKind, MapRoute } from "@/lib/flight-data";
+import type {
+  Airport,
+  FlightKind,
+  MapRoute,
+  MapRoutePathFlight,
+} from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 import type { MapViewMode } from "@/lib/map-view-mode";
 
 type GlobePanelProps = {
   airports: Airport[];
   routes: MapRoute[];
+  /** Optional. Absent means landing-only rendering, exactly as before. */
+  routePathFlights?: MapRoutePathFlight[];
   visibleKind: "all" | FlightKind;
   zoom: number;
   zoomCommandToken: number;

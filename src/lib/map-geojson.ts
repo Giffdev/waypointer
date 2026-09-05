@@ -212,6 +212,86 @@ export function createFlightRoutePathFeatureCollection(
   return { type: "FeatureCollection", features };
 }
 
+export type RouteWaypointFeatureCollection = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: {
+      code: string;
+      name: string;
+      /** Ordered flight paths this point sits on, for the map tooltip. */
+      routeLabels: string[];
+    };
+    geometry: { type: "Point"; coordinates: Position };
+  }>;
+};
+
+/**
+ * The overflown points of a flight path, as map points.
+ *
+ * Deliberately a *separate* collection from `createAirportFeatureCollection`.
+ * That one carries visit semantics — active/contextual airports, hub sizing,
+ * the legend's meaning of "airport you have been to". A waypoint is a place
+ * the flight passed over, so it renders from its own source with its own
+ * style and can never be counted, sized, or coloured as somewhere visited.
+ *
+ * An airport that is a landing on any flight is omitted here: it already has
+ * a real marker, and drawing a second one on the same coordinate would make
+ * a visited airport look overflown.
+ */
+export function createRouteWaypointFeatureCollection(
+  flights: Array<
+    Pick<
+      Flight,
+      "id" | "date" | "origin" | "destination" | "airportSequence" | "routePath"
+    >
+  >,
+): RouteWaypointFeatureCollection {
+  const landed = new Set<string>();
+  for (const flight of flights) {
+    for (const node of flightRoutePath(flight)) {
+      if (node.kind === "landing") landed.add(airportIdentity(node.airport));
+    }
+  }
+  const byIdentity = new Map<
+    string,
+    { airport: Airport; routeLabels: string[] }
+  >();
+  for (const flight of flights) {
+    const path = flightRoutePath(flight);
+    if (path.length < 2) continue;
+    const routeLabel = path.map((node) => node.airport.code).join(" → ");
+    for (const node of path) {
+      if (node.kind !== "waypoint") continue;
+      const identity = airportIdentity(node.airport);
+      if (landed.has(identity)) continue;
+      const existing = byIdentity.get(identity);
+      if (existing) {
+        if (!existing.routeLabels.includes(routeLabel)) {
+          existing.routeLabels.push(routeLabel);
+        }
+        continue;
+      }
+      byIdentity.set(identity, { airport: node.airport, routeLabels: [routeLabel] });
+    }
+  }
+  return {
+    type: "FeatureCollection",
+    features: [...byIdentity.values()].map(({ airport, routeLabels }) => ({
+      type: "Feature" as const,
+      properties: {
+        code: airport.code,
+        name: airport.name,
+        routeLabels,
+      },
+      geometry: {
+        type: "Point" as const,
+        coordinates: [airport.lon, airport.lat] as Position,
+      },
+    })),
+  };
+}
+
 export function createAirportFeatureCollection(
   airports: Airport[],
   routes: MapRoute[],

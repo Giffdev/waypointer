@@ -35,6 +35,79 @@ export const AIRPORT_LAYER_IDS = {
   labels: "flight-airport-labels",
 } as const;
 
+/**
+ * Overflown route waypoints — their own layers, on their own sources.
+ *
+ * Kept apart from `ROUTE_LAYER_IDS`/`AIRPORT_LAYER_IDS` on purpose. Those
+ * carry visit and frequency semantics: route strength counts flights, airport
+ * markers mean "you have been here", and the legend says so. A waypoint is a
+ * place a flight passed over. Sharing a layer would make it inherit a meaning
+ * it does not have, so it renders dashed and hollow, and nothing that counts
+ * anything reads these sources.
+ */
+export const OVERFLOWN_LAYER_IDS = {
+  paths: "flight-overflown-paths",
+  waypoints: "flight-overflown-waypoints",
+  waypointLabels: "flight-overflown-waypoint-labels",
+} as const;
+
+/** Hollow, dashed, and dimmer than a flown route: passed over, not flown to. */
+export const OVERFLOWN_PATH_COLOR = "#8fb8c9";
+
+export function buildOverflownPathLayer(source: string): LineLayerSpecification {
+  return {
+    id: OVERFLOWN_LAYER_IDS.paths,
+    type: "line",
+    source,
+    filter: ["==", ["get", "hasWaypoints"], true],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": OVERFLOWN_PATH_COLOR,
+      "line-opacity": 0.75,
+      "line-width": ["interpolate", ["linear"], ["zoom"], 0, 1.1, 8, 2.2],
+      "line-dasharray": [2, 2],
+    },
+  };
+}
+
+export function buildOverflownWaypointLayers(
+  source: string,
+): [CircleLayerSpecification, SymbolLayerSpecification] {
+  return [
+    {
+      id: OVERFLOWN_LAYER_IDS.waypoints,
+      type: "circle",
+      source,
+      paint: {
+        "circle-color": "rgba(0,0,0,0)",
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 0, 3, 8, 5.5],
+        "circle-stroke-color": OVERFLOWN_PATH_COLOR,
+        "circle-stroke-width": 1.5,
+        "circle-opacity": 1,
+      },
+    },
+    {
+      id: OVERFLOWN_LAYER_IDS.waypointLabels,
+      type: "symbol",
+      source,
+      minzoom: 3.5,
+      layout: {
+        "text-field": ["get", "code"],
+        "text-font": ["Noto Sans Regular"],
+        "text-size": 11,
+        "text-offset": [0, 1.1],
+        "text-anchor": "top",
+        "text-allow-overlap": false,
+      },
+      paint: {
+        "text-color": OVERFLOWN_PATH_COLOR,
+        "text-halo-color": "rgba(7, 26, 39, 0.85)",
+        "text-halo-width": 1.2,
+      },
+    },
+  ];
+}
+
 export function withGlobeProjection(style: StyleSpecification): StyleSpecification {
   return withMapProjection(style, "globe");
 }

@@ -8,15 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Route waypoints (persistence and data contract; no UI in this change): a
-  ForeFlight `Route` column is now parsed into an ordered path of *waypoints*
-  alongside the flight's landings and persisted as
-  `flight_stops.stop_kind = 'waypoint'`. A flight exposes them through the new
-  presentation-only `routePath`; nothing renders them yet. Waypoints are never
+- Route waypoints on your private map: a ForeFlight `Route` column is now
+  parsed into an ordered path of *waypoints* alongside the flight's landings,
+  persisted as `flight_stops.stop_kind = 'waypoint'`, and **drawn on `/map`**.
+  A leg flown S05 → KRBG → S05 now bends through KRBG, and KRBG appears as a
+  hollow, dashed, labelled point on its own map layer. Waypoints are never
   treated as landings — `airportSequence`, unique-airport counts, landing
-  counts, dedupe identity, and the public share contract all stay
-  landings-only, so adding waypoints to an existing logbook cannot move a
-  single statistic. Token acceptance is deliberately narrow: airway,
+  counts, dedupe identity, the airport markers' "you have been here" meaning,
+  and the public share contract all stay landings-only, so adding waypoints to
+  an existing logbook cannot move a single statistic. A flight with no route
+  renders exactly the landing-only path it always did. Token acceptance is deliberately narrow: airway,
   procedure, and nav-fix shapes are rejected, and a token must name the
   airport through an ICAO/FAA-LID/GPS/ident alias (an IATA-only match is not
   enough). The namespace guard fails closed — a resolver that reports no
@@ -29,13 +30,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ForeFlight's landing-count columns are deliberately not read: they say how
   many landings a leg had, never where, so they can neither place a stop nor
   honestly raise a warning.
-- `GET /api/import/attention`: a read-only pending-import count endpoint for
-  future badge surfaces to consume. No surface reads it yet.
+- Import review notice on `/map`: when rows are still awaiting a decision,
+  carrying an unresolved duplicate, or carrying a route point that could not be
+  placed, a small banner says how many and links into the existing import
+  review. Rows held back for review are not on the map by design, and being
+  held back *and* unmentioned is indistinguishable from having imported
+  cleanly. It reads the same `GET /api/import/attention` aggregate the review
+  screen counts from, renders nothing when there is nothing outstanding, and
+  never blocks or fails the map.
 - `POST /api/import/batches/{batchId}/reprocess`: explicitly restage a batch
   under the current importer version while its private original is still
   retained. The original object is copied, not moved, so the source batch
   keeps its own file; repeat calls return the batch the first call created.
-  Expired uploads can simply be uploaded again.
+  No button surfaces it: re-uploading the same file already restages it under
+  the current importer, and expired uploads can simply be uploaded again, so a
+  second control would be a redundant path to the same outcome.
 - Map-page Share control: a lightweight "Share map" popover on `/map` shows
   sharing status, enables sharing, and copies/opens the public link, and
   deep-links to `/settings#sharing-title` for full management

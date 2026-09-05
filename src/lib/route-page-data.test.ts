@@ -136,6 +136,104 @@ describe("route URL and data contracts", () => {
     expect(data).not.toHaveProperty("facts");
   });
 
+  it("sends the map only the flights that actually have an overflown waypoint", () => {
+    // The private map draws a flight's own ordered path so a pilot can see
+    // that a leg went S05 -> KRBG -> S05. A landing-only flight is already
+    // fully described by the aggregated routes, so sending it again would
+    // serialize more of the logbook than the rendering needs — and shipping
+    // *every* flight for a presentation concern is how a map page becomes the
+    // slowest thing in the app.
+    const waypoint = { ...airports.HNL, identity: "overflown-hnl" };
+    const persisted = buildPersistedFlightData(
+      [
+        flight("with-waypoint", {
+          origin: airports.AMS,
+          destination: airports.JFK,
+          airportSequence: [airports.AMS, airports.JFK],
+          routePath: [
+            { airport: airports.AMS, kind: "landing" },
+            { airport: waypoint, kind: "waypoint" },
+            { airport: airports.JFK, kind: "landing" },
+          ],
+          routeRaw: "AMS HNL JFK",
+        }),
+        flight("landings-only"),
+      ],
+      "2026-08-11T00:00:00.000Z",
+    );
+    const map = buildMapPageContract(getInitialFilters(), persisted, null);
+
+    expect(map.routePathFlights.map(({ id }) => id)).toEqual([
+      "with-waypoint",
+    ]);
+    expect(
+      map.routePathFlights[0].routePath?.map((node) => [
+        node.airport.code,
+        node.kind,
+      ]),
+    ).toEqual([
+      ["AMS", "landing"],
+      ["HNL", "waypoint"],
+      ["JFK", "landing"],
+    ]);
+    // The aggregate the map has always drawn is untouched: the overflown
+    // airport is not a route endpoint and not a mapped airport.
+    for (const route of map.routes) {
+      expect([route.origin.identity, route.destination.identity]).not.toContain(
+        "overflown-hnl",
+      );
+    }
+    expect(map.activeAirportIdentities).not.toContain("overflown-hnl");
+  });
+
+  it("keeps map statistics identical whether or not a flight carries waypoints", () => {
+    const waypoint = { ...airports.HNL, identity: "overflown-hnl" };
+    const withWaypoint = buildPersistedFlightData(
+      [
+        flight("leg", {
+          origin: airports.AMS,
+          destination: airports.JFK,
+          airportSequence: [airports.AMS, airports.JFK],
+          routePath: [
+            { airport: airports.AMS, kind: "landing" },
+            { airport: waypoint, kind: "waypoint" },
+            { airport: airports.JFK, kind: "landing" },
+          ],
+        }),
+      ],
+      "2026-08-11T00:00:00.000Z",
+    );
+    const withoutWaypoint = buildPersistedFlightData(
+      [
+        flight("leg", {
+          origin: airports.AMS,
+          destination: airports.JFK,
+          airportSequence: [airports.AMS, airports.JFK],
+        }),
+      ],
+      "2026-08-11T00:00:00.000Z",
+    );
+
+    const withCards = buildMapPageContract(
+      getInitialFilters(),
+      withWaypoint,
+      null,
+    );
+    const withoutCards = buildMapPageContract(
+      getInitialFilters(),
+      withoutWaypoint,
+      null,
+    );
+    expect(withCards.statsCards).toEqual(withoutCards.statsCards);
+    expect(withCards.routes).toEqual(withoutCards.routes);
+    expect(withCards.activeAirportIdentities).toEqual(
+      withoutCards.activeAirportIdentities,
+    );
+    // Only the presentation-only payload differs.
+    expect(withCards.routePathFlights).toHaveLength(1);
+    expect(withoutCards.routePathFlights).toHaveLength(0);
+  });
+
   it("counts distinct same-code airports in owner map statistics", () => {
     const first = {
       ...airports.SEA,

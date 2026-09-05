@@ -133,6 +133,19 @@ export function flightLegs(
 }
 
 /**
+ * The minimum a map needs to draw one flight's own ordered path.
+ *
+ * Deliberately narrow: no aircraft, no duration, no notes. The private map
+ * receives one of these only for flights that actually have an overflown
+ * waypoint, so nothing else about the logbook crosses the boundary for a
+ * rendering concern.
+ */
+export type MapRoutePathFlight = Pick<
+  Flight,
+  "id" | "date" | "origin" | "destination" | "airportSequence" | "routePath" | "routeRaw"
+>;
+
+/**
  * The ordered path a flight actually drew on the map, including waypoints.
  *
  * Falls back to the landings sequence when a flight has no route, so callers

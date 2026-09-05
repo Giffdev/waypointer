@@ -1,4 +1,10 @@
-import type { Airport, FlightKind, FlightRole, MapRoute } from "./flight-data";
+import type {
+  Airport,
+  FlightKind,
+  FlightRole,
+  MapRoute,
+  MapRoutePathFlight,
+} from "./flight-data";
 import type {
   FilterOption,
   FlightFilters,
@@ -30,6 +36,12 @@ export type MapPageContract = RouteFilterContract & {
   dataMode: "representative" | "local-preview" | "persisted";
   filteredFlightCount: number;
   routes: MapRoute[];
+  /**
+   * Flights with an overflown route waypoint, so the private map can draw the
+   * path the flight actually took. Landing-only flights are absent: they are
+   * already fully described by `routes`, and the map renders them unchanged.
+   */
+  routePathFlights: MapRoutePathFlight[];
   airports: Airport[];
   activeAirportIdentities: string[];
   homeFrame: MapFrame;

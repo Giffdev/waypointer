@@ -21,20 +21,21 @@ imported. Presets and inferred mappings never bypass server-side validation.
 
 An upload is only redirected away when nothing is left to decide. If any row is
 unresolved, an ambiguous duplicate, or carrying an unresolved route token, it
-stays outstanding, and the count is published read-only at
-`GET /api/import/attention` for badge surfaces to consume. No surface consumes
-it yet; it ships ahead of the UI so the numbers have one definition when they
-do.
+stays outstanding, `GET /api/import/attention` publishes the count, and `/map`
+shows a banner linking back into this review. Those rows are not on your map
+until you decide — which is exactly why they are named rather than left silent.
 
 ## Route columns become waypoints, never landings
 
 The **ForeFlight adapter only** reads the `Route` header. Route tokens become
 ordered *waypoints*: they are persisted as `flight_stops.stop_kind = 'waypoint'`
-and exposed on a flight as the presentation-only `routePath`. They never count
-as a landing, never change `airportSequence`, and never affect unique-airport,
-route, or landing statistics, and they are excluded from the public share
-contract. Only an explicit endpoint/landing column, or a deliberate user
-action, creates a landing.
+and drawn on your private map as a dashed path through a hollow, labelled
+point, so a leg flown S05 → KRBG → S05 visibly bends through KRBG. They never
+count as a landing, never change `airportSequence`, never affect
+unique-airport, route, or landing statistics, and never become an airport
+marker — that marker means "you have been here". They are excluded from the
+public share contract, which stays landings-only. Only an explicit
+endpoint/landing column, or a deliberate user action, creates a landing.
 
 Generic and mapped CSV imports are deliberately **not** routed through this
 classifier. Their multi-airport columns are explicit airport-sequence fields
@@ -77,8 +78,9 @@ keeps its own, and repeat calls return the batch the first call created. That
 idempotency is scoped to the source batch *and* the importer version, so a
 later importer fix produces a new result rather than handing back the previous
 one, and a result that has since expired does not leave the batch permanently
-un-reprocessable. Once the retention window has expired the file can simply be
-uploaded again.
+un-reprocessable. There is no reprocess button: uploading the file again does
+the same thing, and once the retention window has expired that is the only
+option anyway.
 
 ## Presets
 
