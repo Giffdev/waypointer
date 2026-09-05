@@ -4,6 +4,10 @@ import type {
   StoredImportRow,
   VersionedFingerprint,
 } from "./types";
+import {
+  isAcceptedDuplicateFingerprintVersion,
+  ROW_FINGERPRINT_VERSION,
+} from "./fingerprint";
 
 export const DUPLICATE_RULE_VERSION = 2 as const;
 export const DUPLICATE_SCORE_THRESHOLD = 0.7;
@@ -11,6 +15,8 @@ export const DUPLICATE_SCORE_THRESHOLD = 0.7;
 export type ExistingFingerprintCandidate = {
   flightId: string;
   fingerprint: VersionedFingerprint;
+  /** Content-addressed identity of the source row this flight came from. */
+  sourceRowKey?: string;
   flight?: ProposedImportFlight;
 };
 
@@ -19,6 +25,7 @@ type Candidate = {
   candidateId: string;
   flight: ProposedImportFlight;
   fingerprint?: VersionedFingerprint;
+  sourceRowKey?: string;
 };
 
 export function applyDuplicateCandidates(
@@ -38,13 +45,15 @@ export function applyDuplicateCandidates(
               candidateId: candidate.flightId,
               flight: candidate.flight,
               fingerprint: candidate.fingerprint,
+              sourceRowKey: candidate.sourceRowKey,
             }]
-          : row.rowFingerprint?.value === candidate.fingerprint.value
+          : identityMatch(row, candidate)
             ? [{
                 scope: "existing-flight" as const,
                 candidateId: candidate.flightId,
                 flight: row.proposedFlight,
                 fingerprint: candidate.fingerprint,
+                sourceRowKey: candidate.sourceRowKey,
               }]
             : [],
       ),
@@ -65,6 +74,49 @@ export function applyDuplicateCandidates(
       duplicateCandidate,
     };
   });
+}
+
+function isSupersededRowFingerprint(
+  fingerprint: VersionedFingerprint | undefined,
+): boolean {
+  if (!fingerprint) return false;
+  // Accepted-duplicate digests live above the reserved base and are *not*
+  // superseded row fingerprints. Comparing on `< ROW_FINGERPRINT_VERSION`
+  // alone happens to exclude them today only because the base is larger;
+  // saying so explicitly keeps that true if either number moves.
+  if (isAcceptedDuplicateFingerprintVersion(fingerprint.version)) return false;
+  return fingerprint.version < ROW_FINGERPRINT_VERSION;
+}
+
+/**
+ * The adoption chain, in priority order: current fingerprint, then source-row
+ * key, then a superseded fingerprint version. A hit on any key means "this is
+ * the same flight" — the import adopts the existing row rather than
+ * manufacturing a second one.
+ */
+function identityMatch(
+  row: StoredImportRow,
+  candidate: ExistingFingerprintCandidate,
+): boolean {
+  if (row.rowFingerprint?.value === candidate.fingerprint.value) return true;
+  if (
+    row.provenance?.sourceRowKey &&
+    candidate.sourceRowKey === row.provenance.sourceRowKey
+  ) {
+    return true;
+  }
+  return Boolean(
+    row.legacyRowFingerprint &&
+      isSupersededRowFingerprint(candidate.fingerprint) &&
+      candidate.fingerprint.value === row.legacyRowFingerprint.value,
+  );
+}
+
+function sameSourceRow(row: StoredImportRow, candidate: Candidate): boolean {
+  return Boolean(
+    row.provenance?.sourceRowKey &&
+      candidate.sourceRowKey === row.provenance.sourceRowKey,
+  );
 }
 
 function bestCandidate(
@@ -109,6 +161,31 @@ function assessCandidate(
       code: "exact-fingerprint",
       weight: 1,
       detail: "The versioned canonical fingerprint is identical.",
+    });
+  } else if (sameSourceRow(row, candidate)) {
+    // Adoption key 2. A re-export of the same logbook re-emits the same source
+    // row; its content-addressed key is unchanged even if its time, its
+    // ordinal, or its route text moved. Matching here is what makes the
+    // re-import *update* the existing flight instead of adding a second copy.
+    signals.push({
+      code: "exact-fingerprint",
+      weight: 1,
+      detail: "This is the same source row as an already-imported flight.",
+    });
+  } else if (
+    row.legacyRowFingerprint &&
+    isSupersededRowFingerprint(candidate.fingerprint) &&
+    candidate.fingerprint?.value === row.legacyRowFingerprint.value
+  ) {
+    // Adoption key 3. Flights committed before v3 carry a v1/v2 digest that a
+    // v3 row can never equal. Without this branch, the first re-import after
+    // the identity fix would duplicate the user's entire history — the fix
+    // itself would be the data-loss event.
+    signals.push({
+      code: "exact-fingerprint",
+      weight: 1,
+      detail:
+        "An earlier fingerprint version of this same flight is already imported.",
     });
   } else {
     // Route agreement is a hard gate, not one weighted signal among many.

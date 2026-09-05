@@ -29,6 +29,7 @@ import {
   authorizeAccountDeletion,
   deleteAccountObjects,
 } from "./account-deletion";
+import type { PrivateObjectStorage } from "@/lib/storage";
 
 describe("account deletion lifecycle seams", () => {
   beforeEach(() => {
@@ -69,10 +70,14 @@ describe("account deletion lifecycle seams", () => {
     const storage = {
       put: vi.fn(),
       get: vi.fn(),
+      head: vi.fn(),
+      presignPut: vi.fn(),
+      move: vi.fn(),
+      copy: vi.fn(),
       delete: vi.fn(async (key: string) => {
         deleted.push(key);
       }),
-    };
+    } satisfies PrivateObjectStorage;
     await deleteAccountObjects(
       [
         "imports/00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000002/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.csv",

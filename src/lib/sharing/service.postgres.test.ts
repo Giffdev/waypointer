@@ -12,6 +12,7 @@ import {
 import { withUserDb } from "@/lib/db";
 import { DrizzleImportRepository } from "@/lib/db/repositories/drizzle-import-repository";
 import {
+  flightStops,
   flights,
   mapShareFlights,
   mapShares,
@@ -413,6 +414,97 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       currentAllowed: true,
       legacyExists: false,
     });
+  });
+
+  it("excludes route waypoints from the published share contract", async () => {
+    const owner = await createOwner("Waypoint Pilot");
+    const [originId, destinationId] = await createAirports();
+    const waypointId = randomUUID();
+    airportIds.push(waypointId);
+    await requireFixtureAdmin()`
+      insert into airports (
+        id, source_ident, name, city, country, latitude, longitude, facility, dataset_version
+      )
+      values (
+        ${waypointId}::uuid,
+        'WPT1',
+        'Overflown waypoint',
+        'Waypoint',
+        'US',
+        43.238,
+        -123.356,
+        'general-aviation',
+        'sharing-test'
+      )
+    `;
+    const flightId = await createFlight(owner.id, originId, destinationId);
+    // A landing spine of origin -> destination with one overflown waypoint
+    // between them. The share contract is landings only, so publishing must
+    // behave exactly as if the waypoint row were not there.
+    await withUserDb(owner.id, (tx) =>
+      tx.insert(flightStops).values([
+        {
+          userId: owner.id,
+          flightId,
+          airportId: originId,
+          stopOrder: 0,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+        {
+          userId: owner.id,
+          flightId,
+          airportId: waypointId,
+          stopOrder: 1,
+          stopKind: "waypoint",
+          sourceField: "route",
+        },
+        {
+          userId: owner.id,
+          flightId,
+          airportId: destinationId,
+          stopOrder: 2,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+      ]),
+    );
+
+    await enableMapSharing(owner.id);
+    const projection = await getPublicMapProjection(owner.username);
+
+    // Routes: the leg is drawn origin -> destination, not split in two at the
+    // waypoint, so the shared map does not claim a stop that never happened.
+    expect(projection.routes).toHaveLength(1);
+    expect(projection.summary).toMatchObject({
+      flightCount: 1,
+      routeCount: 1,
+    });
+    expect(projection.flights[0].routeLegs).toHaveLength(1);
+
+    // Airports: the stronger assertion. A shared map is a claim about where
+    // someone has *been*, so the waypoint must be absent from the published
+    // airport set entirely — not merely absent from the route endpoints of
+    // this one leg. If the snapshot's airport query stopped filtering on
+    // stop_kind, this is what would catch it.
+    const publishedAirports = projection.routes.flatMap((route) => [
+      route.origin,
+      route.destination,
+    ]);
+    expect(publishedAirports.map(({ name }) => name)).not.toContain(
+      "Overflown waypoint",
+    );
+    expect(
+      publishedAirports.some(
+        (airport) =>
+          Math.abs(airport.lat - 43.238) < 0.001 &&
+          Math.abs(airport.lon - -123.356) < 0.001,
+      ),
+    ).toBe(false);
+    expect(new Set(publishedAirports.map(({ name }) => name)).size).toBe(2);
+
+    // And nothing anywhere in the serialized snapshot mentions it.
+    expect(JSON.stringify(projection)).not.toContain("Overflown waypoint");
   });
 });
 

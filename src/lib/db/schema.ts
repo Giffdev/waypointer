@@ -292,6 +292,9 @@ export const flights = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     fingerprint: text("fingerprint").notNull(),
+    fingerprintVersion: integer("fingerprint_version").notNull().default(1),
+    sourceRowKey: text("source_row_key"),
+    routeRaw: text("route_raw"),
     date: text("date").notNull(),
     originAirportId: uuid("origin_airport_id")
       .notNull()
@@ -321,6 +324,9 @@ export const flights = pgTable(
       table.userId,
       table.fingerprint,
     ),
+    uniqueIndex("flights_user_source_row_key_unique")
+      .on(table.userId, table.sourceRowKey)
+      .where(sql`${table.sourceRowKey} is not null`),
     index("flights_user_date_idx").on(table.userId, table.date),
     check(
       "flights_role_origin_valid",
@@ -346,6 +352,19 @@ export const flightStops = pgTable(
     airportId: uuid("airport_id")
       .notNull()
       .references(() => airports.id),
+    /**
+     * `landing` = the pilot was on the ground here. `waypoint` = the flight
+     * passed over/through here. Only landings feed statistics and identity;
+     * defaulting existing rows to `landing` preserves every historical count
+     * byte-for-byte.
+     */
+    stopKind: text("stop_kind").notNull().default("landing"),
+    /**
+     * Where the stop came from: an explicit endpoint column, a parsed route
+     * string, or a deliberate user edit. `endpoint` stops are immutable —
+     * reprocessing may never demote one.
+     */
+    sourceField: text("source_field").notNull().default("endpoint"),
     ...timestamps,
   },
   (table) => [
@@ -359,7 +378,18 @@ export const flightStops = pgTable(
       foreignColumns: [flights.id, flights.userId],
     }).onDelete("cascade"),
     index("flight_stops_user_flight_idx").on(table.userId, table.flightId),
+    index("flight_stops_landing_idx")
+      .on(table.flightId, table.stopOrder)
+      .where(sql`${table.stopKind} = 'landing'`),
     check("flight_stops_order_nonnegative", sql`${table.stopOrder} >= 0`),
+    check(
+      "flight_stops_stop_kind_valid",
+      sql`${table.stopKind} in ('landing', 'waypoint')`,
+    ),
+    check(
+      "flight_stops_source_field_valid",
+      sql`${table.sourceField} in ('endpoint', 'route', 'manual')`,
+    ),
   ],
 );
 
@@ -372,6 +402,16 @@ export const importBatches = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     adapterId: text("adapter_id").notNull(),
     adapterVersion: integer("adapter_version").notNull(),
+    /**
+     * Version of the import pipeline that produced this batch's staged rows.
+     * Part of the active-file uniqueness key, so the same bytes staged by an
+     * older pipeline no longer block a reimport that would fix them.
+     */
+    importerVersion: integer("importer_version").notNull().default(0),
+    reprocessedFromBatchId: uuid("reprocessed_from_batch_id").references(
+      (): AnyPgColumn => importBatches.id,
+      { onDelete: "set null" },
+    ),
     status: importBatchStatus("status").notNull().default("pending"),
     originalObjectKey: text("original_object_key").notNull(),
     quarantineObjectKey: text("quarantine_object_key"),
@@ -422,7 +462,7 @@ export const importBatches = pgTable(
   (table) => [
     uniqueIndex("import_batches_id_user_unique").on(table.id, table.userId),
     uniqueIndex("import_batches_user_hash_active_unique")
-      .on(table.userId, table.fileSha256)
+      .on(table.userId, table.fileSha256, table.importerVersion)
       .where(sql`${table.status} <> 'expired'`),
     uniqueIndex("import_batches_user_idempotency_unique")
       .on(table.userId, table.idempotencyKey)
@@ -471,6 +511,7 @@ export const importRows = pgTable(
       .notNull()
       .references(() => importBatches.id, { onDelete: "cascade" }),
     rowNumber: integer("row_number").notNull(),
+    sourceRowKey: text("source_row_key"),
     rawSnapshot: jsonb("raw_snapshot"),
     parsed: jsonb("parsed").notNull(),
     validationState: importValidationState("validation_state").notNull(),
@@ -498,6 +539,9 @@ export const importRows = pgTable(
       table.batchId,
       table.rowNumber,
     ),
+    uniqueIndex("import_rows_batch_source_row_key_unique")
+      .on(table.batchId, table.sourceRowKey)
+      .where(sql`${table.sourceRowKey} is not null`),
     index("import_rows_user_batch_idx").on(table.userId, table.batchId),
   ],
 );

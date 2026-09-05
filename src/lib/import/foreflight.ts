@@ -45,6 +45,8 @@ export type ForeFlightProvenance = {
     distance: string;
     timeOut: string;
     totalTime: string;
+    /** Verbatim `Route` cell. Optional column; blank when absent. */
+    route: string;
   };
 };
 
@@ -54,6 +56,13 @@ export type ForeFlightFlight = {
   departureTime?: string;
   originIdentifier?: string;
   destinationIdentifier?: string;
+  /**
+   * Verbatim source route text. Route presence infers **nothing** — not a
+   * landing, not a takeoff, not an airport visit. It is classified into
+   * ordered airport waypoints by the shared normalizer, and every token that
+   * is not an airport is preserved here as text with no marker.
+   */
+  routeRaw?: string;
   distanceNauticalMiles?: number;
   totalTimeHours?: number;
   totalTimeStatus: StatsValueStatus;
@@ -121,6 +130,18 @@ function firstCell(record: CsvRecord): string {
   return record.cells[0]?.trim() ?? "";
 }
 
+/**
+ * ForeFlight's landing columns (`AllLandings`, `DayLandingsFullStop`,
+ * `NightLandingsFullStop`) are deliberately **not** read.
+ *
+ * They report *how many* landings a leg had, never *where*, so they cannot
+ * add a stop or change a stop's kind without guessing a place. And they
+ * cannot honestly drive a warning either: a lesson flown in the pattern
+ * legitimately logs ten landings against a single From/To pair, so comparing
+ * the count to the landing-airport count would flag routine training rows as
+ * problems. Parsing them into a field nothing reads is worse than not parsing
+ * them — it implies a behaviour that does not ship.
+ */
 function isEmptyRecord(record: CsvRecord): boolean {
   return record.cells.every((cell) => cell.trim() === "");
 }
@@ -422,6 +443,7 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         distance: value(record, flightIndexes, "Distance"),
         timeOut: value(record, flightIndexes, "TimeOut"),
         totalTime: value(record, flightIndexes, "TotalTime"),
+        route: value(record, flightIndexes, "Route"),
       };
       const rawDistance = raw.distance;
       const rawTotalTime = raw.totalTime;
@@ -460,6 +482,7 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         issues,
       );
       const registration = registrationFromForeFlightAircraftId(raw.aircraftId);
+      const routeRaw = raw.route.trim();
 
       return {
         sourceRowNumber: record.rowNumber,
@@ -467,6 +490,7 @@ export function parseForeFlightCsv(input: string): ForeFlightParseResult {
         departureTime,
         originIdentifier,
         destinationIdentifier,
+        ...(routeRaw ? { routeRaw } : {}),
         distanceNauticalMiles,
         totalTimeHours,
         totalTimeStatus: valueStatus(rawTotalTime, totalTimeHours),

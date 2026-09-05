@@ -19,6 +19,69 @@ exact duplicates are skipped, and a fully resolved upload returns to the map.
 Partial imports show only unresolved rows and state how many rows were already
 imported. Presets and inferred mappings never bypass server-side validation.
 
+An upload is only redirected away when nothing is left to decide. If any row is
+unresolved, an ambiguous duplicate, or carrying an unresolved route token, it
+stays outstanding, `GET /api/import/attention` publishes the count, and `/map`
+shows a banner linking back into this review. Those rows are not on your map
+until you decide — which is exactly why they are named rather than left silent.
+
+## Route columns become waypoints, never landings
+
+The **ForeFlight adapter only** reads the `Route` header. Route tokens become
+ordered *waypoints*: they are persisted as `flight_stops.stop_kind = 'waypoint'`
+and drawn on your private map as a dashed path through a hollow, labelled
+point, so a leg flown S05 → KRBG → S05 visibly bends through KRBG. They never
+count as a landing, never change `airportSequence`, never affect
+unique-airport, route, or landing statistics, and never become an airport
+marker — that marker means "you have been here". They are excluded from the
+public share contract, which stays landings-only. Only an explicit
+endpoint/landing column, or a deliberate user action, creates a landing.
+
+Generic and mapped CSV imports are deliberately **not** routed through this
+classifier. Their multi-airport columns are explicit airport-sequence fields
+and continue to produce landings exactly as before; reclassifying them would
+change the meaning of stops already committed, and therefore statistics and
+shares, with no migration and no preview. Extending waypoint classification to
+another provider is a separate, deliberate migration.
+
+Token acceptance is deliberately narrow:
+
+- airway, procedure, and nav-fix shapes are rejected before resolution;
+- a token must name its airport through an ICAO, FAA-LID, GPS, or ident alias.
+  The whole alias-type set for the winning airport is considered, not just the
+  highest-priority one, so `BFI` (IATA *and* FAA-LID for Boeing Field) is
+  accepted while an IATA-only match such as `OED` — the Medford VOR — is not.
+  A match that reports no namespaces at all is refused, not assumed;
+- endpoints and adjacent repeats are deduped, non-adjacent repeats are kept,
+  and the path is capped at 32 nodes.
+
+Anything not accepted stays in the preserved raw route text and produces a row
+warning, including a rejected IATA/navaid collision. It never invalidates the
+row and never places an airport marker.
+
+ForeFlight's landing-count columns (`AllLandings`, `DayLandingsFullStop`,
+`NightLandingsFullStop`) are not read. They report how many landings a leg had,
+never where, so they cannot place a stop without guessing — and they cannot
+honestly drive a warning either, because a lesson flown in the pattern
+legitimately logs ten landings against a single `From`/`To` pair.
+
+## Re-importing after an importer fix
+
+Batch identity includes the importer pipeline version, so re-uploading the same
+file after a pipeline fix restages it under the new version instead of
+returning the old result. Already-committed flights are still recognised — the
+row's `sourceRowKey`, or an older fingerprint version, adopts the existing
+flight rather than creating a second one. While the private original is still
+retained, `POST /api/import/batches/{batchId}/reprocess` performs the same
+restage without a re-upload; it copies the stored file so the original batch
+keeps its own, and repeat calls return the batch the first call created. That
+idempotency is scoped to the source batch *and* the importer version, so a
+later importer fix produces a new result rather than handing back the previous
+one, and a result that has since expired does not leave the batch permanently
+un-reprocessable. There is no reprocess button: uploading the file again does
+the same thing, and once the retention window has expired that is the only
+option anyway.
+
 ## Presets
 
 ### MyFlightbook CSV

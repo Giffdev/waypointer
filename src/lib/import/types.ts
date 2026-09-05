@@ -17,7 +17,12 @@ export type ImportIssue = {
     | "invalid-number"
     | "unknown-aircraft"
     | "ambiguous-aircraft"
-    | "invalid-row";
+    | "invalid-row"
+    // Route tokens never invalidate a row: a token we cannot place must
+    // not cost the user the flight, so all three codes are always warnings.
+    | "route-token-unmatched"
+    | "route-token-ambiguous"
+    | "route-token-navaid-collision";
   field: string;
   message: string;
   severity: "error" | "warning";
@@ -62,12 +67,52 @@ export type VersionedFingerprint = {
   value: string;
 };
 
+/**
+ * Which alias namespace an identifier resolved through. Route classification
+ * accepts only airport-namespace matches (`icao`, `faa-lid`, `gps`, `ident`);
+ * an identifier that matched *only* through `iata` or a non-US `local` alias
+ * is far more likely to be a co-located navaid written into a route string
+ * than the airport itself, so it is never promoted to a waypoint.
+ */
+export type AirportIdentifierType =
+  | "icao"
+  | "iata"
+  | "faa-lid"
+  | "gps"
+  | "ident"
+  | "local";
+
+export const AIRPORT_ROUTE_NAMESPACE_TYPES: readonly AirportIdentifierType[] = [
+  "icao",
+  "faa-lid",
+  "gps",
+  "ident",
+];
 export type ImportAirportMatch =
   | {
       status: "resolved";
       identifier: string;
       airportId: string;
       airport: Airport;
+      /**
+       * **Every** alias namespace under which this identifier maps to the
+       * winning airport — not just the highest-priority one.
+       *
+       * The distinction is load-bearing. `BFI` is Boeing Field's IATA code
+       * *and* its FAA-LID; only the IATA alias wins on priority, so a guard
+       * that read the winning row alone saw `["iata"]` and rejected a real
+       * airport. Reading the whole set lets the guard ask the question it
+       * actually means: "is there any airport-namespace route by which this
+       * token names this airport?"
+       *
+       * **Required, and required to be complete.** It was optional once, and
+       * the route classifier treated its absence as "assume airport" — so any
+       * resolver that forgot to populate it disabled the navaid/IATA
+       * collision guard silently, for every token, with no failing test. A
+       * resolver that cannot report its namespaces must report `[]`, which
+       * the classifier refuses.
+       */
+      matchedCodeTypes: readonly AirportIdentifierType[];
     }
   | {
       status: "not-found";
@@ -83,6 +128,76 @@ export type ImportAirportMatch =
       }>;
     };
 
+/**
+ * One ordered node on a flight's path. Every source token becomes a node, so
+ * nothing a provider wrote is silently dropped.
+ *
+ * `kind` answers a *single* question — is this token an airport we can place
+ * on a map? It never answers "did the pilot land here". Only a field the
+ * source explicitly designates as an endpoint/landing, or a deliberate user
+ * action, produces `kind: "landing"`.
+ */
+export type ImportRouteNode =
+  | {
+      kind: "landing";
+      identifier: string;
+      match: ImportAirportMatch;
+      /**
+       * `From`/`To` are the source's own endpoint headers; `endpoint` is an
+       * intermediate stop from an explicit airport-sequence column. All three
+       * persist as `source_field = 'endpoint'`, matching what migration 0018
+       * backfills onto every pre-existing stop — a landing is never derived
+       * from route text, so `route` is deliberately not a landing origin.
+       * `manual` is a deliberate user assertion.
+       */
+      sourceField: "From" | "To" | "endpoint" | "manual";
+      tokenIndex?: number;
+    }
+  | {
+      kind: "waypoint";
+      identifier: string;
+      match: ImportAirportMatch;
+      sourceField: "Route";
+      tokenIndex: number;
+    }
+  | {
+      kind: "unmatched";
+      identifier: string;
+      sourceField: "Route";
+      tokenIndex: number;
+      reason: ImportRouteRejection["reason"];
+    };
+
+export type ImportRouteRejectionReason =
+  | "structural-token"
+  | "airway-or-procedure"
+  | "nav-fix-shape"
+  | "navaid-or-iata-collision"
+  | "ambiguous"
+  | "not-found"
+  /**
+   * The token repeats the leg's own `From`/`To` endpoint at the matching end
+   * of the route. Distinct from `adjacent-duplicate`, which is a repeat of
+   * the *previous route point*: reporting an endpoint restatement as an
+   * adjacent duplicate told the user their route text was malformed when
+   * `KMFR KRBG KEUG` on a KMFR→KEUG leg is exactly how routes are written.
+   */
+  | "endpoint-duplicate"
+  | "adjacent-duplicate"
+  | "route-too-long";
+
+export type ImportRouteRejection = {
+  identifier: string;
+  tokenIndex: number;
+  reason: ImportRouteRejectionReason;
+  /** Populated only for `ambiguous`, so the review UI can prefill a picker. */
+  candidates?: Array<{
+    airportId: string;
+    code: string;
+    name: string;
+  }>;
+};
+
 export type ProposedImportFlight = {
   date?: string;
   departureTime?: string;
@@ -92,6 +207,16 @@ export type ProposedImportFlight = {
   destination?: ImportAirportMatch;
   airportIdentifiers?: string[];
   airportMatches?: ImportAirportMatch[];
+  /**
+   * Canonical ordered path covering **every** source token, including tokens
+   * that are not airports. `origin`, `destination`, `airportIdentifiers`, and
+   * `airportMatches` remain the landings-only projection every legacy consumer
+   * already reads, so waypoints cannot leak into a statistic by accident.
+   */
+  routeNodes?: ImportRouteNode[];
+  routeRejections?: ImportRouteRejection[];
+  /** Verbatim source route text. Where non-airport nav fixes are preserved. */
+  routeRaw?: string;
   kind: FlightKind;
   role: FlightRole;
   aircraft?: string;
@@ -134,6 +259,13 @@ export type ImportRowProvenance = {
   source: FlightSource;
   sourceRowNumber: number;
   externalStableId?: string;
+  /**
+   * Content-addressed identity of the source row, plus an intra-file
+   * occurrence counter. Stable across reimports of the same file **and**
+   * across re-exports that insert unrelated rows above it, which the old
+   * `adapterVersion:rowNumber` ordinal was not.
+   */
+  sourceRowKey?: string;
 };
 
 export type StoredImportRow = {
@@ -148,6 +280,12 @@ export type StoredImportRow = {
   decision: ImportRowDecision;
   decidedAt?: string;
   rowFingerprint?: VersionedFingerprint;
+  /**
+   * The pre-v3 digest for this same row, carried alongside the current one so
+   * a re-import can recognise — and adopt — flights committed before the
+   * identity fix instead of duplicating them.
+   */
+  legacyRowFingerprint?: VersionedFingerprint;
   duplicateCandidate?: ImportDuplicateCandidate;
   corrections?: ImportCorrection[];
   provenance: ImportRowProvenance;
@@ -160,7 +298,10 @@ export type ImportBatchCounts = {
   acceptedRows: number;
   skippedRows: number;
   pendingRows: number;
-  unresolvedDuplicateRows?: number;
+  unresolvedDuplicateRows: number;
+  routeWaypointRows: number;
+  unresolvedRouteTokenRows: number;
+  adoptedFlightRows: number;
   importedRows?: number;
   duplicateRows?: number;
   invalidRows?: number;
@@ -176,6 +317,15 @@ export type ImportBatchSummary = {
   adapterId?: string;
   adapterLabel?: string;
   adapterVersion?: number;
+  /** Pipeline version that produced this batch; 0 predates the column. */
+  importerVersion?: number;
+  /** True when a newer importer exists *and* the source object is retained. */
+  reprocessAvailable?: boolean;
+  reprocessUnavailableReason?:
+    | "already-current"
+    | "source-file-unavailable"
+    | "batch-not-reprocessable";
+  reprocessedFromBatchId?: string;
   source?: FlightSource;
   status: ImportBatchStatus;
   duplicateOfBatchId?: string;
@@ -186,6 +336,20 @@ export type ImportBatchSummary = {
   };
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * Cross-surface aggregate powering the attention banner on /map, /flights and
+ * /import. One indexed read; never blocks a page render.
+ */
+export type PendingImportAttention = {
+  reviewBatches: number;
+  pendingRows: number;
+  unresolvedDuplicateRows: number;
+  unresolvedRouteTokenRows: number;
+  adoptedFlightRows: number;
+  reprocessAvailableBatches: number;
+  href: string;
 };
 
 export type ImportRowsPage = {
@@ -239,6 +403,16 @@ export type AirportSearchResult = {
   country: string;
 };
 
+/**
+ * Route-stop operations.
+ *
+ * Re-resolving one stop of the existing landing sequence is the only supported
+ * operation. Route-waypoint editing (insert / remove / promote-to-landing) is
+ * deliberately **not** here: those operations move a flight's identity, so
+ * they ship with the review UI that can show the consequence, not ahead of it.
+ */
+export type ImportRouteStopOperation = { index: number; airportId: string };
+
 export type UpdateImportRowRequest = {
   expectedUpdatedAt?: string;
   proposal: Partial<
@@ -260,10 +434,7 @@ export type UpdateImportRowRequest = {
   > & {
     originAirportId?: string;
     destinationAirportId?: string;
-    routeStop?: {
-      index: number;
-      airportId: string;
-    };
+    routeStop?: ImportRouteStopOperation;
   };
 };
 

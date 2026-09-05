@@ -1,5 +1,6 @@
 import type {
   ImportBatchSummary,
+  PendingImportAttention,
   ImportDecisionAction,
   ImportDuplicateResolution,
   ImportRowsPage,
@@ -97,7 +98,31 @@ export interface ImportRepository {
   scrubBatchRawSnapshots(userId: string, batchId: string): Promise<void>;
   expireBatchAndScrub(userId: string, batchId: string): Promise<void>;
   listBatches(userId: string): Promise<ImportBatchSummary[]>;
+  /**
+   * One aggregate for every surface that shows an import badge (map, flights,
+   * import). Counting attention centrally is what lets the pipeline stop
+   * silently auto-redirecting users past rows it could not resolve: the work
+   * stays visible instead of being disposed of quietly.
+   */
+  getPendingImportAttention(userId: string): Promise<PendingImportAttention>;
   getBatch(userId: string, batchId: string): Promise<ImportBatchSummary | null>;
+  /**
+   * Ids of batches still awaiting review. Narrow by design — see
+   * `getReviewBatchState`.
+   */
+  listReviewBatchIds(userId: string): Promise<string[]>;
+  /**
+   * Just the status and concurrency stamp of one batch.
+   *
+   * Reconciliation runs during the airport catalog release, against a database
+   * deliberately pinned behind the application's own schema. Reading the whole
+   * batch row there means every column the application adds later breaks the
+   * release on databases that have not applied it yet.
+   */
+  getReviewBatchState(
+    userId: string,
+    batchId: string,
+  ): Promise<{ status: string; updatedAt: string } | null>;
   listRows(
     userId: string,
     batchId: string,

@@ -86,6 +86,25 @@ export function buildMapPageContract(
         : "representative",
     filteredFlightCount: scoped.filteredFlights.length,
     routes: scoped.filteredRoutes,
+    // Only flights that actually have an overflown waypoint cross the
+    // boundary. Everything else is already described by `routes`, so the map
+    // keeps rendering the landing-only aggregate it always did and nothing
+    // extra about the logbook is serialized for a rendering concern.
+    routePathFlights: scoped.filteredFlights
+      .filter((flight) =>
+        flight.routePath?.some((node) => node.kind === "waypoint"),
+      )
+      .map((flight) => ({
+        id: flight.id,
+        date: flight.date,
+        origin: flight.origin,
+        destination: flight.destination,
+        ...(flight.airportSequence
+          ? { airportSequence: flight.airportSequence }
+          : {}),
+        ...(flight.routePath ? { routePath: flight.routePath } : {}),
+        ...(flight.routeRaw ? { routeRaw: flight.routeRaw } : {}),
+      })),
     airports: shared.displayAirports,
     activeAirportIdentities: [...scoped.activeAirportIdentities],
     homeFrame: shared.homeFrame,

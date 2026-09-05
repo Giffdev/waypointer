@@ -4,7 +4,13 @@ import type { FlightRepository } from "@/lib/db/repositories/flight-repository";
 import type { ImportRepository } from "@/lib/db/repositories/import-repository";
 import { parseCsv, detectCsvDelimiter } from "./csv";
 import { applyDuplicateCandidates } from "./dedupe";
-import { createFileFingerprint, createRowFingerprint } from "./fingerprint";
+import {
+  assignSourceRowKeys,
+  createFileFingerprint,
+  createLegacyRowFingerprint,
+  createRowFingerprint,
+} from "./fingerprint";
+import { normalizeFlightRoute } from "./route-normalization";
 import {
   parseMappedGenericCsv,
   type GenericCsvMapping,
@@ -255,6 +261,28 @@ async function mapParsedRows(
   );
   if (parsed.adapterId === "foreflight-v1") {
     const defaults = sourceRoleDefault({ adapterId: parsed.adapterId })!;
+    const sourceRowKeys = assignSourceRowKeys(
+      userId,
+      parsed.adapterId,
+      parsed.parsed.flights.map((flight) => ({
+        rowNumber: flight.sourceRowNumber,
+        projection: {
+          date: flight.date,
+          departureTime: flight.departureTime,
+          originIdentifier: flight.originIdentifier,
+          destinationIdentifier: flight.destinationIdentifier,
+          registration: flight.registration,
+          // The verbatim flight-row `AircraftID` cell, never
+          // `aircraftDisplayName`. The display name is resolved out of the
+          // export's Aircraft Table, so renaming a type code — or exporting
+          // the same logbook from a ForeFlight account whose aircraft table
+          // has since been edited — rewrote the identity of every flight
+          // flown in that aircraft. The reimport then failed to recognise
+          // its own rows and committed a second copy of each one.
+          aircraft: flight.provenance.original.aircraftId,
+        },
+      })),
+    );
     return Promise.all(
       parsed.parsed.flights.map(async (flight) => {
         const origin = await resolveOptional(
@@ -267,6 +295,17 @@ async function mapParsedRows(
           flight.destinationIdentifier,
           airports,
         );
+        const route = await normalizeFlightRoute({
+          routeRaw: flight.routeRaw,
+          origin: { identifier: flight.originIdentifier, match: origin, field: "From" },
+          destination: {
+            identifier: flight.destinationIdentifier,
+            match: destination,
+            field: "To",
+          },
+          resolve: (identifier) =>
+            airports.resolveIdentifier(userId, identifier),
+        });
         const proposedFlight: ProposedImportFlight = {
           date: flight.date,
           departureTime: flight.departureTime,
@@ -274,6 +313,11 @@ async function mapParsedRows(
           destinationIdentifier: flight.destinationIdentifier,
           origin,
           destination,
+          routeNodes: route.nodes,
+          ...(route.rejections.length
+            ? { routeRejections: route.rejections }
+            : {}),
+          ...(route.routeRaw ? { routeRaw: route.routeRaw } : {}),
           ...defaults,
           aircraft: flight.aircraftDisplayName,
           aircraftType: flight.aircraftType,
@@ -287,26 +331,51 @@ async function mapParsedRows(
           source: "ForeFlight",
           classificationOrigin: "source-default",
         };
+        const sourceRowKey = sourceRowKeys.get(flight.sourceRowNumber);
         return createStoredRow({
           userId,
           batchId,
           rowNumber: flight.sourceRowNumber,
           rawSnapshot: rawByRowNumber.get(flight.sourceRowNumber) ?? null,
           proposedFlight,
-          issues: flight.issues,
+          issues: [...flight.issues, ...route.issues],
+          ...(sourceRowKey ? { sourceRowKey } : {}),
           provenance: {
             adapterId: parsed.adapterId,
             adapterLabel: parsed.label,
             adapterVersion: parsed.parsed.adapter.version,
             source: "ForeFlight",
             sourceRowNumber: flight.sourceRowNumber,
-            externalStableId: `${parsed.parsed.adapter.version}:${flight.sourceRowNumber}`,
+            // Content-addressed, not the source row ordinal: inserting an
+            // unrelated row above this one must not change its identity.
+            externalStableId:
+              sourceRowKey ??
+              `${parsed.parsed.adapter.version}:${flight.sourceRowNumber}`,
+            ...(sourceRowKey ? { sourceRowKey } : {}),
           },
         });
       }),
     );
   }
 
+  const sourceRowKeys = assignSourceRowKeys(
+    userId,
+    parsed.adapterId,
+    parsed.parsed.flights.map((flight) => ({
+      rowNumber: flight.sourceRowNumber,
+      projection: {
+        date: flight.date,
+        departureTime: flight.departureTime,
+        originIdentifier:
+          flight.originIcaoIdentifier ?? flight.originIdentifier,
+        destinationIdentifier:
+          flight.destinationIcaoIdentifier ?? flight.destinationIdentifier,
+        flightNumber: flight.flightNumber,
+        registration: flight.registration,
+        aircraft: flight.aircraftModel,
+      },
+    })),
+  );
   return Promise.all(
     parsed.parsed.flights.map(async (flight) => {
       const defaults = sourceRoleDefault({ adapterId: parsed.adapterId })!;
@@ -344,6 +413,7 @@ async function mapParsedRows(
         source: "FlightRadar24",
         classificationOrigin: "source-default",
       };
+      const sourceRowKey = sourceRowKeys.get(flight.sourceRowNumber);
       return createStoredRow({
         userId,
         batchId,
@@ -351,6 +421,7 @@ async function mapParsedRows(
         rawSnapshot: rawByRowNumber.get(flight.sourceRowNumber) ?? null,
         proposedFlight,
         issues: flight.issues,
+        ...(sourceRowKey ? { sourceRowKey } : {}),
         provenance: {
           adapterId: parsed.adapterId,
           adapterLabel: parsed.label,
@@ -358,6 +429,7 @@ async function mapParsedRows(
           source: "FlightRadar24",
           sourceRowNumber: flight.sourceRowNumber,
           externalStableId: flight.provenance.idempotencyKey,
+          ...(sourceRowKey ? { sourceRowKey } : {}),
         },
       });
     }),
@@ -376,6 +448,23 @@ async function mapGenericRows(
       record.rowNumber,
       record.cells,
     ]),
+  );
+  const sourceRowKeys = assignSourceRowKeys(
+    userId,
+    "generic-csv-v1",
+    parsed.flights.map((flight) => ({
+      rowNumber: flight.sourceRowNumber,
+      projection: {
+        date: flight.date,
+        departureTime: flight.departureTime,
+        originIdentifier: flight.originIdentifier,
+        destinationIdentifier: flight.destinationIdentifier,
+        airportIdentifiers: flight.airportIdentifiers,
+        flightNumber: flight.flightNumber,
+        registration: flight.registration,
+        aircraft: flight.aircraft ?? flight.aircraftModel,
+      },
+    })),
   );
   return Promise.all(
     parsed.flights.map(async (flight) => {
@@ -428,6 +517,7 @@ async function mapGenericRows(
           ? "source-default"
           : "explicit",
       };
+      const sourceRowKey = sourceRowKeys.get(flight.sourceRowNumber);
       return createStoredRow({
         userId,
         batchId,
@@ -435,6 +525,7 @@ async function mapGenericRows(
         rawSnapshot: rawByRowNumber.get(flight.sourceRowNumber) ?? null,
         proposedFlight,
         issues: [...flight.issues, ...routeIssues],
+        ...(sourceRowKey ? { sourceRowKey } : {}),
         provenance: {
           adapterId: "generic-csv-v1",
           adapterLabel: parsed.adapter.format,
@@ -442,6 +533,7 @@ async function mapGenericRows(
           source: "CSV",
           sourceRowNumber: flight.sourceRowNumber,
           externalStableId: flight.idempotencyKey,
+          ...(sourceRowKey ? { sourceRowKey } : {}),
         },
       });
     }),
@@ -455,6 +547,7 @@ function createStoredRow(input: {
   rawSnapshot: string[] | null;
   proposedFlight: ProposedImportFlight;
   issues: ImportIssue[];
+  sourceRowKey?: string;
   provenance: StoredImportRow["provenance"];
 }): StoredImportRow {
   const commitReady = isImportProposalCommitReady(
@@ -462,7 +555,11 @@ function createStoredRow(input: {
     input.issues,
   );
   const rowFingerprint = commitReady
-    ? createRowFingerprint(input.userId, input.proposedFlight)
+    ? createRowFingerprint(
+        input.userId,
+        input.proposedFlight,
+        input.sourceRowKey,
+      )
     : undefined;
   return {
     id: randomUUID(),
@@ -478,6 +575,14 @@ function createStoredRow(input: {
     commitReady,
     decision: "pending",
     rowFingerprint,
+    ...(commitReady
+      ? {
+          legacyRowFingerprint: createLegacyRowFingerprint(
+            input.userId,
+            input.proposedFlight,
+          ),
+        }
+      : {}),
     provenance: input.provenance,
   };
 }

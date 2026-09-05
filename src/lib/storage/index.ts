@@ -43,6 +43,15 @@ export interface PrivateObjectStorage {
     expiresInSeconds: number,
   ): Promise<PresignedPut>;
   move(sourceKey: string, destinationKey: string): Promise<void>;
+  /**
+   * Duplicate an object, leaving the source in place.
+   *
+   * Distinct from `move` because reprocessing must not reassign the original
+   * batch's only object to a new batch: retention cleanup for either batch
+   * deletes by key, so a shared key means the first cleanup silently destroys
+   * the other batch's source file and a second reprocess has nothing to read.
+   */
+  copy(sourceKey: string, destinationKey: string): Promise<void>;
   delete(key: string): Promise<void>;
 }
 
@@ -99,6 +108,18 @@ class LocalPrivateObjectStorage implements PrivateObjectStorage {
     const destination = this.filePath(destinationKey);
     await mkdir(path.dirname(destination), { recursive: true });
     await rename(source, destination);
+  }
+
+  async copy(sourceKey: string, destinationKey: string): Promise<void> {
+    const source = this.filePath(sourceKey);
+    const destination = this.filePath(destinationKey);
+    await mkdir(path.dirname(destination), { recursive: true });
+    // `wx` matches `put`: an existing destination is a caller bug, not
+    // something to overwrite silently.
+    await writeFile(destination, await readFile(source), {
+      flag: "wx",
+      mode: 0o600,
+    });
   }
 
   async delete(key: string): Promise<void> {
@@ -194,6 +215,28 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
   }
 
   async move(sourceKey: string, destinationKey: string): Promise<void> {
+    // Deliberately no `ServerSideEncryption` override. `move` relocates an
+    // object that already exists in this bucket — a quarantined upload
+    // becoming a canonical one — and forcing an algorithm here would rewrite
+    // the encryption of an object we did not create (presigned browser
+    // uploads land under the bucket default, which may be SSE-KMS). Copy and
+    // move are separate operations with separate options precisely so this
+    // cannot leak from one into the other again.
+    await this.copyObject(sourceKey, destinationKey, {});
+    await this.delete(validateKey(sourceKey));
+  }
+
+  async copy(sourceKey: string, destinationKey: string): Promise<void> {
+    // Same reasoning as `move`: the source object's encryption is whatever it
+    // was written with, and a duplicate of it should not silently change.
+    await this.copyObject(sourceKey, destinationKey, {});
+  }
+
+  private async copyObject(
+    sourceKey: string,
+    destinationKey: string,
+    options: { serverSideEncryption?: "AES256" },
+  ): Promise<void> {
     const source = validateKey(sourceKey);
     const destination = validateKey(destinationKey);
     await this.client.send(
@@ -201,9 +244,11 @@ class S3PrivateObjectStorage implements PrivateObjectStorage {
         Bucket: this.bucket,
         CopySource: `${this.bucket}/${source}`,
         Key: destination,
+        ...(options.serverSideEncryption
+          ? { ServerSideEncryption: options.serverSideEncryption }
+          : {}),
       }),
     );
-    await this.delete(source);
   }
 
   async delete(key: string): Promise<void> {
@@ -234,6 +279,10 @@ class SynchronousEphemeralObjectStorage implements PrivateObjectStorage {
   }
 
   async move(): Promise<void> {
+    throw new Error("Synchronous import originals are not retained.");
+  }
+
+  async copy(): Promise<void> {
     throw new Error("Synchronous import originals are not retained.");
   }
 

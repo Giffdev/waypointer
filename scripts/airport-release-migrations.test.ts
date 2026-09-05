@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AIRPORT_RELEASE_BOUNDARY_FLOOR_TAG,
   AIRPORT_RELEASE_SCOPE,
+  airportMigrationBoundaryName,
+  airportMigrationBoundaryTags,
   applyPendingAirportMigrations,
   loadAirportReleaseMigrationManifest,
   type UnsafeSqlClient,
@@ -33,6 +36,7 @@ describe("airport release migration ledger targeting", () => {
       "0015_airport_source_provenance",
       "0016_serialize_owner_flight_sharing",
       "0017_public_share_handles",
+      "0018_import_identity_and_route_waypoints",
     ]);
     expect(manifest.releaseScope).toEqual(AIRPORT_RELEASE_SCOPE);
     expect(() =>
@@ -74,6 +78,79 @@ describe("airport release migration ledger targeting", () => {
         "production",
       ),
     ).toBe("0017");
+    expect(
+      validateAirportMigrationLedger(
+        rowsThrough("0018_import_identity_and_route_waypoints"),
+        manifest,
+        "production",
+      ),
+    ).toBe("0018");
+  });
+
+  it("always admits the newest migration as a before-boundary", async () => {
+    // This is the invariant that keeps going stale: a migration lands, the
+    // boundary list is not extended, and the first production database to
+    // apply it is reported as a ledger mismatch — so the release tooling
+    // refuses to run against current production and nobody finds out until
+    // the deploy. The boundary set is derived from the manifest for that
+    // reason, and this asserts the derivation rather than a hardcoded tag.
+    const manifest = await loadAirportReleaseMigrationManifest();
+    const newest = manifest.entries.at(-1)!;
+    const boundaryTags = airportMigrationBoundaryTags(manifest);
+
+    expect(boundaryTags.at(-1)).toBe(newest.tag);
+    expect(boundaryTags.at(0)).toBe(AIRPORT_RELEASE_BOUNDARY_FLOOR_TAG);
+    expect(manifest.permittedBefore.map(({ tag }) => tag)).toEqual(
+      boundaryTags,
+    );
+
+    // Every boundary from the floor to the newest is a contiguous, correctly
+    // counted prefix of the ledger — no gaps, no stale counts.
+    for (const [index, entry] of manifest.entries.entries()) {
+      const boundary = manifest.permittedBefore.find(
+        ({ tag }) => tag === entry.tag,
+      );
+      if (!boundaryTags.includes(entry.tag)) {
+        expect(boundary).toBeUndefined();
+        continue;
+      }
+      expect(boundary?.appliedCount).toBe(index + 1);
+      expect(airportMigrationBoundaryName(entry.tag)).toBe(
+        entry.tag.slice(0, 4),
+      );
+    }
+
+    // And the inventory check enforces it: dropping the newest boundary must
+    // fail, so this cannot silently rot again.
+    expect(() =>
+      validateAirportMigrationInventory(
+        {
+          ...manifest,
+          permittedBefore: manifest.permittedBefore.filter(
+            ({ tag }) => tag !== newest.tag,
+          ),
+        },
+        {
+          version: "7",
+          dialect: "postgresql",
+          entries: manifest.entries.map((migration) => ({
+            idx: migration.order,
+            version: "7",
+            when: migration.createdAt,
+            tag: migration.tag,
+            breakpoints: true,
+          })),
+        },
+        manifest.entries.map(({ tag }) => `${tag}.sql`),
+        Object.fromEntries(
+          manifest.entries.map(({ tag, sha256 }) => [tag, sha256]),
+        ),
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        diagnosticCode: "migration-ledger-mismatch",
+      }),
+    );
   });
 
   it("recognizes reviewed later boundaries without applying them through the airport release", async () => {

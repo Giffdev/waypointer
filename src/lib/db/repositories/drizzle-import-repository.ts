@@ -18,6 +18,12 @@ import type {
   ExistingFingerprintCandidate,
 } from "@/lib/import/dedupe";
 import { createAcceptedDuplicateFingerprint } from "@/lib/import/fingerprint";
+import { assertCommittableRoute } from "@/lib/import/invariants";
+import {
+  hasUnresolvedRouteToken,
+  summarizePendingImportAttention,
+} from "@/lib/import/attention";import { ImportInvariantError } from "@/lib/import/errors";
+import { IMPORTER_PIPELINE_VERSION } from "@/lib/import/version";
 import {
   NON_REUSABLE_IMPORT_BATCH_STATUSES,
   SUPERSEDABLE_IMPORT_BATCH_STATUSES,
@@ -28,6 +34,7 @@ import {
 } from "@/lib/import/airport-resolution";
 import {
   IMPORT_CONTRACT_VERSION,
+  type AirportIdentifierType,
   type AirportSearchResult,
   type ImportAirportMatch,
   type ImportBatchCounts,
@@ -36,6 +43,8 @@ import {
   type ImportDecisionAction,
   type ImportDuplicateResolution,
   type ImportRowsPage,
+  type ImportRouteNode,
+  type PendingImportAttention,
   type ProposedImportFlight,
   type StoredImportRow,
   type VersionedFingerprint,
@@ -80,12 +89,18 @@ export class DrizzleImportRepository
     userId: string,
     input: CreateManualFlightInput,
   ): Promise<CreateManualFlightResult> {
-    const airportIds = resolvedAirportIds(input.proposal);
-    const originAirportId = airportIds[0];
-    const destinationAirportId = airportIds.at(-1);
+    const stops = committableRouteStops(input.proposal);
+    const landingIds = stops
+      .filter((stop) => stop.kind === "landing")
+      .map((stop) => stop.airportId);
+    const originAirportId = landingIds[0];
+    const destinationAirportId = landingIds.at(-1);
     const date = input.proposal.date;
     if (!date || !originAirportId || !destinationAirportId) {
-      throw new Error("A manual flight requires a date and resolved airports");
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "A manual flight requires a date and resolved airports",
+      );
     }
     return this.runWithUserDb(userId, async (tx) => {
       const [created] = await tx
@@ -93,6 +108,11 @@ export class DrizzleImportRepository
         .values({
           userId,
           fingerprint: input.fingerprint.value,
+          // The version belongs with the digest. Leaving it on the column
+          // default made every manually added flight claim a v1 algorithm
+          // produced a v3 digest, which is the same untruth the accepted-
+          // duplicate path had.
+          fingerprintVersion: input.fingerprint.version,
           date,
           originAirportId,
           destinationAirportId,
@@ -113,7 +133,7 @@ export class DrizzleImportRepository
         .onConflictDoNothing()
         .returning({ id: flightTable.id });
       if (created) {
-        await insertFlightStops(tx, userId, created.id, airportIds);
+        await insertFlightStops(tx, userId, created.id, stops);
         return { flightId: created.id, created: true };
       }
       const [existing] = await tx
@@ -181,11 +201,18 @@ export class DrizzleImportRepository
         if (!origin || !destination) {
           throw new Error("A committed flight references a missing airport");
         }
-        const airportSequence = (
-          stopsByFlight.get(flight.id)?.map((stop) =>
-            airportById.get(stop.airportId),
-          ) ?? [origin, destination]
+        const stops = stopsByFlight.get(flight.id);
+        // Statistics read `airportSequence`, so it stays landings-only. A
+        // waypoint is a place the flight passed over, not a place the pilot
+        // visited, and counting it would silently inflate every airport,
+        // route, and landing total on the user's map.
+        const landingStops = stops?.filter(
+          (stop) => stop.stopKind === "landing",
         );
+        const airportSequence =
+          landingStops && landingStops.length >= 2
+            ? landingStops.map((stop) => airportById.get(stop.airportId))
+            : [origin, destination];
         if (
           airportSequence.length < 2 ||
           airportSequence.some((airport) => !airport)
@@ -193,12 +220,32 @@ export class DrizzleImportRepository
           throw new Error("A committed flight route references a missing airport");
         }
         const resolvedSequence = airportSequence as Airport[];
+        // Presentation only: the ordered path including waypoints, for the map
+        // and share views. Nothing that counts anything may read it.
+        const routePath =
+          stops && stops.length >= 2
+            ? stops.flatMap((stop) => {
+                const airport = airportById.get(stop.airportId);
+                return airport
+                  ? [
+                      {
+                        airport,
+                        kind: stop.stopKind as "landing" | "waypoint",
+                      },
+                    ]
+                  : [];
+              })
+            : undefined;
         return {
           id: flight.id,
           date: flight.date,
           origin,
           destination,
           airportSequence: resolvedSequence,
+          ...(routePath && routePath.some((node) => node.kind === "waypoint")
+            ? { routePath }
+            : {}),
+          ...(flight.routeRaw ? { routeRaw: flight.routeRaw } : {}),
           kind: flight.kind as Flight["kind"],
           role: flight.role as Flight["role"],
           aircraft:
@@ -229,6 +276,7 @@ export class DrizzleImportRepository
         .select({
           ...getTableColumns(airports),
           aliasPriority: airportAliases.priority,
+          aliasCodeType: airportAliases.codeType,
         })
         .from(airportAliases)
         .innerJoin(airports, eq(airportAliases.airportId, airports.id))
@@ -251,11 +299,29 @@ export class DrizzleImportRepository
         };
       }
       const [match] = matches;
+      // The namespace guard asks "is there ANY airport-namespace alias under
+      // which this code names this airport?", so it needs every alias row for
+      // the winning airport, not only the priority winner. `BFI` is Boeing
+      // Field's IATA code *and* its FAA-LID; the IATA row wins on priority,
+      // and a guard reading only that row rejects a real airport.
+      const matchedCodeTypes = [
+        ...new Set(
+          aliasMatches
+            .filter((alias) => alias.id === match.id)
+            .map((alias) => alias.aliasCodeType)
+            .filter(isAirportIdentifierType),
+        ),
+      ];
       return {
         status: "resolved",
         identifier: normalized,
         airportId: match.id,
         airport: toAirport(match),
+        // Always present, even when empty. An omitted set used to read as
+        // "no opinion" and the classifier assumed airport, so a resolver bug
+        // disabled the navaid/IATA guard for every token at once. An empty
+        // array is the honest answer and the classifier refuses it.
+        matchedCodeTypes,
       };
     });
   }
@@ -276,6 +342,12 @@ export class DrizzleImportRepository
             identifier: airportCode(match),
             airportId: match.id,
             airport: toAirport(match),
+            // Lookup by id, not by code: nothing here resolved an identifier
+            // through an alias, so there is no namespace evidence to report.
+            // Empty is the honest answer, and the route classifier refuses
+            // it — the safe direction for a value that never came from a
+            // route token in the first place.
+            matchedCodeTypes: [],
           }
         : null;
     });
@@ -340,6 +412,10 @@ export class DrizzleImportRepository
           and(
             eq(importBatches.userId, userId),
             eq(importBatches.fileSha256, fingerprint.value),
+            // Version-scoped on purpose. Without this, the same bytes staged
+            // by an older importer would be reused forever and a deployed fix
+            // could never reach the data it fixes.
+            eq(importBatches.importerVersion, IMPORTER_PIPELINE_VERSION),
             notInArray(importBatches.status, [
               ...NON_REUSABLE_IMPORT_BATCH_STATUSES,
             ]),
@@ -471,6 +547,7 @@ export class DrizzleImportRepository
           userId,
           adapterId: "pending-detection",
           adapterVersion: 0,
+          importerVersion: IMPORTER_PIPELINE_VERSION,
           status: "processing",
           originalObjectKey: input.originalObjectKey ?? "",
           originalFileName: input.fileName,
@@ -488,6 +565,7 @@ export class DrizzleImportRepository
           and(
             eq(importBatches.userId, userId),
             eq(importBatches.fileSha256, input.fileFingerprint.value),
+            eq(importBatches.importerVersion, IMPORTER_PIPELINE_VERSION),
             notInArray(importBatches.status, [
               ...NON_REUSABLE_IMPORT_BATCH_STATUSES,
             ]),
@@ -512,6 +590,7 @@ export class DrizzleImportRepository
         .set({
           adapterId: input.adapterId,
           adapterVersion: input.adapterVersion,
+          importerVersion: IMPORTER_PIPELINE_VERSION,
           status: "review",
           totalRows: input.rows.length,
           parsedRows: input.rows.length,
@@ -527,7 +606,10 @@ export class DrizzleImportRepository
           ),
         )
         .returning();
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
 
       if (input.rows.length > 0) {
         await tx.insert(importRows).values(
@@ -536,6 +618,9 @@ export class DrizzleImportRepository
             userId,
             batchId,
             rowNumber: row.rowNumber,
+            ...(row.provenance?.sourceRowKey
+              ? { sourceRowKey: row.provenance.sourceRowKey }
+              : {}),
             rawSnapshot: row.rawSnapshot,
             parsed: persistedRow(row),
             validationState: databaseValidationState(row.validationState),
@@ -572,7 +657,10 @@ export class DrizzleImportRepository
           ),
         )
         .returning();
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       return summarize(tx, userId, batch);
     });
   }
@@ -591,7 +679,10 @@ export class DrizzleImportRepository
           ),
         )
         .returning({ id: importBatches.id });
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
     });
   }
 
@@ -609,6 +700,68 @@ export class DrizzleImportRepository
         .where(eq(importBatches.userId, userId))
         .orderBy(desc(importBatches.createdAt));
       return Promise.all(batches.map((batch) => summarize(tx, userId, batch)));
+    });
+  }
+
+  async getPendingImportAttention(
+    userId: string,
+  ): Promise<PendingImportAttention> {
+    const batches = await this.listBatches(userId);
+    return summarizePendingImportAttention(batches);
+  }
+
+  /**
+   * Ids of the batches still awaiting review, and nothing else.
+   *
+   * Deliberately narrow. The airport catalog release runs reconciliation
+   * against a database pinned to an older migration boundary, so a caller
+   * there must not select columns that boundary does not have.
+   */
+  async listReviewBatchIds(userId: string): Promise<string[]> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const rows = await tx
+        .select({ id: importBatches.id })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            eq(importBatches.status, "review"),
+          ),
+        )
+        .orderBy(desc(importBatches.createdAt));
+      return rows.map(({ id }) => id);
+    });
+  }
+
+  /**
+   * The two batch fields reconciliation needs: whether it is still in review,
+   * and the optimistic-concurrency stamp it must write back against.
+   *
+   * Same reason as `listReviewBatchIds` — the airport release executes this
+   * code against a database that is deliberately behind HEAD, so reading the
+   * whole row would make every future column break the release.
+   */
+  async getReviewBatchState(
+    userId: string,
+    batchId: string,
+  ): Promise<{ status: string; updatedAt: string } | null> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const [batch] = await tx
+        .select({
+          status: importBatches.status,
+          updatedAt: importBatches.updatedAt,
+        })
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.id, batchId),
+            eq(importBatches.userId, userId),
+          ),
+        )
+        .limit(1);
+      return batch
+        ? { status: batch.status, updatedAt: batch.updatedAt.toISOString() }
+        : null;
     });
   }
 
@@ -690,7 +843,16 @@ export class DrizzleImportRepository
         .limit(1);
       if (!batch) return null;
       const rows = await tx
-        .select()
+        .select({
+          id: importRows.id,
+          batchId: importRows.batchId,
+          rowNumber: importRows.rowNumber,
+          rawSnapshot: importRows.rawSnapshot,
+          parsed: importRows.parsed,
+          proposedFlight: importRows.proposedFlight,
+          userDecision: importRows.userDecision,
+          decidedAt: importRows.decidedAt,
+        })
         .from(importRows)
         .where(
           and(eq(importRows.userId, userId), eq(importRows.batchId, batchId)),
@@ -718,9 +880,15 @@ export class DrizzleImportRepository
         )
         .limit(1)
         .for("update");
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       if (batch.status !== "review") {
-        throw new Error("Import batch is not in review");
+        throw new ImportInvariantError(
+          "batch-not-committable",
+          "Import batch is not in review",
+        );
       }
       if (
         expectedBatchUpdatedAt &&
@@ -749,7 +917,7 @@ export class DrizzleImportRepository
             ),
           )
           .returning({ id: importRows.id });
-        if (!updated) throw new Error("Import row not found");
+        if (!updated) throw new ImportInvariantError("row-not-found", "Import row not found");
       }
       await tx
         .delete(duplicateCandidates)
@@ -770,7 +938,10 @@ export class DrizzleImportRepository
           ),
         )
         .returning();
-      if (!updatedBatch) throw new Error("Import batch not found");
+      if (!updatedBatch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       return summarize(tx, userId, updatedBatch);
     });
   }
@@ -795,9 +966,15 @@ export class DrizzleImportRepository
           ),
         )
         .limit(1);
-      if (!batchForDecision) throw new Error("Import batch not found");
+      if (!batchForDecision) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       if (batchForDecision.status !== "review") {
-        throw new Error("Import batch is not in review");
+        throw new ImportInvariantError(
+          "batch-not-committable",
+          "Import batch is not in review",
+        );
       }
 
       const now = new Date();
@@ -813,21 +990,27 @@ export class DrizzleImportRepository
             ),
           )
           .limit(1);
-        if (!stored) throw new Error("Import row not found");
+        if (!stored) throw new ImportInvariantError("row-not-found", "Import row not found");
         const restored = restoreRow(stored);
         if (restored.duplicateCandidate) {
           if (
             decision.action === "accepted" &&
             !decision.duplicateResolution
           ) {
-            throw new Error("Duplicate resolution is required");
+            throw new ImportInvariantError(
+              "duplicate-resolution-required",
+              "Duplicate resolution is required",
+            );
           }
           if (decision.duplicateResolution) {
             restored.duplicateCandidate.resolution =
               decision.duplicateResolution;
           }
         } else if (decision.duplicateResolution) {
-          throw new Error("A non-duplicate row cannot have a duplicate resolution");
+          throw new ImportInvariantError(
+            "duplicate-resolution-required",
+            "A non-duplicate row cannot have a duplicate resolution",
+          );
         }
         restored.decision = decision.action;
         restored.decidedAt = now.toISOString();
@@ -847,7 +1030,7 @@ export class DrizzleImportRepository
             ),
           )
           .returning({ id: importRows.id });
-        if (!updated) throw new Error("Import row not found");
+        if (!updated) throw new ImportInvariantError("row-not-found", "Import row not found");
         if (restored.duplicateCandidate && decision.duplicateResolution) {
           await tx
             .update(duplicateCandidates)
@@ -875,7 +1058,10 @@ export class DrizzleImportRepository
           ),
         )
         .returning();
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       return summarize(tx, userId, batch);
     });
   }
@@ -948,7 +1134,10 @@ export class DrizzleImportRepository
         const stops = stopsByFlight.get(match.id);
         const fingerprint = {
           algorithm: "sha256" as const,
-          version: 1,
+          // Reported truthfully so the adoption chain can tell a current
+          // digest from a superseded one; hardcoding 1 made every flight look
+          // legacy and made version-aware adoption impossible.
+          version: match.fingerprintVersion,
           value: match.fingerprint,
         };
         // An existing flight whose airport catalog metadata cannot be
@@ -967,11 +1156,18 @@ export class DrizzleImportRepository
             flightId: match.id,
             unresolvedAirportIds: unresolvable,
           });
-          return { flightId: match.id, fingerprint };
+          return {
+            flightId: match.id,
+            fingerprint,
+            ...(match.sourceRowKey
+              ? { sourceRowKey: match.sourceRowKey }
+              : {}),
+          };
         }
         return {
           flightId: match.id,
           fingerprint,
+          ...(match.sourceRowKey ? { sourceRowKey: match.sourceRowKey } : {}),
           flight: databaseFlightProposal(match, airportById, stops),
         };
       });
@@ -994,7 +1190,10 @@ export class DrizzleImportRepository
         )
         .limit(1)
         .for("update");
-      if (!batch) throw new Error("Import batch not found");
+      if (!batch) throw new ImportInvariantError(
+        "batch-not-found",
+        "Import batch not found",
+      );
       if (batch.status === "committed") {
         return {
           batchId: batch.id,
@@ -1005,7 +1204,10 @@ export class DrizzleImportRepository
         };
       }
       if (batch.status !== "review") {
-        throw new Error("Import batch is not in review");
+        throw new ImportInvariantError(
+          "batch-not-committable",
+          "Import batch is not in review",
+        );
       }
 
       const databaseRows = await tx
@@ -1026,9 +1228,12 @@ export class DrizzleImportRepository
       const resolvedFlightByRow = new Map<string, string>();
       for (const row of accepted) {
         const rowFingerprint = row.rowFingerprint;
-        const airportIds = resolvedAirportIds(row.proposedFlight);
-        const originAirportId = airportIds[0];
-        const destinationAirportId = airportIds.at(-1);
+        const stops = committableRouteStops(row.proposedFlight);
+        const landingIds = stops
+          .filter((stop) => stop.kind === "landing")
+          .map((stop) => stop.airportId);
+        const originAirportId = landingIds[0];
+        const destinationAirportId = landingIds.at(-1);
         if (
           !row.commitReady ||
           !rowFingerprint ||
@@ -1036,10 +1241,16 @@ export class DrizzleImportRepository
           !originAirportId ||
           !destinationAirportId
         ) {
-          throw new Error("An accepted row is not commit-ready");
+          throw new ImportInvariantError(
+            "row-not-commit-ready",
+            "An accepted row is not commit-ready",
+          );
         }
         if (row.duplicateCandidate?.resolution === "pending") {
-          throw new Error("Duplicate resolution is required");
+          throw new ImportInvariantError(
+            "duplicate-resolution-required",
+            "Duplicate resolution is required",
+          );
         }
 
         let flightId: string;
@@ -1057,7 +1268,10 @@ export class DrizzleImportRepository
               )
               .limit(1);
             if (!target) {
-              throw new Error("The selected duplicate target is unavailable");
+              throw new ImportInvariantError(
+                "duplicate-target-unavailable",
+                "The selected duplicate target is unavailable",
+              );
             }
             flightId = target.id;
           } else {
@@ -1065,21 +1279,35 @@ export class DrizzleImportRepository
               row.duplicateCandidate.candidateId,
             );
             if (!target) {
-              throw new Error(
+              throw new ImportInvariantError(
+                "duplicate-order-violation",
                 "The selected staged duplicate must be committed first",
               );
             }
             flightId = target;
           }
         } else {
-          const fingerprint =
-            row.duplicateCandidate?.resolution === "accept_new"
-              ? createAcceptedDuplicateFingerprint(
-                  userId,
-                  row.id,
-                  rowFingerprint,
-                ).value
-              : rowFingerprint.value;
+          // A deliberately-accepted duplicate is a *second* flight for one
+          // source row, so it cannot also claim that row's stable identity:
+          // `flights_user_source_row_key_unique` would reject the insert,
+          // `onConflictDoNothing` would swallow it, the fingerprint re-lookup
+          // would miss, and the commit would fail with an opaque error. The
+          // accepted-duplicate fingerprint is the identity that distinguishes
+          // it; the source row key stays with the original flight.
+          const acceptedNew =
+            row.duplicateCandidate?.resolution === "accept_new";
+          // The digest and the version travel together. Stamping the row
+          // fingerprint's version beside an accepted-duplicate digest made
+          // `fingerprint_version` state which algorithm produced a value it
+          // did not produce, and left the adoption chain unable to tell a
+          // superseded row digest from a deliberate second copy.
+          const committedFingerprint = acceptedNew
+            ? createAcceptedDuplicateFingerprint(userId, row.id, rowFingerprint)
+            : rowFingerprint;
+          const fingerprint = committedFingerprint.value;
+          const sourceRowKey = acceptedNew
+            ? undefined
+            : row.provenance?.sourceRowKey;
           let [storedFlight] = await tx
             .select({ id: flightTable.id })
             .from(flightTable)
@@ -1096,6 +1324,11 @@ export class DrizzleImportRepository
               .values({
                 userId,
                 fingerprint,
+                fingerprintVersion: committedFingerprint.version,
+                ...(sourceRowKey ? { sourceRowKey } : {}),
+                ...(row.proposedFlight.routeRaw
+                  ? { routeRaw: row.proposedFlight.routeRaw }
+                  : {}),
                 date: row.proposedFlight.date,
                 originAirportId,
                 destinationAirportId,
@@ -1129,7 +1362,7 @@ export class DrizzleImportRepository
                 tx,
                 userId,
                 storedFlight.id,
-                airportIds,
+                stops,
               );
             } else {
               [storedFlight] = await tx
@@ -1373,6 +1606,17 @@ async function summarize(
     ).length,
     committedFlights: new Set(sources.map((source) => source.flightId)).size,
     attachedSources: sources.length,
+    routeWaypointRows: restored.filter((row) =>
+      (row.proposedFlight.routeNodes ?? []).some(
+        (node) => node.kind === "waypoint",
+      ),
+    ).length,
+    unresolvedRouteTokenRows: restored.filter((row) =>
+      hasUnresolvedRouteToken(row.issues),
+    ).length,
+    adoptedFlightRows: restored.filter(
+      (row) => row.duplicateCandidate?.scope === "existing-flight",
+    ).length,
   };
   return {
     contractVersion: IMPORT_CONTRACT_VERSION,
@@ -1385,6 +1629,19 @@ async function summarize(
     source: adapterSource(batch.adapterId),
     status: batch.status as ImportBatchStatus,
     duplicateOfBatchId: batch.duplicateOfBatchId ?? undefined,
+    importerVersion: batch.importerVersion,
+    reprocessedFromBatchId: batch.reprocessedFromBatchId ?? undefined,
+    // A stale batch can only be re-run while its uploaded object still
+    // exists. Once retention has removed it, the honest answer is "re-upload
+    // the file", not a reprocess button that fails.
+    reprocessAvailable:
+      batch.importerVersion !== IMPORTER_PIPELINE_VERSION &&
+      Boolean(batch.originalObjectKey) &&
+      !batch.originalDeletedAt,
+    ...(batch.importerVersion !== IMPORTER_PIPELINE_VERSION &&
+    (!batch.originalObjectKey || batch.originalDeletedAt)
+      ? { reprocessUnavailableReason: "source-file-unavailable" as const }
+      : {}),
     counts,
     error:
       batch.failureCode || batch.failureMessage
@@ -1404,7 +1661,19 @@ function persistedRow(row: StoredImportRow): Omit<StoredImportRow, "rawSnapshot"
   return persisted as Omit<StoredImportRow, "rawSnapshot">;
 }
 
-function restoreRow(row: ImportRow): StoredImportRow {
+function restoreRow(
+  row: Pick<
+    ImportRow,
+    | "id"
+    | "batchId"
+    | "rowNumber"
+    | "rawSnapshot"
+    | "parsed"
+    | "proposedFlight"
+    | "userDecision"
+    | "decidedAt"
+  >,
+): StoredImportRow {
   const parsed = row.parsed as Omit<StoredImportRow, "rawSnapshot">;
   return {
     ...parsed,
@@ -1471,19 +1740,38 @@ function toAirport(row: AirportRow): Airport {
   };
 }
 
+/**
+ * Landing stops only.
+ *
+ * This is the single choke point that keeps route waypoints out of identity,
+ * dedupe, and every statistic: a flight that gains ten waypoints still has the
+ * same landing sequence, so it is still the same flight and still counts the
+ * same airports. Callers that want the drawable path read `flight_stops`
+ * directly (see `listFlights`), which is presentation-only.
+ */
 function routeAirportIds(
   row: FlightRow,
   stopRows?: Array<typeof flightStops.$inferSelect>,
 ): string[] {
-  return stopRows && stopRows.length >= 2
-    ? stopRows.map(({ airportId }) => airportId)
+  const landings = stopRows?.filter((stop) => stop.stopKind === "landing");
+  return landings && landings.length >= 2
+    ? landings.map(({ airportId }) => airportId)
     : [row.originAirportId, row.destinationAirportId];
 }
 
-// Duplicate assessment is read-only enrichment: a candidate whose catalog
-// metadata is missing or unusable is reported instead of thrown so one bad
-// stored flight cannot fail an entire import. Returns the airport ids that
-// databaseFlightProposal would not be able to render.
+
+/**
+ * Landing airports only.
+ *
+ * Duplicate assessment is read-only enrichment: a candidate whose catalog
+ * metadata is missing or unusable is reported instead of thrown so one bad
+ * stored flight cannot fail an entire import. Returns the airport ids that
+ * `databaseFlightProposal` would not be able to render — and it renders
+ * landings only. Including waypoints here meant one overflown airport with
+ * unusable catalog metadata suppressed the candidate's proposal, which drops
+ * every route/temporal signal and silently downgrades a real duplicate to
+ * "probably new" — the opposite of what a rendering problem should cost.
+ */
 function unresolvableRouteAirportIds(
   row: FlightRow,
   airportById: Map<string, AirportRow>,
@@ -1514,6 +1802,10 @@ function databaseFlightProposal(
   if (!origin || !destination) {
     throw new Error("A duplicate candidate references a missing airport");
   }
+  // Reconstructed from committed rows, not resolved from a route token, so
+  // there is no alias namespace to report. These matches are landings and are
+  // never re-classified; an empty set keeps the route guard failing closed if
+  // one ever were.
   const airportMatches = routeAirportIds(row, stopRows).map((airportId) => {
     const airport = airportById.get(airportId);
     if (!airport) {
@@ -1524,6 +1816,7 @@ function databaseFlightProposal(
       identifier: airportCode(airport),
       airportId: airport.id,
       airport: toAirport(airport),
+      matchedCodeTypes: [],
     };
   });
   return {
@@ -1536,12 +1829,14 @@ function databaseFlightProposal(
       identifier: airportCode(origin),
       airportId: origin.id,
       airport: toAirport(origin),
+      matchedCodeTypes: [],
     },
     destination: {
       status: "resolved",
       identifier: airportCode(destination),
       airportId: destination.id,
       airport: toAirport(destination),
+      matchedCodeTypes: [],
     },
     airportIdentifiers: airportMatches.map(({ identifier }) => identifier),
     airportMatches,
@@ -1591,35 +1886,80 @@ function routeDistanceMiles(sequence: Airport[]): number {
     );
 }
 
-function resolvedAirportIds(proposal: ProposedImportFlight): string[] {
-  const matches =
-    proposal.airportMatches && proposal.airportMatches.length >= 2
-      ? proposal.airportMatches
-      : proposal.origin && proposal.destination
-        ? [proposal.origin, proposal.destination]
-        : [];
-  return matches.flatMap((match) =>
-    match.status === "resolved" ? [match.airportId] : [],
+function isAirportIdentifierType(
+  value: string | null | undefined,
+): value is AirportIdentifierType {
+  return (
+    value === "icao" ||
+    value === "iata" ||
+    value === "faa-lid" ||
+    value === "gps" ||
+    value === "ident" ||
+    value === "local"
   );
+}
+
+/**
+ * Commit-time route resolution.
+ *
+ * The predecessor silently `flatMap`ped unresolved matches away, so a flight
+ * whose middle stop failed to resolve committed with a shorter route than the
+ * user reviewed — a data-loss path with no error and no notice. This asserts
+ * instead: an uncommittable route raises a typed invariant the API turns into
+ * a 409/422 the user can act on.
+ */
+function committableRouteStops(
+  proposal: ProposedImportFlight,
+): Array<{ airportId: string; kind: "landing" | "waypoint"; sourceField: "endpoint" | "route" | "manual" }> {
+  const { pathNodes } = assertCommittableRoute(proposal);
+  return pathNodes.flatMap((node) =>
+    node.match.status === "resolved"
+      ? [
+          {
+            airportId: node.match.airportId,
+            kind: node.kind,
+            sourceField: persistedSourceField(node.sourceField),
+          },
+        ]
+      : [],
+  );
+}
+
+/** Source column names collapse to the three the database stores. */
+function persistedSourceField(
+  sourceField: ImportRouteNode["sourceField"],
+): "endpoint" | "route" | "manual" {
+  if (sourceField === "manual") return "manual";
+  if (sourceField === "Route") return "route";
+  return "endpoint";
 }
 
 async function insertFlightStops(
   tx: DatabaseTransaction,
   userId: string,
   flightId: string,
-  airportIds: string[],
+  stops: Array<{
+    airportId: string;
+    kind: "landing" | "waypoint";
+    sourceField: "endpoint" | "route" | "manual";
+  }>,
 ): Promise<void> {
-  if (airportIds.length < 2) {
-    throw new Error("A committed flight requires at least two route stops");
+  if (stops.filter((stop) => stop.kind === "landing").length < 2) {
+    throw new ImportInvariantError(
+      "route-stop-invalid",
+      "A committed flight requires at least two landing stops",
+    );
   }
   await tx
     .insert(flightStops)
     .values(
-      airportIds.map((airportId, stopOrder) => ({
+      stops.map((stop, stopOrder) => ({
         userId,
         flightId,
         stopOrder,
-        airportId,
+        airportId: stop.airportId,
+        stopKind: stop.kind,
+        sourceField: stop.sourceField,
       })),
     )
     .onConflictDoNothing();

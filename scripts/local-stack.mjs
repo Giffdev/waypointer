@@ -212,6 +212,8 @@ function runPostgresTests() {
     "--maxWorkers=1",
     "src/lib/db/launch-schema.postgres.test.ts",
     "src/lib/import/drizzle-import-repository.postgres.test.ts",
+    "src/lib/import/import-identity.postgres.test.ts",
+    "src/lib/import/import-reprocess.postgres.test.ts",
     "src/lib/import/airport-repository.postgres.test.ts",
     "src/lib/flights/backfill.postgres.test.ts",
     "src/lib/jobs/repository.postgres.test.ts",

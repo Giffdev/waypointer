@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { asc, count, eq, sql } from "drizzle-orm";
+import { asc, and, count, eq, sql } from "drizzle-orm";
 import { getDb, withUserDb, type DatabaseTransaction } from "@/lib/db";
 import {
   airportAliases,
@@ -512,6 +512,10 @@ async function createSnapshot(
     throw new ShareEmptyMapError();
   }
   const flightIds = selectedFlights.map(({ id }) => id);
+  // Landings only. A shared map is a claim about where someone has been, so a
+  // waypoint the flight merely passed over must never appear as a visited
+  // airport — and the public share contract stays byte-identical to what it
+  // produced before route waypoints existed.
   const selectedStops = await tx
     .select({
       flightId: flightStops.flightId,
@@ -519,7 +523,12 @@ async function createSnapshot(
       stopOrder: flightStops.stopOrder,
     })
     .from(flightStops)
-    .where(eq(flightStops.userId, userId))
+    .where(
+      and(
+        eq(flightStops.userId, userId),
+        eq(flightStops.stopKind, "landing"),
+      ),
+    )
     .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
   const stopsByFlight = new Map<string, typeof selectedStops>();
   for (const stop of selectedStops) {
@@ -553,6 +562,7 @@ async function createSnapshot(
       select ${flightStops.airportId}
       from ${flightStops}
       where ${flightStops.userId} = ${userId}::uuid
+        and ${flightStops.stopKind} = 'landing'
     )
   `);
   const airportById = new Map(airportRows.map((airport) => [airport.id, airport]));

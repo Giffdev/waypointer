@@ -16,6 +16,7 @@ import {
   type Airport,
   type FlightKind,
   type MapRoute,
+  type MapRoutePathFlight,
 } from "@/lib/flight-data";
 import {
   calculateHomeCamera,
@@ -25,6 +26,8 @@ import type { MapFrame } from "@/lib/map-framing";
 import { createMapDataReadiness } from "@/lib/map-data-readiness";
 import {
   createAirportFeatureCollection,
+  createFlightRoutePathFeatureCollection,
+  createRouteWaypointFeatureCollection,
   createRouteFeatureCollection,
 } from "@/lib/map-geojson";
 import {
@@ -32,9 +35,12 @@ import {
   buildAirportLabelLayer,
   buildAirportMarkerLayer,
   buildFlightRouteLayers,
+  buildOverflownPathLayer,
+  buildOverflownWaypointLayers,
   buildRouteDirectionLayers,
   buildRouteLabelLayer,
   buildTerrainReliefLayer,
+  OVERFLOWN_LAYER_IDS,
   ROUTE_LAYER_IDS,
   routeLineOpacity,
   TERRAIN_RELIEF_LAYER_ID,
@@ -54,6 +60,8 @@ const REQUIRED_BASEMAP_ATTRIBUTION =
 const TERRAIN_SOURCE_ID = "flight-map-terrain";
 const ROUTE_SOURCE_ID = "flight-map-routes";
 const AIRPORT_SOURCE_ID = "flight-map-airports";
+const ROUTE_PATH_SOURCE_ID = "flight-map-route-paths";
+const ROUTE_WAYPOINT_SOURCE_ID = "flight-map-route-waypoints";
 const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
 
 /**
@@ -63,6 +71,7 @@ const AIRPORT_CIRCLE_LAYERS = [AIRPORT_LAYER_IDS.markers];
 const APP_LAYER_IDS = new Set<string>([
   ...Object.values(ROUTE_LAYER_IDS),
   ...Object.values(AIRPORT_LAYER_IDS),
+  ...Object.values(OVERFLOWN_LAYER_IDS),
   TERRAIN_RELIEF_LAYER_ID,
 ]);
 
@@ -81,6 +90,12 @@ const FALLBACK_STYLE: StyleSpecification = withGlobeProjection({
 type FlightGlobeProps = {
   airports: Airport[];
   routes: MapRoute[];
+  /**
+   * Flights whose path includes an overflown waypoint, drawn as their own
+   * ordered path. Omitted or empty means "nothing overflown to show", and the
+   * map renders exactly the landing-only aggregate it always did.
+   */
+  routePathFlights?: MapRoutePathFlight[];
   visibleKind: "all" | FlightKind;
   zoom: number;
   zoomCommandToken: number;
@@ -134,6 +149,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     }),
   );
   const selectedRouteIdRef = useRef("");
+  const routePathFlightsRef = useRef(props.routePathFlights ?? []);
   const viewModeRef = useRef(props.viewMode);
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("loading");
   const [mapReady, setMapReady] = useState(false);
@@ -143,6 +159,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
 
   useLayoutEffect(() => {
     viewModeRef.current = props.viewMode;
+    routePathFlightsRef.current = props.routePathFlights ?? [];
     dataReadinessRef.current.setLatest({
       airports: props.airports,
       routes: props.routes,
@@ -152,6 +169,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   }, [
     props.airports,
     props.focusAirportCode,
+    props.routePathFlights,
     props.routes,
     props.visibleKind,
     props.viewMode,
@@ -250,7 +268,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
           if (!ensureDirectionIcons(map)) {
             throw new Error(DIRECTION_ICON_ERROR);
           }
-          addFlightLayers(map, latest.airports, latest.routes);
+          addFlightLayers(
+            map,
+            latest.airports,
+            latest.routes,
+            routePathFlightsRef.current,
+          );
           applyRoutePresentation(
             map,
             latest.visibleKind,
@@ -404,6 +427,18 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       createAirportFeatureCollection(props.airports, props.routes),
     );
   }, [props.airports, props.routes]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !loadedRef.current) return;
+    const flights = props.routePathFlights ?? [];
+    (map.getSource(ROUTE_PATH_SOURCE_ID) as GeoJSONSource | undefined)?.setData(
+      createFlightRoutePathFeatureCollection(flights),
+    );
+    (
+      map.getSource(ROUTE_WAYPOINT_SOURCE_ID) as GeoJSONSource | undefined
+    )?.setData(createRouteWaypointFeatureCollection(flights));
+  }, [props.routePathFlights]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -848,6 +883,15 @@ function shadedReliefIsRendering(map: MapLibreMap): boolean {
  * one reached through flat → 3D end up with identical layer order.
  */
 function terrainReliefBeforeId(map: MapLibreMap): string | undefined {
+  // The lowest flight layer this app owns, so relief always sits beneath the
+  // whole flight stack rather than in the middle of it. The overflown path is
+  // drawn under the flown routes, so it — not the first route layer — is the
+  // floor whenever it exists. Anchoring on the route layer alone put relief
+  // above the overflown paths on a flat/3D pivot but below them on a direct
+  // 3D load, which is the same map rendered two different ways.
+  if (map.getLayer(OVERFLOWN_LAYER_IDS.paths)) {
+    return OVERFLOWN_LAYER_IDS.paths;
+  }
   if (map.getLayer(ROUTE_LAYER_IDS.commercial)) {
     return ROUTE_LAYER_IDS.commercial;
   }
@@ -942,11 +986,24 @@ function ensureDirectionIcons(map: MapLibreMap): boolean {
   });
 }
 
-function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute[]) {
+function addFlightLayers(
+  map: MapLibreMap,
+  airports: Airport[],
+  routes: MapRoute[],
+  routePathFlights: MapRoutePathFlight[] = [],
+) {
   const routeData = createRouteFeatureCollection(routes);
   const airportData = createAirportFeatureCollection(airports, routes);
+  const pathData = createFlightRoutePathFeatureCollection(routePathFlights);
+  const waypointData = createRouteWaypointFeatureCollection(routePathFlights);
   const routeSource = map.getSource(ROUTE_SOURCE_ID) as GeoJSONSource | undefined;
   const airportSource = map.getSource(AIRPORT_SOURCE_ID) as GeoJSONSource | undefined;
+  const pathSource = map.getSource(ROUTE_PATH_SOURCE_ID) as
+    | GeoJSONSource
+    | undefined;
+  const waypointSource = map.getSource(ROUTE_WAYPOINT_SOURCE_ID) as
+    | GeoJSONSource
+    | undefined;
   if (routeSource) routeSource.setData(routeData);
   else {
     map.addSource(ROUTE_SOURCE_ID, {
@@ -962,12 +1019,31 @@ function addFlightLayers(map: MapLibreMap, airports: Airport[], routes: MapRoute
       data: airportData,
     });
   }
+  if (pathSource) pathSource.setData(pathData);
+  else map.addSource(ROUTE_PATH_SOURCE_ID, { type: "geojson", data: pathData });
+  if (waypointSource) waypointSource.setData(waypointData);
+  else {
+    map.addSource(ROUTE_WAYPOINT_SOURCE_ID, {
+      type: "geojson",
+      data: waypointData,
+    });
+  }
   const firstSymbolLayer = firstBasemapSymbolLayerId(map);
+
+  // Under the flown routes on purpose: where a path and a flown route overlap,
+  // the flown route is the one that should read.
+  if (!map.getLayer(OVERFLOWN_LAYER_IDS.paths)) {
+    map.addLayer(buildOverflownPathLayer(ROUTE_PATH_SOURCE_ID), firstSymbolLayer);
+  }
 
   for (const layer of buildFlightRouteLayers(ROUTE_SOURCE_ID)) {
     if (!map.getLayer(layer.id)) map.addLayer(layer, firstSymbolLayer);
   }
   for (const layer of buildRouteDirectionLayers(ROUTE_SOURCE_ID)) {
+    if (!map.getLayer(layer.id)) map.addLayer(layer, firstSymbolLayer);
+  }
+
+  for (const layer of buildOverflownWaypointLayers(ROUTE_WAYPOINT_SOURCE_ID)) {
     if (!map.getLayer(layer.id)) map.addLayer(layer, firstSymbolLayer);
   }
 

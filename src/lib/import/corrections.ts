@@ -5,6 +5,8 @@ import type {
   StoredImportRow,
   UpdateImportRowRequest,
 } from "./types";
+import { landingStopsOf, withDerivedLandingProjection } from "./invariants";
+import { ImportInvariantError } from "./errors";
 
 const EDITABLE_TEXT_FIELDS = [
   "aircraft",
@@ -106,8 +108,14 @@ export function applyProposalCorrection(
   patch: ResolvedProposalPatch,
   correctedAt: string,
 ): StoredImportRow {
-  const proposedFlight = structuredClone(row.proposedFlight);
+  let proposedFlight = structuredClone(row.proposedFlight);
   const corrections = [...(row.corrections ?? [])];
+  // `routeNodes` is the canonical ordered path; `origin`/`destination`/
+  // `airportMatches` are a derived landings-only projection of it. Patching
+  // only the projection leaves the canonical path stale, which is how a
+  // corrected row still committed its original airport and stopped matching
+  // its own fingerprint. Correct the nodes, then re-derive.
+  const usesRouteNodes = Boolean(proposedFlight.routeNodes?.length);
 
   if (patch.origin) {
     recordCorrection(
@@ -117,14 +125,18 @@ export function applyProposalCorrection(
       patch.origin,
       correctedAt,
     );
-    proposedFlight.origin = patch.origin;
-    proposedFlight.originIdentifier = patch.origin.identifier;
-    if (proposedFlight.airportMatches?.length) {
-      proposedFlight.airportMatches[0] = patch.origin;
-      proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
-        ({ identifier }) => identifier,
-      );
-      proposedFlight.airportIdentifiers[0] = patch.origin.identifier;
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, 0, patch.origin);
+    } else {
+      proposedFlight.origin = patch.origin;
+      proposedFlight.originIdentifier = patch.origin.identifier;
+      if (proposedFlight.airportMatches?.length) {
+        proposedFlight.airportMatches[0] = patch.origin;
+        proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
+          ({ identifier }) => identifier,
+        );
+        proposedFlight.airportIdentifiers[0] = patch.origin.identifier;
+      }
     }
   }
   if (patch.destination) {
@@ -135,18 +147,41 @@ export function applyProposalCorrection(
       patch.destination,
       correctedAt,
     );
-    proposedFlight.destination = patch.destination;
-    proposedFlight.destinationIdentifier = patch.destination.identifier;
-    if (proposedFlight.airportMatches?.length) {
-      const last = proposedFlight.airportMatches.length - 1;
-      proposedFlight.airportMatches[last] = patch.destination;
-      proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
-        ({ identifier }) => identifier,
-      );
-      proposedFlight.airportIdentifiers[last] = patch.destination.identifier;
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, -1, patch.destination);
+    } else {
+      proposedFlight.destination = patch.destination;
+      proposedFlight.destinationIdentifier = patch.destination.identifier;
+      if (proposedFlight.airportMatches?.length) {
+        const last = proposedFlight.airportMatches.length - 1;
+        proposedFlight.airportMatches[last] = patch.destination;
+        proposedFlight.airportIdentifiers ??= proposedFlight.airportMatches.map(
+          ({ identifier }) => identifier,
+        );
+        proposedFlight.airportIdentifiers[last] = patch.destination.identifier;
+      }
     }
   }
   if (patch.resolvedRouteStop) {
+    const { index, airport } = patch.resolvedRouteStop;
+    // Bounded above *and* below, before anything is applied. The lower bound
+    // is not redundant with request validation: a negative index reaching
+    // `correctLandingNode` counts from the end, so `-1` would silently
+    // rewrite the destination instead of failing. The upper bound is measured
+    // against the landing sequence the caller is actually editing — the
+    // canonical nodes when they exist, the legacy projection otherwise —
+    // because a row carrying waypoints has more nodes than landings.
+    const landingCount = usesRouteNodes
+      ? landingStopsOf(proposedFlight).length
+      : (proposedFlight.airportMatches?.length ??
+        (proposedFlight.origin && proposedFlight.destination ? 2 : 0));
+    if (!Number.isSafeInteger(index) || index < 0 || index >= landingCount) {
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "Route stop index is out of range",
+        { index, landingCount },
+      );
+    }
     const matches =
       proposedFlight.airportMatches ??
       (proposedFlight.origin && proposedFlight.destination
@@ -155,9 +190,12 @@ export function applyProposalCorrection(
     const identifiers =
       proposedFlight.airportIdentifiers ??
       matches.map(({ identifier }) => identifier);
-    const { index, airport } = patch.resolvedRouteStop;
-    if (index >= matches.length || matches.length < 2) {
-      throw new Error("Route stop index is out of range");
+    if (landingCount < 2) {
+      throw new ImportInvariantError(
+        "route-stop-invalid",
+        "Route stop index is out of range",
+        { index, landingCount },
+      );
     }
     recordCorrection(
       corrections,
@@ -166,14 +204,21 @@ export function applyProposalCorrection(
       airport,
       correctedAt,
     );
-    matches[index] = airport;
-    identifiers[index] = airport.identifier;
-    proposedFlight.airportMatches = matches;
-    proposedFlight.airportIdentifiers = identifiers;
-    proposedFlight.origin = matches[0];
-    proposedFlight.destination = matches.at(-1);
-    proposedFlight.originIdentifier = identifiers[0];
-    proposedFlight.destinationIdentifier = identifiers.at(-1);
+    if (usesRouteNodes) {
+      correctLandingNode(proposedFlight, index, airport);
+    } else {
+      matches[index] = airport;
+      identifiers[index] = airport.identifier;
+      proposedFlight.airportMatches = matches;
+      proposedFlight.airportIdentifiers = identifiers;
+      proposedFlight.origin = matches[0];
+      proposedFlight.destination = matches.at(-1);
+      proposedFlight.originIdentifier = identifiers[0];
+      proposedFlight.destinationIdentifier = identifiers.at(-1);
+    }
+  }
+  if (usesRouteNodes) {
+    proposedFlight = withDerivedLandingProjection(proposedFlight);
   }
   for (const [field, value] of Object.entries(patch)) {
     if (
@@ -211,6 +256,42 @@ export function applyProposalCorrection(
     decidedAt: undefined,
     duplicateCandidate: undefined,
   };
+}
+
+/**
+ * Replaces the resolved airport on the nth landing node (negative index counts
+ * from the end). Waypoints are skipped, so a landing index from the review UI
+ * always addresses the landing the user is looking at even when the row also
+ * carries overflown route waypoints.
+ */
+function correctLandingNode(
+  flight: ProposedImportFlight,
+  landingIndex: number,
+  airport: ImportAirportMatch,
+): void {
+  const nodes = flight.routeNodes;
+  if (!nodes?.length) return;
+  const landingPositions = nodes.flatMap((node, position) =>
+    node.kind === "landing" ? [position] : [],
+  );
+  const position =
+    landingIndex < 0
+      ? landingPositions.at(landingIndex)
+      : landingPositions[landingIndex];
+  if (position === undefined) {
+    throw new ImportInvariantError(
+      "route-stop-invalid",
+      "Route stop index is out of range",
+      { landingIndex },
+    );
+  }
+  const target = nodes[position];
+  if (target.kind !== "landing") return;
+  flight.routeNodes = nodes.with(position, {
+    ...target,
+    identifier: airport.identifier,
+    match: airport,
+  });
 }
 
 function recordCorrection(

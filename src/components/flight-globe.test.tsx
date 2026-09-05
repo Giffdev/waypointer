@@ -12,7 +12,7 @@ import {
 } from "@/lib/flight-data";
 import type { MapFrame } from "@/lib/map-framing";
 import { DIRECTION_ICON_IDS } from "@/lib/map-icons";
-import { ROUTE_LAYER_IDS, TERRAIN_RELIEF_LAYER_ID } from "@/lib/map-style";
+import { ROUTE_LAYER_IDS, OVERFLOWN_LAYER_IDS, TERRAIN_RELIEF_LAYER_ID } from "@/lib/map-style";
 
 type StyleLayerStub = { id: string; type: string };
 type MapConstructorOptions = Record<string, unknown> & {
@@ -33,6 +33,9 @@ const mapMocks = vi.hoisted(() => {
   const createMapMock = (initialLayers: StyleLayerStub[]) => {
     const layers: StyleLayerStub[] = initialLayers.map((layer) => ({ ...layer }));
     const sourceIds = new Set<string>();
+    // Source *data*, not just ids: "a source exists" cannot tell whether the
+    // waypoint the map is supposed to draw actually reached it.
+    const sourceData = new Map<string, unknown>();
     const imageIds = new Set<string>();
     const indexOfLayer = (id: string) =>
       layers.findIndex((layer) => layer.id === id);
@@ -63,9 +66,11 @@ const mapMocks = vi.hoisted(() => {
         }
         layers.splice(before, 0, entry);
       }),
-      addSource: vi.fn((id: string) => {
+      addSource: vi.fn((id: string, source?: { data?: unknown }) => {
         sourceIds.add(id);
+        sourceData.set(id, source?.data);
       }),
+      sourceDataFor: (id: string) => sourceData.get(id),
       cameraForBounds: vi.fn((bounds: [[number, number], [number, number]]) => ({
         center: [
           (bounds[0][0] + bounds[1][0]) / 2,
@@ -81,7 +86,12 @@ const mapMocks = vi.hoisted(() => {
       getContainer: vi.fn(() => ({ clientWidth: 1024, clientHeight: 640 })),
       getLayer: vi.fn((id: string) => layers.find((layer) => layer.id === id)),
       getSource: vi.fn((id: string) =>
-        sourceIds.has(id) ? { id, setData: vi.fn() } : undefined,
+        sourceIds.has(id)
+          ? {
+              id,
+              setData: vi.fn((data: unknown) => sourceData.set(id, data)),
+            }
+          : undefined,
       ),
       getStyle: vi.fn(() => ({ layers: layers.map((layer) => ({ ...layer })) })),
       getZoom: vi.fn(() => 4),
@@ -735,6 +745,90 @@ describe("FlightGlobe reduced motion", () => {
       expect(map.easeTo).toHaveBeenCalledWith({ zoom: 7, duration: 240 }),
     );
     expect(JSON.stringify(map.flyTo.mock.calls)).not.toContain("essential");
+  });
+
+  it("draws an overflown waypoint on its own source and layers, beneath the flown routes", async () => {
+    installMatchMedia(false);
+    const waypoint: Airport = {
+      code: "WWW",
+      name: "Whiskey",
+      city: "Whiskey",
+      country: "US",
+      lat: 20,
+      lon: 30,
+      facility: "general-aviation",
+    };
+
+    render(
+      <FlightGlobe
+        {...defaultProps()}
+        routePathFlights={[
+          {
+            id: "flight-1",
+            date: "2026-05-01",
+            origin,
+            destination: origin,
+            airportSequence: [origin, origin],
+            routePath: [
+              { airport: origin, kind: "landing" },
+              { airport: waypoint, kind: "waypoint" },
+              { airport: origin, kind: "landing" },
+            ],
+          },
+        ]}
+      />,
+    );
+    const map = await readyMap();
+
+    const pathData = map.sourceDataFor("flight-map-route-paths") as {
+      features: Array<{ properties: { pathCodes: string[] } }>;
+    };
+    // The ordered path the pilot flew, waypoint in the middle. This is the
+    // assertion that fails if the map ever falls back to endpoints only.
+    expect(pathData.features[0].properties.pathCodes).toEqual([
+      "AAA",
+      "WWW",
+      "AAA",
+    ]);
+    const waypointData = map.sourceDataFor("flight-map-route-waypoints") as {
+      features: Array<{ properties: { code: string } }>;
+    };
+    expect(waypointData.features.map(({ properties }) => properties.code)).toEqual([
+      "WWW",
+    ]);
+
+    // The airport marker source — the one that means "you have been here" —
+    // never learns about the waypoint.
+    expect(
+      JSON.stringify(map.sourceDataFor("flight-map-airports")),
+    ).not.toContain("WWW");
+
+    const layerIds = orderedLayerIds(map);
+    expect(layerIds).toContain(OVERFLOWN_LAYER_IDS.paths);
+    expect(layerIds).toContain(OVERFLOWN_LAYER_IDS.waypoints);
+    expect(layerIds).toContain(OVERFLOWN_LAYER_IDS.waypointLabels);
+    // Drawn under the flown routes: where the two overlap, a route you flew
+    // should read over a line you merely passed along.
+    expect(layerIds.indexOf(OVERFLOWN_LAYER_IDS.paths)).toBeLessThan(
+      layerIds.indexOf(ROUTE_LAYER_IDS.commercial),
+    );
+  });
+
+  it("adds no overflown geometry when no flight carries a waypoint", async () => {
+    installMatchMedia(false);
+    render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+
+    const pathData = map.sourceDataFor("flight-map-route-paths") as {
+      features: unknown[];
+    };
+    const waypointData = map.sourceDataFor("flight-map-route-waypoints") as {
+      features: unknown[];
+    };
+    expect(pathData.features).toEqual([]);
+    expect(waypointData.features).toEqual([]);
+    // The landing-only map is byte-identical to what it always was.
+    expect(orderedLayerIds(map)).toContain(ROUTE_LAYER_IDS.commercial);
   });
 });
 

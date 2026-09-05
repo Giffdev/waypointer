@@ -102,11 +102,47 @@ export const AIRPORT_RELEASE_SCOPE: AirportReleaseScope = {
 };
 
 export interface AirportMigrationState {
-  boundary: "empty" | "0014" | "0015" | "0016" | "0017";
+  boundary: "empty" | "0014" | "0015" | "0016" | "0017" | "0018";
   appliedCount: number;
   ledgerSha256: string;
   schemaSha256: string;
   migrationManifestSha256: string;
+}
+
+/**
+ * The earliest ledger state this release tooling will operate against.
+ *
+ * Every migration from here to the newest one must appear in
+ * `permittedBefore`, so a deploy that is mid-way through the tail is
+ * recognised instead of failing as a ledger mismatch. Adding a migration
+ * without extending the boundary list is the failure this constant plus
+ * `validateAirportMigrationInventory` exist to make impossible.
+ */
+export const AIRPORT_RELEASE_BOUNDARY_FLOOR_TAG =
+  "0014_fix_flight_share_invalidation";
+
+/** Boundary names are the migration tag's numeric prefix; nothing else. */
+export function airportMigrationBoundaryName(
+  tag: string,
+): Exclude<AirportMigrationState["boundary"], "empty"> {
+  return tag.slice(0, 4) as Exclude<AirportMigrationState["boundary"], "empty">;
+}
+
+/**
+ * Tags eligible to be a "before" boundary: the floor migration through the
+ * newest one, inclusive. Derived from the manifest rather than listed, so the
+ * newest entry is included by construction.
+ */
+export function airportMigrationBoundaryTags(
+  manifest: AirportReleaseMigrationManifest,
+): string[] {
+  const floor = manifest.entries.findIndex(
+    ({ tag }) => tag === AIRPORT_RELEASE_BOUNDARY_FLOOR_TAG,
+  );
+  if (floor < 0) {
+    throw new AirportCatalogSafetyError("migration-ledger-mismatch");
+  }
+  return manifest.entries.slice(floor).map(({ tag }) => tag);
 }
 
 export interface AirportMigrationLedgerRow {
@@ -119,13 +155,9 @@ export function airportMigrationBoundaryForState(
   state: AirportMigrationState,
 ): AirportMigrationBoundary | undefined {
   if (state.boundary === "empty") return undefined;
-  const tag = {
-    "0014": "0014_fix_flight_share_invalidation",
-    "0015": "0015_airport_source_provenance",
-    "0016": "0016_serialize_owner_flight_sharing",
-    "0017": "0017_public_share_handles",
-  }[state.boundary];
-  return manifest.permittedBefore.find((boundary) => boundary.tag === tag);
+  return manifest.permittedBefore.find(
+    (boundary) => airportMigrationBoundaryName(boundary.tag) === state.boundary,
+  );
 }
 
 export function expectedAirportReleaseMigrationBoundary(
@@ -267,18 +299,18 @@ export function validateAirportMigrationInventory(
       boundary,
     ]),
   );
+  // Derived from the manifest, never listed. A migration appended without a
+  // matching boundary previously left the newest tag unrecognised, so a
+  // database that had applied it reported "ledger mismatch" and the release
+  // tooling refused to run against current production.
+  const requiredTags = airportMigrationBoundaryTags(manifest);
   if (
-    allowedBoundaries.size !== 4 ||
-    manifest.permittedBefore.length !== 4
+    allowedBoundaries.size !== requiredTags.length ||
+    manifest.permittedBefore.length !== requiredTags.length
   ) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch");
   }
-  for (const requiredTag of [
-    "0014_fix_flight_share_invalidation",
-    "0015_airport_source_provenance",
-    "0016_serialize_owner_flight_sharing",
-    "0017_public_share_handles",
-  ]) {
+  for (const requiredTag of requiredTags) {
     const boundary = allowedBoundaries.get(requiredTag);
     const index = manifest.entries.findIndex(
       ({ tag }) => tag === requiredTag,
@@ -536,11 +568,8 @@ async function verifyAirportSchema(
   );
   await verifyProductMigrationState(sql);
   let provenanceConstraint = "";
-  if (
-    boundary === "0015" ||
-    boundary === "0016" ||
-    boundary === "0017"
-  ) {
+  // Every boundary at or after 0015 carries the provenance constraint.
+  if (boundary !== "0014") {
     const [constraint] = await sql.unsafe(
       `select pg_get_constraintdef(oid, true) as definition
        from pg_constraint
@@ -637,20 +666,10 @@ export function validateAirportMigrationLedger(
       boundary.appliedCount === rows.length &&
       boundary.ledgerSha256 === ledgerSha256,
   );
-  const boundary =
-    matched?.tag === "0014_fix_flight_share_invalidation"
-      ? "0014"
-      : matched?.tag === "0015_airport_source_provenance"
-        ? "0015"
-        : matched?.tag === "0016_serialize_owner_flight_sharing"
-          ? "0016"
-          : matched?.tag === "0017_public_share_handles"
-            ? "0017"
-          : undefined;
-  if (!boundary) {
+  if (!matched) {
     throw new AirportCatalogSafetyError("migration-ledger-mismatch", {
       actualCount: rows.length,
     });
   }
-  return boundary;
+  return airportMigrationBoundaryName(matched.tag);
 }

@@ -1,4 +1,5 @@
-import type { Airport, MapRoute } from "./flight-data";
+import type { Airport, Flight, MapRoute } from "./flight-data";
+import { flightRoutePath } from "./flight-data";
 import { routeFrequencyStrength } from "./map-visualization";
 import { airportIdentity } from "./route-aggregation";
 import {
@@ -137,6 +138,157 @@ export function createRouteFeatureCollection(routes: MapRoute[]): RouteFeatureCo
         },
       };
     }),
+  };
+}
+
+export type RoutePathFeatureCollection = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: {
+      flightId: string;
+      date: string;
+      /** Ordered node codes, landings and waypoints together. */
+      pathCodes: string[];
+      waypointCodes: string[];
+      landingCodes: string[];
+      hasWaypoints: boolean;
+      routeLabel: string;
+      routeRaw?: string;
+    };
+    geometry: {
+      type: "MultiLineString";
+      coordinates: Position[][];
+    };
+  }>;
+};
+
+/**
+ * Draws each flight's actual path, waypoints included.
+ *
+ * Kept entirely separate from `createRouteFeatureCollection`, which aggregates
+ * landings into the `uniqueRoutes` statistic. This one aggregates nothing and
+ * counts nothing: it exists so a flight that flew over an airport can show that
+ * on the map without that airport ever being claimed as visited.
+ */
+export function createFlightRoutePathFeatureCollection(
+  flights: Array<
+    Pick<Flight, "id" | "date" | "origin" | "destination" | "airportSequence" | "routePath" | "routeRaw">
+  >,
+): RoutePathFeatureCollection {
+  const features: RoutePathFeatureCollection["features"] = [];
+  for (const flight of flights) {
+    const path = flightRoutePath(flight);
+    if (path.length < 2) continue;
+    const coordinates: Position[][] = [];
+    for (let index = 0; index < path.length - 1; index += 1) {
+      for (const segment of splitAtAntimeridian(
+        greatCircleCoordinates(path[index].airport, path[index + 1].airport, 48),
+      )) {
+        coordinates.push(segment);
+      }
+    }
+    if (coordinates.length === 0) continue;
+    const pathCodes = path.map((node) => node.airport.code);
+    features.push({
+      type: "Feature",
+      properties: {
+        flightId: flight.id,
+        date: flight.date,
+        pathCodes,
+        waypointCodes: path
+          .filter((node) => node.kind === "waypoint")
+          .map((node) => node.airport.code),
+        landingCodes: path
+          .filter((node) => node.kind === "landing")
+          .map((node) => node.airport.code),
+        hasWaypoints: path.some((node) => node.kind === "waypoint"),
+        routeLabel: pathCodes.join(" → "),
+        ...(flight.routeRaw ? { routeRaw: flight.routeRaw } : {}),
+      },
+      geometry: { type: "MultiLineString", coordinates },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+export type RouteWaypointFeatureCollection = {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: {
+      code: string;
+      name: string;
+      /** Ordered flight paths this point sits on, for the map tooltip. */
+      routeLabels: string[];
+    };
+    geometry: { type: "Point"; coordinates: Position };
+  }>;
+};
+
+/**
+ * The overflown points of a flight path, as map points.
+ *
+ * Deliberately a *separate* collection from `createAirportFeatureCollection`.
+ * That one carries visit semantics — active/contextual airports, hub sizing,
+ * the legend's meaning of "airport you have been to". A waypoint is a place
+ * the flight passed over, so it renders from its own source with its own
+ * style and can never be counted, sized, or coloured as somewhere visited.
+ *
+ * An airport that is a landing on any flight is omitted here: it already has
+ * a real marker, and drawing a second one on the same coordinate would make
+ * a visited airport look overflown.
+ */
+export function createRouteWaypointFeatureCollection(
+  flights: Array<
+    Pick<
+      Flight,
+      "id" | "date" | "origin" | "destination" | "airportSequence" | "routePath"
+    >
+  >,
+): RouteWaypointFeatureCollection {
+  const landed = new Set<string>();
+  for (const flight of flights) {
+    for (const node of flightRoutePath(flight)) {
+      if (node.kind === "landing") landed.add(airportIdentity(node.airport));
+    }
+  }
+  const byIdentity = new Map<
+    string,
+    { airport: Airport; routeLabels: string[] }
+  >();
+  for (const flight of flights) {
+    const path = flightRoutePath(flight);
+    if (path.length < 2) continue;
+    const routeLabel = path.map((node) => node.airport.code).join(" → ");
+    for (const node of path) {
+      if (node.kind !== "waypoint") continue;
+      const identity = airportIdentity(node.airport);
+      if (landed.has(identity)) continue;
+      const existing = byIdentity.get(identity);
+      if (existing) {
+        if (!existing.routeLabels.includes(routeLabel)) {
+          existing.routeLabels.push(routeLabel);
+        }
+        continue;
+      }
+      byIdentity.set(identity, { airport: node.airport, routeLabels: [routeLabel] });
+    }
+  }
+  return {
+    type: "FeatureCollection",
+    features: [...byIdentity.values()].map(({ airport, routeLabels }) => ({
+      type: "Feature" as const,
+      properties: {
+        code: airport.code,
+        name: airport.name,
+        routeLabels,
+      },
+      geometry: {
+        type: "Point" as const,
+        coordinates: [airport.lon, airport.lat] as Position,
+      },
+    })),
   };
 }
 

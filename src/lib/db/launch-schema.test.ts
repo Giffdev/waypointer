@@ -372,6 +372,8 @@ describe("launch schema", () => {
       "flight_id",
       "stop_order",
       "airport_id",
+      "stop_kind",
+      "source_field",
       "created_at",
       "updated_at",
     ]);

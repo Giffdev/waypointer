@@ -342,6 +342,7 @@ describe("airport identifier resolution", () => {
               lon: -119,
               facility: "general-aviation",
             },
+            matchedCodeTypes: ["iata"],
           },
           kind: "private",
           role: "pilot",

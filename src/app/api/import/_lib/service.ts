@@ -16,6 +16,7 @@ import type {
   ImportBatchSummary,
   ImportDecisionAction,
   OwnerImportBatchDetail,
+  PendingImportAttention,
   UpdateImportRowRequest,
   UploadImportResponse,
 } from "@/lib/import/types";
@@ -24,7 +25,10 @@ import {
   applyProposalCorrection,
   validateProposalPatch,
 } from "@/lib/import/corrections";
-import { createRowFingerprint } from "@/lib/import/fingerprint";
+import {
+  createLegacyRowFingerprint,
+  createRowFingerprint,
+} from "@/lib/import/fingerprint";
 import {
   importProposalValidationState,
   isImportProposalCommitReady,
@@ -76,6 +80,7 @@ export interface ImportService {
     mapping?: GenericCsvMapping,
   ): Promise<UploadImportResponse>;
   listBatches(userId: string): Promise<ImportBatchSummary[]>;
+  getPendingImportAttention(userId: string): Promise<PendingImportAttention>;
   getBatch(
     userId: string,
     batchId: string,
@@ -176,6 +181,10 @@ function storageAwareImportRepository(input: {
   return {
     findBatchByFileFingerprint: (...args) =>
       repository.findBatchByFileFingerprint(...args),
+    getPendingImportAttention: (...args) =>
+      repository.getPendingImportAttention(...args),
+    listReviewBatchIds: (...args) => repository.listReviewBatchIds(...args),
+    getReviewBatchState: (...args) => repository.getReviewBatchState(...args),
     async createBatch(userId: string, batch: CreateImportBatchInput) {
       // A failed or cancelled attempt on the same bytes still owns the
       // fingerprint slot, so it is superseded here and its private upload is
@@ -343,6 +352,17 @@ export const importService: ImportService = {
   async listBatches(userId) {
     await expireOriginalUploads(userId);
     return repository.listBatches(userId);
+  },
+
+  async getPendingImportAttention(userId) {
+    // Deliberately no `expireOriginalUploads`. Every other entry point runs
+    // that sweep, but this one is polled by any surface showing a badge: a GET
+    // that deletes private objects and rewrites batch rows turns a page render
+    // into destructive DB and storage work, and makes a cheap read a
+    // multi-second, retryable, side-effecting request. The sweep still runs on
+    // the write paths and on its scheduled cleanup job, so nothing is missed —
+    // it just no longer rides on a counter.
+    return repository.getPendingImportAttention(userId);
   },
 
   async getBatch(userId, batchId, page, pageSize) {
@@ -652,7 +672,18 @@ export const importService: ImportService = {
       updated.issues,
     );
     updated.rowFingerprint = updated.commitReady
-      ? createRowFingerprint(userId, updated.proposedFlight)
+      ? // The source row key is part of a blank-departure-time digest, so it
+        // must be supplied here too. Recomputing without it silently reverts
+        // a corrected row to the colliding pre-v3 identity — the exact defect
+        // v3 exists to close — and only for rows the user touched.
+        createRowFingerprint(
+          userId,
+          updated.proposedFlight,
+          updated.provenance?.sourceRowKey,
+        )
+      : undefined;
+    updated.legacyRowFingerprint = updated.commitReady
+      ? createLegacyRowFingerprint(userId, updated.proposedFlight)
       : undefined;
     rows[rowIndex] = updated;
     const existing = await repository.findDuplicateCandidates(userId, rows);
