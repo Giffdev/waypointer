@@ -36,10 +36,13 @@ export function ImportAttentionBanner() {
   }, []);
 
   if (!attention) return null;
-  const outstanding =
-    attention.pendingRows +
-    attention.unresolvedDuplicateRows +
-    attention.unresolvedRouteTokenRows;
+  // The headline is the distinct row count, not a sum of categories: a row
+  // awaiting a decision can *also* be an unresolved duplicate or carry a
+  // route token we could not place, and the review screen counts it once
+  // (see the "N rows below need attention" line on /import). Summing the
+  // categories here would tell the user more rows are outstanding than the
+  // review screen actually shows.
+  const outstanding = attention.pendingRows ?? 0;
   if (outstanding === 0) return null;
 
   return (

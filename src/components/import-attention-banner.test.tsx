@@ -53,21 +53,25 @@ describe("ImportAttentionBanner", () => {
   });
 
   it("names route tokens that could not be placed and links into the review", async () => {
+    // Route-token-unresolved rows are a subset of pending rows (a row is
+    // pending *because* it carries an issue like this), not an addition to
+    // them: 2 rows are pending and both of those happen to carry a route
+    // point that could not be placed.
     stubAttention({
       ...empty,
       reviewBatches: 1,
       pendingRows: 2,
-      unresolvedRouteTokenRows: 3,
+      unresolvedRouteTokenRows: 2,
     });
     render(<ImportAttentionBanner />);
 
     const banner = await screen.findByRole("complementary", {
       name: "Imports needing your attention",
     });
-    expect(banner).toHaveTextContent("5 imported rows need your review");
+    expect(banner).toHaveTextContent("2 imported rows need your review");
     expect(banner).toHaveTextContent("2 awaiting a decision");
     expect(banner).toHaveTextContent(
-      "3 with a route point we could not place",
+      "2 with a route point we could not place",
     );
     // The point of the sentence: these rows are not silently on the map.
     expect(banner).toHaveTextContent(
@@ -80,12 +84,40 @@ describe("ImportAttentionBanner", () => {
   });
 
   it("counts unresolved duplicates as outstanding too", async () => {
-    stubAttention({ ...empty, reviewBatches: 1, unresolvedDuplicateRows: 1 });
+    stubAttention({
+      ...empty,
+      reviewBatches: 1,
+      pendingRows: 1,
+      unresolvedDuplicateRows: 1,
+    });
     render(<ImportAttentionBanner />);
     const banner = await screen.findByRole("complementary", {
       name: "Imports needing your attention",
     });
     expect(banner).toHaveTextContent("1 imported row needs your review");
+    expect(banner).toHaveTextContent("1 possible duplicates");
+  });
+
+  it("does not double-count a pending row that is also an unresolved duplicate", async () => {
+    // Reviewer blocker regression: pendingRows, unresolvedDuplicateRows, and
+    // unresolvedRouteTokenRows describe overlapping views of the same rows
+    // (the review screen's own headline reads `counts.pendingRows` as "only
+    // the N rows below need attention"), not disjoint counts to be summed.
+    // Here 2 rows are pending and 1 of those 2 is also an unresolved
+    // duplicate: the headline must equal the distinct row count (2), not the
+    // sum (3), while the breakdown still names the duplicate subset.
+    stubAttention({
+      ...empty,
+      reviewBatches: 1,
+      pendingRows: 2,
+      unresolvedDuplicateRows: 1,
+    });
+    render(<ImportAttentionBanner />);
+    const banner = await screen.findByRole("complementary", {
+      name: "Imports needing your attention",
+    });
+    expect(banner).toHaveTextContent("2 imported rows need your review");
+    expect(banner).not.toHaveTextContent("3 imported rows need your review");
     expect(banner).toHaveTextContent("1 possible duplicates");
   });
 
