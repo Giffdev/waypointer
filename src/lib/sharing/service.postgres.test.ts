@@ -416,7 +416,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
   });
 
-  it("excludes route waypoints from the published share contract", async () => {
+  it("publishes route waypoints as path geometry without counting them as visited", async () => {
     const owner = await createOwner("Waypoint Pilot");
     const [originId, destinationId] = await createAirports();
     const waypointId = randomUUID();
@@ -439,8 +439,8 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     `;
     const flightId = await createFlight(owner.id, originId, destinationId);
     // A landing spine of origin -> destination with one overflown waypoint
-    // between them. The share contract is landings only, so publishing must
-    // behave exactly as if the waypoint row were not there.
+    // between them. A shared map should *look* like the owner's map, so the
+    // waypoint is published as ordered path geometry — and counted nowhere.
     await withUserDb(owner.id, (tx) =>
       tx.insert(flightStops).values([
         {
@@ -473,8 +473,26 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     await enableMapSharing(owner.id);
     const projection = await getPublicMapProjection(owner.username);
 
-    // Routes: the leg is drawn origin -> destination, not split in two at the
-    // waypoint, so the shared map does not claim a stop that never happened.
+    // Drawn: the ordered path the owner sees, waypoint in the middle.
+    const routePath = projection.flights[0].routePath;
+    expect(routePath?.map((node) => node.kind)).toEqual([
+      "landing",
+      "waypoint",
+      "landing",
+    ]);
+    // Order, not just shape. Both endpoints are landings, so asserting kinds
+    // alone would accept a path published backwards — and a backwards path
+    // draws the same three points in the wrong sequence.
+    expect(routePath?.map((node) => node.airport.name)).toEqual([
+      "Public origin",
+      "Overflown waypoint",
+      "Public destination",
+    ]);
+    expect(routePath?.[1].airport.lat).toBeCloseTo(43.238, 3);
+
+    // Not counted. Routes: the leg is drawn origin -> destination, not split
+    // in two at the waypoint, so the shared map does not claim a stop that
+    // never happened.
     expect(projection.routes).toHaveLength(1);
     expect(projection.summary).toMatchObject({
       flightCount: 1,
@@ -484,9 +502,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
 
     // Airports: the stronger assertion. A shared map is a claim about where
     // someone has *been*, so the waypoint must be absent from the published
-    // airport set entirely — not merely absent from the route endpoints of
-    // this one leg. If the snapshot's airport query stopped filtering on
-    // stop_kind, this is what would catch it.
+    // route endpoints — the set the legend, the markers, and every count read.
     const publishedAirports = projection.routes.flatMap((route) => [
       route.origin,
       route.destination,
@@ -494,17 +510,47 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     expect(publishedAirports.map(({ name }) => name)).not.toContain(
       "Overflown waypoint",
     );
-    expect(
-      publishedAirports.some(
-        (airport) =>
-          Math.abs(airport.lat - 43.238) < 0.001 &&
-          Math.abs(airport.lon - -123.356) < 0.001,
-      ),
-    ).toBe(false);
     expect(new Set(publishedAirports.map(({ name }) => name)).size).toBe(2);
 
-    // And nothing anywhere in the serialized snapshot mentions it.
-    expect(JSON.stringify(projection)).not.toContain("Overflown waypoint");
+    // Privacy: the path carries places, never the source row behind them.
+    const serialized = JSON.stringify(projection);
+    for (const leak of [flightId, "routeRaw", "sourceRowKey", "rawSnapshot"]) {
+      expect(serialized).not.toContain(leak);
+    }
+  });
+
+  it("publishes a landing-only logbook exactly as it did before waypoints", async () => {
+    const owner = await createOwner("Landing Only Pilot");
+    const [originId, destinationId] = await createAirports();
+    const flightId = await createFlight(owner.id, originId, destinationId);
+    await withUserDb(owner.id, (tx) =>
+      tx.insert(flightStops).values([
+        {
+          userId: owner.id,
+          flightId,
+          airportId: originId,
+          stopOrder: 0,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+        {
+          userId: owner.id,
+          flightId,
+          airportId: destinationId,
+          stopOrder: 1,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+      ]),
+    );
+
+    await enableMapSharing(owner.id);
+    const projection = await getPublicMapProjection(owner.username);
+
+    // No overflown geometry means no key at all, so a logbook without route
+    // waypoints publishes the snapshot it always published.
+    expect(projection.flights[0]).not.toHaveProperty("routePath");
+    expect(JSON.stringify(projection)).not.toContain("routePath");
   });
 });
 

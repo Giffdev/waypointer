@@ -29,13 +29,19 @@ until you decide — which is exactly why they are named rather than left silent
 
 The **ForeFlight adapter only** reads the `Route` header. Route tokens become
 ordered *waypoints*: they are persisted as `flight_stops.stop_kind = 'waypoint'`
-and drawn on your private map as a dashed path through a hollow, labelled
-point, so a leg flown S05 → KRBG → S05 visibly bends through KRBG. They never
-count as a landing, never change `airportSequence`, never affect
-unique-airport, route, or landing statistics, and never become an airport
-marker — that marker means "you have been here". They are excluded from the
-public share contract, which stays landings-only. Only an explicit
-endpoint/landing column, or a deliberate user action, creates a landing.
+and drawn as a dashed path through a hollow, labelled point on your private map
+**and on your public shared map**, so a leg flown S05 → KRBG → S05 visibly bends
+through KRBG in both places. They never count as a landing, never change
+`airportSequence`, never affect unique-airport, route, or landing statistics,
+and never become an airport marker — that marker means "you have been here".
+The public share publishes the path geometry and nothing else: every published
+count is still built from landing stops alone. Only an explicit endpoint/landing
+column, or a deliberate user action, creates a landing.
+
+Your public map is a snapshot taken when you last published it. A map shared
+before route waypoints existed keeps drawing straight lines until you republish
+it from **Settings → Sharing**; republishing changes nothing else about what is
+shared.
 
 Generic and mapped CSV imports are deliberately **not** routed through this
 classifier. Their multi-airport columns are explicit airport-sequence fields

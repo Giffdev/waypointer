@@ -104,6 +104,9 @@ describe("public map viewer filtering", () => {
       derivePublicMapSlice(projection, DEFAULT_PUBLIC_MAP_FILTERS),
     ).toEqual({
       routes: projection.routes,
+      // No flight in this fixture overflew anywhere, so the presentation-only
+      // payload is empty and the shared map draws exactly what it always did.
+      routePathFlights: [],
       summary: {
         flightCount: 3,
         routeCount: 3,

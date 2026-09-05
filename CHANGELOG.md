@@ -8,15 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Route waypoints on your private map: a ForeFlight `Route` column is now
-  parsed into an ordered path of *waypoints* alongside the flight's landings,
-  persisted as `flight_stops.stop_kind = 'waypoint'`, and **drawn on `/map`**.
-  A leg flown S05 → KRBG → S05 now bends through KRBG, and KRBG appears as a
-  hollow, dashed, labelled point on its own map layer. Waypoints are never
-  treated as landings — `airportSequence`, unique-airport counts, landing
-  counts, dedupe identity, the airport markers' "you have been here" meaning,
-  and the public share contract all stay landings-only, so adding waypoints to
-  an existing logbook cannot move a single statistic. A flight with no route
+- Route waypoints on your map, private and shared: a ForeFlight `Route` column
+  is now parsed into an ordered path of *waypoints* alongside the flight's
+  landings, persisted as `flight_stops.stop_kind = 'waypoint'`, and **drawn on
+  `/map` and on your public shared map**. A leg flown S05 → KRBG → S05 now
+  bends through KRBG, and KRBG appears as a hollow, dashed, labelled point on
+  its own map layer, in both places, through the same rendering code.
+  Waypoints are never treated as landings — `airportSequence`, unique-airport
+  counts, landing counts, dedupe identity, the airport markers' "you have been
+  here" meaning, and every count in the public share contract stay
+  landings-only, so adding waypoints to an existing logbook cannot move a
+  single statistic anywhere. A flight with no route
   renders exactly the landing-only path it always did. Token acceptance is deliberately narrow: airway,
   procedure, and nav-fix shapes are rejected, and a token must name the
   airport through an ICAO/FAA-LID/GPS/ident alias (an IATA-only match is not
@@ -30,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ForeFlight's landing-count columns are deliberately not read: they say how
   many landings a leg had, never where, so they can neither place a stop nor
   honestly raise a warning.
+- Published shared maps carry the waypoint path. `map_shares.projection` is
+  `jsonb`, so the ordered path was added to the existing snapshot with no
+  migration, inside the schema-2 rollback document a previous build reads
+  without ever asking for it. **A map published before this shipped keeps
+  drawing straight lines until its owner republishes it** — a published map is
+  a frozen snapshot by design — and the sharing panel now says so. The
+  schema-2 response served to already-shipped browsers deliberately omits the
+  path, because that parser rejects unrecognised keys.
 - Import review notice on `/map`: when rows are still awaiting a decision,
   carrying an unresolved duplicate, or carrying a route point that could not be
   placed, a small banner says how many and links into the existing import

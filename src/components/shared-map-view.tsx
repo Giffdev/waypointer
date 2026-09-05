@@ -6,6 +6,7 @@ import GlobePanel from "@/components/globe-panel";
 import {
   airportExactIdentity,
   type Airport,
+  type MapRoutePathFlight,
 } from "@/lib/flight-data";
 import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
@@ -223,8 +224,8 @@ export function SharedMapProjectionView({
     [projection, resolvedFilters],
   );
   const mapData = useMemo(
-    () => toSharedMapData(slice.routes),
-    [slice.routes],
+    () => toSharedMapData(slice.routes, slice.routePathFlights),
+    [slice.routePathFlights, slice.routes],
   );
   const focusedAirportIdentity =
     resolvedFilters.airport === "all" ? "" : resolvedFilters.airport;
@@ -256,6 +257,7 @@ export function SharedMapProjectionView({
         <GlobePanel
           airports={mapData.airports}
           routes={mapData.routes}
+          routePathFlights={mapData.routePathFlights}
           visibleKind="all"
           zoom={mapData.homeFrame.zoom}
           zoomCommandToken={0}
@@ -454,6 +456,7 @@ const MAX_PUBLIC_FRAME_ROUTES = 128;
 
 export function toSharedMapData(
   publicRoutes: PublicMapProjection["routes"],
+  routePathFlights: PublicMapProjection["flights"] = [],
 ) {
   const airportByKey = new Map<string, Airport>();
   const airportFor = (point: PublicMapProjection["routes"][number]["origin"]) => {
@@ -469,6 +472,46 @@ export function toSharedMapData(
     origin: airportFor(route.origin),
     destination: airportFor(route.destination),
   }));
+  // Overflown waypoints are resolved *after* the route airports, and through
+  // their own map, so a waypoint can never add an entry to `airports` — the
+  // list the legend and the airport markers read as "places visited".
+  const routeAirportKeys = new Set(airportByKey.keys());
+  const waypointByKey = new Map<string, Airport>();
+  const pathAirportFor = (
+    point: PublicMapProjection["routes"][number]["origin"],
+  ) => {
+    const key = publicAirportKey(point);
+    return (
+      airportByKey.get(key) ??
+      waypointByKey.get(key) ??
+      (waypointByKey.set(key, { ...point }), waypointByKey.get(key)!)
+    );
+  };
+  const paths: MapRoutePathFlight[] = routePathFlights.flatMap(
+    (flight, index) => {
+      const routePath = flight.routePath;
+      if (!routePath || routePath.length < 2) return [];
+      const path = routePath.map((node) => ({
+        airport: pathAirportFor(node.airport),
+        kind: node.kind,
+      }));
+      const landings = path.filter((node) => node.kind === "landing");
+      if (landings.length < 2) return [];
+      return [
+        {
+          // Positional, never the owner's flight id: the shared map needs a
+          // stable key for a feature, not an identifier from someone's
+          // logbook.
+          id: `shared-path-${index}`,
+          date: flight.date,
+          origin: landings[0]!.airport,
+          destination: landings.at(-1)!.airport,
+          airportSequence: landings.map((node) => node.airport),
+          routePath: path,
+        },
+      ];
+    },
+  );
   const frameStride = Math.max(
     1,
     Math.ceil(canonicalRoutes.length / MAX_PUBLIC_FRAME_ROUTES),
@@ -482,6 +525,10 @@ export function toSharedMapData(
   return {
     airports: [...airportByKey.values()],
     routes: canonicalRoutes,
+    routePathFlights: paths,
+    // Asserted rather than assumed: the visited-airport list must contain
+    // exactly the route airports it did before waypoints existed.
+    routeAirportKeys,
     homeFrame: deriveInitialMapFrame(frameRoutes),
   };
 }

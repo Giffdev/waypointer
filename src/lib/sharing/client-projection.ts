@@ -142,14 +142,22 @@ function parsePublicFlights(
     throw new PublicMapProjectionValidationError();
   }
   return value.map((entry) => {
-    const flight = exactRecord(entry, [
-      "date",
-      "kind",
-      "role",
-      "aircraft",
-      "registration",
-      "routeLegs",
-    ]);
+    // `routePath` is optional: a snapshot published before waypoints shipped
+    // simply does not have one, and that map is still valid.
+    const flight = exactRecord(
+      entry,
+      isRecord(entry) && Object.hasOwn(entry, "routePath")
+        ? [
+            "date",
+            "kind",
+            "role",
+            "aircraft",
+            "registration",
+            "routePath",
+            "routeLegs",
+          ]
+        : ["date", "kind", "role", "aircraft", "registration", "routeLegs"],
+    );
     if (
       typeof flight.date !== "string" ||
       !isPublicDate(flight.date) ||
@@ -186,12 +194,48 @@ function parsePublicFlights(
       role: flight.role,
       aircraft: [...flight.aircraft],
       registration: flight.registration,
+      ...(Object.hasOwn(flight, "routePath")
+        ? { routePath: parsePublicRoutePath(flight.routePath) }
+        : {}),
       routeLegs: flight.routeLegs.map(({ routeId, direction }) => ({
         routeId,
         direction,
       })),
     };
   });
+}
+
+/**
+ * Ordered presentation-only path: the same nodes the private map draws.
+ *
+ * Validated as strictly as everything else the public map renders, and with
+ * one rule that is not merely structural — the path must begin and end on a
+ * landing, and must contain a waypoint. A path that starts on a waypoint
+ * would draw a line beginning somewhere the pilot never was, and a path with
+ * no waypoint at all is a landing sequence that belongs in `routeLegs`, not
+ * a second copy of the same claim.
+ */
+function parsePublicRoutePath(
+  value: unknown,
+): NonNullable<PublicMapProjection["flights"][number]["routePath"]> {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 64) {
+    throw new PublicMapProjectionValidationError();
+  }
+  const routePath = value.map((node) => {
+    const entry = exactRecord(node, ["airport", "kind"]);
+    if (!isRouteNodeKind(entry.kind)) {
+      throw new PublicMapProjectionValidationError();
+    }
+    return { airport: parsePublicAirport(entry.airport), kind: entry.kind };
+  });
+  if (
+    routePath[0]!.kind !== "landing" ||
+    routePath.at(-1)!.kind !== "landing" ||
+    !routePath.some((node) => node.kind === "waypoint")
+  ) {
+    throw new PublicMapProjectionValidationError();
+  }
+  return routePath;
 }
 
 function parsePublicRoute(
@@ -369,6 +413,10 @@ function isNonNegativeInteger(value: unknown): value is number {
     Number.isSafeInteger(value) &&
     value >= 0
   );
+}
+
+function isRouteNodeKind(value: unknown): value is "landing" | "waypoint" {
+  return value === "landing" || value === "waypoint";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

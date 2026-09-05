@@ -69,6 +69,18 @@ export function MapSharingPanel() {
         </p>
       )}
 
+      {status?.enabled && (
+        // A published map is a frozen snapshot, so a map shared before route
+        // waypoints existed keeps drawing straight lines until it is
+        // republished. Saying so is the difference between a stale map and a
+        // map that looks broken for no stated reason.
+        <p className="sharing-snapshot-note">
+          Your public map is a snapshot taken when you last published. If your
+          flights have overflown route points that your own map draws but your
+          shared map does not, republish to refresh it.
+        </p>
+      )}
+
       <div className="sharing-actions">
         <button
           type="button"
