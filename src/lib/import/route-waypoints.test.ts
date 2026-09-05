@@ -4,7 +4,12 @@ import { statsFactsFromFlights } from "../flight-insights";
 import type { Airport, Flight } from "../flight-data";
 import { flightAirportSequence, flightRoutePath } from "../flight-data";
 import { createFlightRoutePathFeatureCollection } from "../map-geojson";
-import { assertCommittableRoute, MAX_ROUTE_PATH_NODES } from "./invariants";
+import {
+  assertCommittableRoute,
+  enrichableRoutePath,
+  matchesLandingSpine,
+  MAX_ROUTE_PATH_NODES,
+} from "./invariants";
 import { hasUnresolvedRouteToken } from "./attention";
 import { isImportInvariantError } from "./errors";
 import {
@@ -484,6 +489,112 @@ describe("commit invariants", () => {
     expect(() => assertCommittableRoute(flightWith(nodes))).toThrow(
       /at most 32 airports/,
     );
+  });
+});
+
+/**
+ * Re-import enrichment.
+ *
+ * A logbook first imported before route waypoints were persisted re-imports as
+ * an exact duplicate of itself: every row resolves to a flight that already
+ * exists, so the commit path writes nothing and the overflown airport the
+ * parser now extracts is discarded. These are the two pure gates that decide
+ * whether a staged row may add that airport to the flight it was adopted into.
+ */
+describe("route enrichment gates", () => {
+  const flightWith = (
+    nodes: ProposedImportFlight["routeNodes"],
+  ): ProposedImportFlight => ({
+    date: "2026-05-01",
+    kind: "private",
+    role: "pilot",
+    source: "ForeFlight",
+    routeNodes: nodes,
+  });
+
+  const sameAirportTurnback = [
+    { kind: "landing" as const, identifier: "S05", match: resolved("S05"), sourceField: "From" as const },
+    { kind: "waypoint" as const, identifier: "KRBG", match: resolved("KRBG"), sourceField: "Route" as const, tokenIndex: 0 },
+    { kind: "landing" as const, identifier: "S05", match: resolved("S05"), sourceField: "To" as const },
+  ];
+
+  it("offers the ordered path when a resolved waypoint is actually contributed", () => {
+    expect(
+      enrichableRoutePath(flightWith(sameAirportTurnback))?.map(
+        ({ identifier, kind, airportId }) => [identifier, kind, airportId],
+      ),
+    ).toEqual([
+      ["S05", "landing", "airport-s05"],
+      ["KRBG", "waypoint", "airport-krbg"],
+      ["S05", "landing", "airport-s05"],
+    ]);
+  });
+
+  it("offers nothing when the row adds no waypoint", () => {
+    // The landing-only re-import of an unchanged row must be a no-op, not a
+    // rewrite of stops that are already correct.
+    expect(
+      enrichableRoutePath(
+        flightWith([
+          { kind: "landing", identifier: "S05", match: resolved("S05"), sourceField: "From" },
+          { kind: "landing", identifier: "KRBG", match: resolved("KRBG"), sourceField: "To" },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("declines instead of throwing when the row is not describable", () => {
+    // Enrichment repairs a flight the user already has, so an unresolved
+    // landing or an over-long path withholds the repair rather than failing
+    // the whole commit the way `assertCommittableRoute` does.
+    expect(
+      enrichableRoutePath(
+        flightWith([
+          { kind: "landing", identifier: "S05", match: resolved("S05"), sourceField: "From" },
+          { kind: "waypoint", identifier: "KRBG", match: resolved("KRBG"), sourceField: "Route", tokenIndex: 0 },
+          { kind: "landing", identifier: "ZZZZ", match: notFound("ZZZZ"), sourceField: "To" },
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(
+      enrichableRoutePath(
+        flightWith([
+          { kind: "landing", identifier: "KMFR", match: resolved("KMFR"), sourceField: "From" },
+          ...Array.from({ length: MAX_ROUTE_PATH_NODES }, (_, index) => ({
+            kind: "waypoint" as const,
+            identifier: `K${index}`,
+            match: resolved(`K${index}`),
+            sourceField: "Route" as const,
+            tokenIndex: index,
+          })),
+          { kind: "landing", identifier: "KEUG", match: resolved("KEUG"), sourceField: "To" },
+        ]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("only matches a landing spine that is identical position for position", () => {
+    const path = enrichableRoutePath(flightWith(sameAirportTurnback))!;
+    expect(matchesLandingSpine(path, ["airport-s05", "airport-s05"])).toBe(true);
+    // A different flight, a reversed one, and one with an extra leg are all
+    // refused: enriching any of them would move a statistic.
+    expect(matchesLandingSpine(path, ["airport-s05", "airport-krbg"])).toBe(
+      false,
+    );
+    expect(
+      matchesLandingSpine(path, ["airport-s05", "airport-s05", "airport-s05"]),
+    ).toBe(false);
+    expect(matchesLandingSpine(path, ["airport-s05"])).toBe(false);
+  });
+
+  it("never counts an overflown airport as a landing when matching", () => {
+    // The waypoint sits between the two landings. If the spine comparison ever
+    // included it, a flight that landed at the waypoint would be treated as
+    // the same flight.
+    const path = enrichableRoutePath(flightWith(sameAirportTurnback))!;
+    expect(
+      matchesLandingSpine(path, ["airport-s05", "airport-krbg", "airport-s05"]),
+    ).toBe(false);
   });
 });
 

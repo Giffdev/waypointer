@@ -82,6 +82,19 @@ un-reprocessable. There is no reprocess button: uploading the file again does
 the same thing, and once the retention window has expired that is the only
 option anyway.
 
+An adopted row is not inert. If it supplies route waypoints the existing flight
+does not have, the commit adds them to that flight — this is how a logbook
+first imported before waypoint support gains its overflown airports without the
+pilot deleting and re-importing anything. The write is presentation only
+(`flight_stops` rows with `stop_kind = 'waypoint'`, plus `flights.route_raw`
+when it is empty) and is gated on the row having matched the flight by
+*identity* — its current fingerprint, its `sourceRowKey`, or a superseded
+fingerprint version — and landing at exactly the same airports in exactly the
+same order. Existing landing stops are re-ordered, never rewritten, so an
+`endpoint` stop is never demoted; a flight that already carries a waypoint is
+left alone; a merely similar (fuzzy) duplicate is never mutated without the
+user resolving it; and a second re-upload changes nothing.
+
 ## Presets
 
 ### MyFlightbook CSV

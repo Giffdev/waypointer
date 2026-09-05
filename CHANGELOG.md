@@ -51,6 +51,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (disable/republish). (#44)
 
 ### Fixed
+- Re-importing a logbook now adds the route waypoints it carries to flights
+  that were imported before waypoints were persisted. Every row of such a
+  re-upload resolves to a flight that already exists, so the commit skipped it
+  as an exact duplicate and wrote nothing: a leg flown S05 → KRBG → S05 stayed
+  a straight line no matter how many times the pilot re-imported, and KRBG
+  never appeared on their map. A re-imported row that matches exactly one
+  existing flight by identity (its current fingerprint, its source-row key, or
+  a superseded fingerprint version) and lands at exactly the same airports in
+  exactly the same order now contributes its overflown waypoints and its raw
+  route text to that flight. Presentation only, and deliberately conservative:
+  landing stops keep their `source_field`, identity and source attribution are
+  untouched, statistics are arithmetically unchanged, a flight that already
+  has a waypoint is never overwritten, a merely similar (fuzzy) candidate is
+  never mutated without the user's decision, and a second re-upload is a
+  no-op. The importer pipeline version is bumped to 2 so a logbook already
+  uploaded under version 1 restages instead of being reused, which is what
+  lets the fix reach flights that already exist. The regression follows the
+  repaired flight all the way to the two map sources that draw it — the
+  overflown path line must bend through the waypoint's coordinates and the
+  overflown-point source must carry its code and label — because the symptom
+  was missing geometry, not marker styling: the basemap named the town while
+  the app drew no segment reaching it and placed no marker on it.
 - Repeated legs with a blank departure time no longer collapse into one
   flight. Two same-day legs over the same route with no `TimeOut` produced an
   identical fingerprint, the unique index on `(user_id, fingerprint)` enforced

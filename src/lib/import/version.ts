@@ -12,8 +12,13 @@
  * Batches created before this column existed default to `0`, which is always
  * lower than the current version, so every historical batch is offered for
  * reprocessing.
+ *
+ * Version 2: duplicate resolution now enriches an adopted flight with the
+ * route waypoints the row supplies. Without the bump, a logbook already
+ * uploaded at version 1 would be reused as-is forever and the fix could never
+ * reach the flights it exists to repair.
  */
-export const IMPORTER_PIPELINE_VERSION = 1 as const;
+export const IMPORTER_PIPELINE_VERSION = 2 as const;
 
 /** Batches predating `importer_version` and therefore always reprocessable. */
 export const LEGACY_IMPORTER_VERSION = 0 as const;
