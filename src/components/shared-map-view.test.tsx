@@ -149,7 +149,7 @@ describe("SharedMapView", () => {
       "flat",
     );
     expect(fetch).toHaveBeenCalledWith(
-      "/api/shared/public-handle?contract=3",
+      "/api/shared/public-handle?contract=4",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("key");
@@ -568,7 +568,7 @@ describe("SharedMapView", () => {
 function sharedMap() {
   return {
     map: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: null },
       summary: { flightCount: 3, routeCount: 1 },
       routes: [

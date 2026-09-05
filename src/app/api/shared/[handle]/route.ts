@@ -5,6 +5,7 @@ import {
   ShareNotFoundError,
   ShareRepublishRequiredError,
   toLegacyPublicMapProjection,
+  toV3PublicMapProjection,
 } from "@/lib/sharing/service";
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
@@ -45,16 +46,20 @@ export async function GET(
       ),
     ]);
     const projection = await getPublicMapProjection(handle);
-    const directionContract =
-      new URL(request.url).searchParams.get("contract") === "3";
-    return Response.json(
-      {
-        map: directionContract
-          ? projection
-          : toLegacyPublicMapProjection(projection),
-      },
-      { headers: PUBLIC_HEADERS },
-    );
+    // contract=4 is the current waypoint-aware wire shape; contract=3 is the
+    // frozen pre-waypoint shape already parsed by deployed browser bundles
+    // (their exact-key parser rejects any unrecognised field, so `routePath`
+    // can never appear here — see `toV3PublicMapProjection`); anything else,
+    // including no `contract` param at all, gets the rollback-compatible v2
+    // shape, unchanged from before.
+    const contract = new URL(request.url).searchParams.get("contract");
+    const map =
+      contract === "4"
+        ? projection
+        : contract === "3"
+          ? toV3PublicMapProjection(projection)
+          : toLegacyPublicMapProjection(projection);
+    return Response.json({ map }, { headers: PUBLIC_HEADERS });
   } catch (error) {
     if (error instanceof RateLimitExceededError) {
       return Response.json(

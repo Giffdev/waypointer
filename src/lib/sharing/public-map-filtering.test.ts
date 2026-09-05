@@ -28,7 +28,7 @@ function airport(
 }
 
 const projection: PublicMapProjection = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   owner: { displayName: "Devin" },
   summary: { flightCount: 3, routeCount: 3 },
   routes: [

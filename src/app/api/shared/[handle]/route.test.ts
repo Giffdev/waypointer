@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   consumeRateLimit: vi.fn(),
   getPublicMapProjection: vi.fn(),
   toLegacyPublicMapProjection: vi.fn(),
+  toV3PublicMapProjection: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/rate-limit", () => ({
@@ -16,6 +17,7 @@ vi.mock("@/lib/sharing/service", () => ({
   getPublicMapProjection: mocks.getPublicMapProjection,
   publicHandleRateLimitKey: (handle: string) => handle.toLowerCase(),
   toLegacyPublicMapProjection: mocks.toLegacyPublicMapProjection,
+  toV3PublicMapProjection: mocks.toV3PublicMapProjection,
   ShareNotFoundError: class ShareNotFoundError extends Error {},
   ShareRepublishRequiredError: class ShareRepublishRequiredError extends Error {},
 }));
@@ -30,7 +32,7 @@ describe("public shared map API", () => {
   beforeEach(() => {
     mocks.consumeRateLimit.mockReset().mockResolvedValue(undefined);
     mocks.getPublicMapProjection.mockReset().mockResolvedValue({
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: null },
       summary: { flightCount: 0, routeCount: 0 },
       routes: [],
@@ -40,6 +42,15 @@ describe("public shared map API", () => {
       .mockReset()
       .mockReturnValue({
         schemaVersion: 2,
+        owner: { displayName: null },
+        summary: { flightCount: 0, routeCount: 0 },
+        routes: [],
+        flights: [],
+      });
+    mocks.toV3PublicMapProjection
+      .mockReset()
+      .mockReturnValue({
+        schemaVersion: 3,
         owner: { displayName: null },
         summary: { flightCount: 0, routeCount: 0 },
         routes: [],
@@ -55,11 +66,123 @@ describe("public shared map API", () => {
 
     expect((await response.json()).map.schemaVersion).toBe(2);
     expect(mocks.toLegacyPublicMapProjection).toHaveBeenCalledOnce();
+    expect(mocks.toV3PublicMapProjection).not.toHaveBeenCalled();
+  });
+
+  it("treats an unrecognised contract value the same as no contract at all", async () => {
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin?contract=5"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+
+    expect((await response.json()).map.schemaVersion).toBe(2);
+    expect(mocks.toLegacyPublicMapProjection).toHaveBeenCalledOnce();
+    expect(mocks.toV3PublicMapProjection).not.toHaveBeenCalled();
+  });
+
+  it("downgrades a freshly republished waypoint snapshot to the frozen contract=3 shape", async () => {
+    const canonical = {
+      schemaVersion: 4,
+      owner: { displayName: "Waypoint Pilot" },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [],
+      flights: [
+        {
+          date: "2026-08-14",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routePath: [
+            { airport: airport("S05", "Bandon State", "Bandon", "US", 43, -124.4), kind: "landing" },
+            { airport: airport("KRBG", "Roseburg Regional", "Roseburg", "US", 43.2, -123.3), kind: "waypoint" },
+            { airport: airport("S05", "Bandon State", "Bandon", "US", 43, -124.4), kind: "landing" },
+          ],
+          routeLegs: [],
+        },
+      ],
+    };
+    mocks.getPublicMapProjection.mockResolvedValueOnce(canonical);
+    const v3 = {
+      schemaVersion: 3,
+      owner: canonical.owner,
+      summary: canonical.summary,
+      routes: canonical.routes,
+      flights: [
+        {
+          date: "2026-08-14",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routeLegs: [],
+        },
+      ],
+    };
+    mocks.toV3PublicMapProjection.mockReturnValueOnce(v3);
+
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin?contract=3"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+
+    expect(mocks.toV3PublicMapProjection).toHaveBeenCalledWith(canonical);
+    expect(mocks.toLegacyPublicMapProjection).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.map).toEqual(v3);
+    expect(body.map.flights[0]).not.toHaveProperty("routePath");
+    // The stale-client contract stays a plain six-key flight shape, never
+    // a seventh key that its already-shipped exact-key parser would reject.
+    expect(Object.keys(body.map.flights[0]).toSorted()).toEqual(
+      [
+        "date",
+        "kind",
+        "role",
+        "aircraft",
+        "registration",
+        "routeLegs",
+      ].toSorted(),
+    );
+  });
+
+  it("serves the canonical waypoint-aware contract=4 response unmodified", async () => {
+    mocks.getPublicMapProjection.mockResolvedValueOnce({
+      schemaVersion: 4,
+      owner: { displayName: "Public Pilot" },
+      summary: { flightCount: 1, routeCount: 1 },
+      routes: [],
+      flights: [
+        {
+          date: "2026-08-14",
+          kind: "private",
+          role: "pilot",
+          aircraft: ["Cessna 172"],
+          registration: "N12345",
+          routePath: [
+            { airport: airport("S05", "Bandon State", "Bandon", "US", 43, -124.4), kind: "landing" },
+            { airport: airport("KRBG", "Roseburg Regional", "Roseburg", "US", 43.2, -123.3), kind: "waypoint" },
+            { airport: airport("S05", "Bandon State", "Bandon", "US", 43, -124.4), kind: "landing" },
+          ],
+          routeLegs: [],
+        },
+      ],
+    });
+
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin?contract=4"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+
+    expect(mocks.toV3PublicMapProjection).not.toHaveBeenCalled();
+    expect(mocks.toLegacyPublicMapProjection).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.map.schemaVersion).toBe(4);
+    expect(body.map.flights[0].routePath).toHaveLength(3);
   });
 
   it("returns public filter facts without account or session metadata", async () => {
     mocks.getPublicMapProjection.mockResolvedValueOnce({
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: "Public Pilot" },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [
@@ -100,7 +223,7 @@ describe("public shared map API", () => {
       ],
     });
     const response = await GET(
-      new Request("https://example.test/api/shared/devsin?contract=3"),
+      new Request("https://example.test/api/shared/devsin?contract=4"),
       { params: Promise.resolve({ handle: "devsin" }) },
     );
     const body = await response.json();

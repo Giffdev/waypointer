@@ -26,7 +26,7 @@ import {
   preferredAirportCode,
 } from "@/lib/airport-preferred-code";
 import {
-  parsePublicMapProjection,
+  parsePublicMapProjectionV4,
   PublicMapProjectionValidationError,
 } from "./client-projection";
 
@@ -34,7 +34,15 @@ const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLIC_COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
 const STORED_MAP_PROJECTION_SCHEMA_VERSION = 2;
-const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 3;
+// `PublicMapProjection` (this constant) is the *current* wire contract,
+// carrying `routePath`. It must only ever gain a version bump, never a field
+// added under an existing number: contract=3 was already shipped without
+// `routePath` before it existed, and its exact-key parser (the one already
+// running in deployed browsers) rejects any response with an unrecognised
+// key outright. `routePath` shipped as contract=4 instead — see
+// `PublicMapProjectionV3`/`toV3PublicMapProjection` for the frozen contract=3
+// shape that must never change again.
+const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 4;
 
 type PublicAirport = Pick<
   Airport,
@@ -110,6 +118,21 @@ export type PublicMapProjection = {
       direction: "forward" | "reverse" | "none";
     }>;
   }>;
+};
+
+/**
+ * The contract=3 wire shape, frozen exactly as it shipped before route
+ * waypoints existed: no `routePath`, on any flight, ever. The browsers this
+ * contract is served to bundle `parsePublicMapProjection`'s exact-key
+ * parser — code that predates and knows nothing about `routePath` — so a new
+ * field here is not additive, it is a parse error that blanks the map.
+ */
+export type PublicMapProjectionV3 = {
+  schemaVersion: 3;
+  owner: PublicMapProjection["owner"];
+  summary: PublicMapProjection["summary"];
+  routes: PublicMapProjection["routes"];
+  flights: Array<Omit<PublicMapProjection["flights"][number], "routePath">>;
 };
 
 export type LegacyPublicMapProjection = {
@@ -461,6 +484,33 @@ async function airportLabelRows(
   }
 }
 
+/**
+ * Downgrades the canonical (contract=4) projection to the contract=3 shape
+ * that shipped before route waypoints existed. `routePath` must never appear
+ * here — see `PublicMapProjectionV3`. Built by naming fields rather than by
+ * spreading, so a field added to the public flight later cannot leak into
+ * this response by default, the same discipline `toLegacyPublicMapProjection`
+ * uses for contract=2.
+ */
+export function toV3PublicMapProjection(
+  projection: PublicMapProjection,
+): PublicMapProjectionV3 {
+  return {
+    schemaVersion: 3,
+    owner: projection.owner,
+    summary: projection.summary,
+    routes: projection.routes,
+    flights: projection.flights.map((flight) => ({
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: flight.aircraft,
+      registration: flight.registration,
+      routeLegs: flight.routeLegs,
+    })),
+  };
+}
+
 export function toLegacyPublicMapProjection(
   projection: PublicMapProjection,
 ): LegacyPublicMapProjection {
@@ -797,7 +847,7 @@ function publicRoutePath(
 
 function validatePublicMapProjection(value: unknown): PublicMapProjection {
   try {
-    return parsePublicMapProjection(value);
+    return parsePublicMapProjectionV4(value);
   } catch (error) {
     if (error instanceof PublicMapProjectionValidationError) {
       throw new ShareValidationError("invalid-generated-projection");

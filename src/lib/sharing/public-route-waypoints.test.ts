@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parsePublicMapProjection,
+  parsePublicMapProjectionV4,
   PublicMapProjectionValidationError,
 } from "./client-projection";
 import {
@@ -10,6 +11,7 @@ import {
 import {
   rollbackCompatibleStoredProjection,
   toLegacyPublicMapProjection,
+  toV3PublicMapProjection,
   type PublicMapProjection,
 } from "./service";
 import { toSharedMapData } from "@/components/shared-map-view";
@@ -65,7 +67,7 @@ function projection(
   withWaypoints: boolean,
 ): PublicMapProjection {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     owner: { displayName: "Devin" },
     summary: { flightCount: 1, routeCount: 1 },
     routes: [outAndBackRoute],
@@ -92,8 +94,8 @@ function projection(
 }
 
 describe("public share projection carries the ordered path", () => {
-  it("round-trips an ordered routePath through the client contract", () => {
-    const parsed = parsePublicMapProjection(
+  it("round-trips an ordered routePath through the contract=4 client parser", () => {
+    const parsed = parsePublicMapProjectionV4(
       JSON.parse(JSON.stringify(projection(true))),
     );
     expect(
@@ -105,12 +107,37 @@ describe("public share projection carries the ordered path", () => {
     ]);
   });
 
-  it("still accepts a snapshot published before waypoints existed", () => {
-    const parsed = parsePublicMapProjection(
-      JSON.parse(JSON.stringify(projection(false))),
-    );
+  it("downgrades a freshly republished waypoint snapshot to the frozen contract=3 shape, which the previous-generation parser still accepts", () => {
+    // The pre-waypoint parser (`parsePublicMapProjection`) is exactly what
+    // every already-shipped browser bundle runs. A freshly republished
+    // waypoint snapshot must still parse under it once downgraded to
+    // contract=3 — the whole point of freezing that contract.
+    const v3 = toV3PublicMapProjection(projection(true));
+    const parsed = parsePublicMapProjection(JSON.parse(JSON.stringify(v3)));
     expect(parsed.flights[0]).not.toHaveProperty("routePath");
+    expect(Object.keys(parsed.flights[0]).toSorted()).toEqual(
+      [
+        "date",
+        "kind",
+        "role",
+        "aircraft",
+        "registration",
+        "routeLegs",
+      ].toSorted(),
+    );
     expect(parsed.summary).toEqual({ flightCount: 1, routeCount: 1 });
+  });
+
+  it("never errors a stale contract=3 poller, waypoints or not", () => {
+    // A browser tab left open across a republish keeps polling contract=3.
+    // Whether or not the underlying snapshot now carries waypoints, that
+    // poll must never throw.
+    for (const withWaypoints of [false, true]) {
+      const v3 = toV3PublicMapProjection(projection(withWaypoints));
+      expect(() =>
+        parsePublicMapProjection(JSON.parse(JSON.stringify(v3))),
+      ).not.toThrow();
+    }
   });
 
   it.each([
@@ -143,7 +170,7 @@ describe("public share projection carries the ordered path", () => {
     // rather than render a straight line and never say why.
     (invalid.flights[0] as { routePath: unknown }).routePath = routePath;
     expect(() =>
-      parsePublicMapProjection(JSON.parse(JSON.stringify(invalid))),
+      parsePublicMapProjectionV4(JSON.parse(JSON.stringify(invalid))),
     ).toThrow(PublicMapProjectionValidationError);
   });
 
@@ -263,6 +290,7 @@ describe("public waypoints are drawn but never counted", () => {
       role: "pilot",
       aircraft: "C172",
       source: "ForeFlight",
+      distanceMiles: 0,
     };
     expect(
       createFlightRoutePathFeatureCollection(shared.routePathFlights),

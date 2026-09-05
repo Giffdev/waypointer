@@ -50,9 +50,9 @@ describe("public map sharing contracts", () => {
     expect(publicHandleRateLimitKey(" DeVSiN ")).toBe("devsin");
   });
 
-  it("serializes v3 directions into the previous exact v2 browser shape", () => {
+  it("serializes v4 directions into the previous exact v2 browser shape", () => {
     const canonical: PublicMapProjection = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: "Pilot" },
       summary: { flightCount: 2, routeCount: 1 },
       routes: [
@@ -119,7 +119,7 @@ describe("public map sharing contracts", () => {
     );
   });
 
-  it("stores a directional v2 rollback view alongside canonical v3 facts", async () => {
+  it("stores a directional v2 rollback view alongside canonical v4 facts", async () => {
     const sea = airport("SEA", "Seattle", "Seattle", "US", 47.449, -122.309);
     const jfk = airport(
       "JFK",
@@ -130,7 +130,7 @@ describe("public map sharing contracts", () => {
       -73.779,
     );
     const canonical: PublicMapProjection = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: "Pilot" },
       summary: { flightCount: 2, routeCount: 1 },
       routes: [
@@ -250,7 +250,7 @@ describe("public map sharing contracts", () => {
     mocks.getDb.mockReturnValue({ execute });
 
     await expect(getPublicMapProjection("DeVSiN")).resolves.toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: null },
       summary: { flightCount: 1, routeCount: 1 },
       routes: [

@@ -138,7 +138,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     const originCode = "R47";
     const destinationCode = "SOURCE-ONLY";
     expect(projection).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: null },
       summary: { flightCount: 2, routeCount: 1 },
       flights: [

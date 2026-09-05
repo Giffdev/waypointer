@@ -1,4 +1,7 @@
-import type { PublicMapProjection } from "@/lib/sharing/service";
+import type {
+  PublicMapProjection,
+  PublicMapProjectionV3,
+} from "@/lib/sharing/service";
 import {
   airportExactIdentity,
   deriveRouteDirectionMode,
@@ -21,9 +24,15 @@ export class PublicMapProjectionValidationError extends Error {
   }
 }
 
+/**
+ * Parses the contract=3 wire shape: the parser already running in every
+ * already-shipped browser bundle. It predates `routePath` and knows nothing
+ * about it, so it must reject the key outright, exactly as it always has —
+ * see `PublicMapProjectionV3` and `parsePublicMapProjectionV4`.
+ */
 export function parsePublicMapProjection(
   value: unknown,
-): PublicMapProjection {
+): PublicMapProjectionV3 {
   if (!isRecord(value)) throw new PublicMapProjectionValidationError();
   const hasFlightsKey = Object.hasOwn(value, "flights");
   const projection = exactRecord(
@@ -49,7 +58,7 @@ export function parsePublicMapProjection(
 
   const routes = projection.routes.map(parsePublicRoute);
   if (!hasFlightsKey) throw new PublicMapProjectionValidationError();
-  const flights = parsePublicFlights(projection.flights);
+  const flights = parsePublicFlightsV3(projection.flights);
   const routeIds = new Set(routes.map(({ id }) => id));
   const routeKindById = new Map(
     routes.map(({ id, kind }) => [id, kind] as const),
@@ -135,7 +144,192 @@ export function parsePublicMapProjection(
   };
 }
 
-function parsePublicFlights(
+/**
+ * Strict, unchanging contract=3 flight shape: exactly six named keys, no
+ * `routePath`, ever. This is what every already-shipped browser bundle
+ * parses, so it cannot gain an optional key the way `parsePublicFlightsV4`
+ * does — that would be the same parse-error-blanks-the-map failure this
+ * contract exists to avoid.
+ */
+function parsePublicFlightsV3(
+  value: unknown,
+): NonNullable<PublicMapProjectionV3["flights"]> {
+  if (!Array.isArray(value)) {
+    throw new PublicMapProjectionValidationError();
+  }
+  return value.map((entry) => {
+    const flight = exactRecord(entry, [
+      "date",
+      "kind",
+      "role",
+      "aircraft",
+      "registration",
+      "routeLegs",
+    ]);
+    if (
+      typeof flight.date !== "string" ||
+      !isPublicDate(flight.date) ||
+      (flight.kind !== "commercial" && flight.kind !== "private") ||
+      (flight.role !== "passenger" && flight.role !== "pilot") ||
+      !Array.isArray(flight.aircraft) ||
+      flight.aircraft.length > 8 ||
+      flight.aircraft.some(
+        (value) =>
+          typeof value !== "string" ||
+          normalizeAircraftMetadata(value) !== value,
+      ) ||
+      (flight.registration !== null &&
+        (typeof flight.registration !== "string" ||
+          normalizeRegistrationMetadata(flight.registration) !==
+            flight.registration)) ||
+      !Array.isArray(flight.routeLegs) ||
+      flight.routeLegs.some(
+        (leg) =>
+          !isRecord(leg) ||
+          Reflect.ownKeys(leg).length !== 2 ||
+          typeof leg.routeId !== "string" ||
+          !ROUTE_ID_PATTERN.test(leg.routeId) ||
+          (leg.direction !== "forward" &&
+            leg.direction !== "reverse" &&
+            leg.direction !== "none"),
+      )
+    ) {
+      throw new PublicMapProjectionValidationError();
+    }
+    return {
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: [...flight.aircraft],
+      registration: flight.registration,
+      routeLegs: flight.routeLegs.map(({ routeId, direction }) => ({
+        routeId,
+        direction,
+      })),
+    };
+  });
+}
+
+/**
+ * Parses the contract=4 wire shape: the same structural rules as contract=3,
+ * plus an optional ordered `routePath` per flight — present only on a
+ * snapshot republished after route waypoints shipped.
+ */
+export function parsePublicMapProjectionV4(
+  value: unknown,
+): PublicMapProjection {
+  if (!isRecord(value)) throw new PublicMapProjectionValidationError();
+  const hasFlightsKey = Object.hasOwn(value, "flights");
+  const projection = exactRecord(
+    value,
+    hasFlightsKey
+      ? ["schemaVersion", "owner", "summary", "routes", "flights"]
+      : ["schemaVersion", "owner", "summary", "routes"],
+  );
+  const owner = exactRecord(projection.owner, ["displayName"]);
+  const summary = exactRecord(projection.summary, [
+    "flightCount",
+    "routeCount",
+  ]);
+  if (
+    projection.schemaVersion !== 4 ||
+    !isDisplayName(owner.displayName) ||
+    !isNonNegativeInteger(summary.flightCount) ||
+    !isNonNegativeInteger(summary.routeCount) ||
+    !Array.isArray(projection.routes)
+  ) {
+    throw new PublicMapProjectionValidationError();
+  }
+
+  const routes = projection.routes.map(parsePublicRoute);
+  if (!hasFlightsKey) throw new PublicMapProjectionValidationError();
+  const flights = parsePublicFlightsV4(projection.flights);
+  const routeIds = new Set(routes.map(({ id }) => id));
+  const routeKindById = new Map(
+    routes.map(({ id, kind }) => [id, kind] as const),
+  );
+  const routeModeById = new Map(
+    routes.map(({ id, directionMode }) => [id, directionMode] as const),
+  );
+  const representedLegs = routes.reduce(
+    (total, route) => total + route.flightCount,
+    0,
+  );
+  const referencedLegs = flights.reduce(
+    (total, flight) => total + flight.routeLegs.length,
+    0,
+  );
+  const referencesByRouteId = new Map<string, number>();
+  const forwardReferencesByRouteId = new Map<string, number>();
+  const reverseReferencesByRouteId = new Map<string, number>();
+  for (const flight of flights) {
+    for (const { routeId, direction } of flight.routeLegs) {
+      referencesByRouteId.set(
+        routeId,
+        (referencesByRouteId.get(routeId) ?? 0) + 1,
+      );
+      if (direction === "forward") {
+        forwardReferencesByRouteId.set(
+          routeId,
+          (forwardReferencesByRouteId.get(routeId) ?? 0) + 1,
+        );
+      }
+      if (direction === "reverse") {
+        reverseReferencesByRouteId.set(
+          routeId,
+          (reverseReferencesByRouteId.get(routeId) ?? 0) + 1,
+        );
+      }
+    }
+  }
+  if (
+    summary.routeCount !== routes.length ||
+    routeIds.size !== routes.length ||
+    (summary.flightCount === 0) !== (routes.length === 0) ||
+    !Number.isSafeInteger(representedLegs) ||
+    summary.flightCount > representedLegs ||
+    (flights.length !== summary.flightCount ||
+      referencedLegs !== representedLegs ||
+      routes.some(
+        (route) =>
+          (referencesByRouteId.get(route.id) ?? 0) !== route.flightCount,
+      ) ||
+      routes.some(
+        (route) =>
+          (forwardReferencesByRouteId.get(route.id) ?? 0) !==
+            route.forwardFlightCount ||
+          (reverseReferencesByRouteId.get(route.id) ?? 0) !==
+            route.reverseFlightCount,
+      ) ||
+      flights.some(
+        (flight) =>
+          flight.routeLegs.length === 0 ||
+          new Set(flight.routeLegs.map(({ routeId }) => routeId)).size !==
+            flight.routeLegs.length ||
+          flight.routeLegs.some(
+            ({ routeId, direction }) =>
+              routeKindById.get(routeId) !== flight.kind ||
+              (routeModeById.get(routeId) === "none") !==
+                (direction === "none"),
+          ),
+      ))
+  ) {
+    throw new PublicMapProjectionValidationError();
+  }
+
+  return {
+    schemaVersion: 4,
+    owner: { displayName: owner.displayName },
+    summary: {
+      flightCount: summary.flightCount,
+      routeCount: summary.routeCount,
+    },
+    routes,
+    flights,
+  };
+}
+
+function parsePublicFlightsV4(
   value: unknown,
 ): NonNullable<PublicMapProjection["flights"]> {
   if (!Array.isArray(value)) {

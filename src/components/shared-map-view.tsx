@@ -12,7 +12,7 @@ import { deriveInitialMapFrame } from "@/lib/map-framing";
 import { MapViewToggle } from "@/components/map-view-toggle";
 import { MapLegend } from "@/components/map-legend";
 import type { MapViewMode } from "@/lib/map-view-mode";
-import { parsePublicMapProjection } from "@/lib/sharing/client-projection";
+import { parsePublicMapProjectionV4 } from "@/lib/sharing/client-projection";
 import {
   DEFAULT_PUBLIC_MAP_FILTERS,
   derivePublicMapSlice,
@@ -57,7 +57,7 @@ export function SharedMapView({ handle }: { handle: string }) {
         Date.now() + PUBLIC_MAP_REVALIDATE_INTERVAL_MS;
       setState((current) => (current === "ready" ? current : "loading"));
 
-      void fetch(`/api/shared/${encodeURIComponent(handle)}?contract=3`, {
+      void fetch(`/api/shared/${encodeURIComponent(handle)}?contract=4`, {
         signal: controller.signal,
         cache: "no-store",
       })
@@ -97,7 +97,7 @@ export function SharedMapView({ handle }: { handle: string }) {
             return;
           }
           if (!response.ok) throw new Error();
-          const parsedProjection = parsePublicMapProjection(
+          const parsedProjection = parsePublicMapProjectionV4(
             isRecord(body) ? body.map : undefined,
           );
           nextRequestAtRef.current =
