@@ -26,7 +26,7 @@ import {
   preferredAirportCode,
 } from "@/lib/airport-preferred-code";
 import {
-  parsePublicMapProjection,
+  parsePublicMapProjectionV4,
   PublicMapProjectionValidationError,
 } from "./client-projection";
 
@@ -34,7 +34,15 @@ const PUBLIC_ROUTE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLIC_COUNTRY_PATTERN =
   /^(?:[A-Z]{2}|[\p{L}][\p{L}\p{M} .,'\u2019()&-]{1,79})$/u;
 const STORED_MAP_PROJECTION_SCHEMA_VERSION = 2;
-const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 3;
+// `PublicMapProjection` (this constant) is the *current* wire contract,
+// carrying `routePath`. It must only ever gain a version bump, never a field
+// added under an existing number: contract=3 was already shipped without
+// `routePath` before it existed, and its exact-key parser (the one already
+// running in deployed browsers) rejects any response with an unrecognised
+// key outright. `routePath` shipped as contract=4 instead — see
+// `PublicMapProjectionV3`/`toV3PublicMapProjection` for the frozen contract=3
+// shape that must never change again.
+const PUBLIC_MAP_PROJECTION_SCHEMA_VERSION = 4;
 
 type PublicAirport = Pick<
   Airport,
@@ -88,11 +96,43 @@ export type PublicMapProjection = {
     role: "passenger" | "pilot";
     aircraft: string[];
     registration: string | null;
+    /**
+     * Ordered presentation-only path, present **only** when the flight has an
+     * overflown waypoint. It is the same shape the private map draws, so the
+     * shared view reuses `MapRoutePathFlight`/`FlightGlobe` rather than
+     * growing a second rendering model.
+     *
+     * Waypoints stay out of every landing-shaped field: `routes`, `routeLegs`,
+     * and the summary are built from landing stops alone, so a shared map's
+     * airport, route, and flight counts are byte-identical whether or not a
+     * flight carries waypoints. Nothing from the source row travels with it —
+     * no flight id, no raw route text — only airports already publishable as
+     * route endpoints are.
+     */
+    routePath?: Array<{
+      airport: PublicAirport;
+      kind: "landing" | "waypoint";
+    }>;
     routeLegs: Array<{
       routeId: string;
       direction: "forward" | "reverse" | "none";
     }>;
   }>;
+};
+
+/**
+ * The contract=3 wire shape, frozen exactly as it shipped before route
+ * waypoints existed: no `routePath`, on any flight, ever. The browsers this
+ * contract is served to bundle `parsePublicMapProjection`'s exact-key
+ * parser — code that predates and knows nothing about `routePath` — so a new
+ * field here is not additive, it is a parse error that blanks the map.
+ */
+export type PublicMapProjectionV3 = {
+  schemaVersion: 3;
+  owner: PublicMapProjection["owner"];
+  summary: PublicMapProjection["summary"];
+  routes: PublicMapProjection["routes"];
+  flights: Array<Omit<PublicMapProjection["flights"][number], "routePath">>;
 };
 
 export type LegacyPublicMapProjection = {
@@ -106,7 +146,10 @@ export type LegacyPublicMapProjection = {
     >
   >;
   flights: Array<
-    Omit<PublicMapProjection["flights"][number], "routeLegs"> & {
+    Omit<
+      PublicMapProjection["flights"][number],
+      "routeLegs" | "routePath"
+    > & {
       routeIds: string[];
     }
   >;
@@ -272,7 +315,8 @@ export async function getPublicMapProjection(
         Reflect.get(projection, "routes"),
       Reflect.get(projection, "flights"),
     );
-  const publicRoutes = await relabelledPublicRoutes(storedRoutes);
+  const { routes: publicRoutes, flights: relabelledFlights } =
+    await relabelledPublicProjection(storedRoutes, publicFlights);
   const owner = Reflect.get(projection, "owner");
   const summary = Reflect.get(projection, "summary");
   return validatePublicMapProjection({
@@ -292,7 +336,7 @@ export async function getPublicMapProjection(
         publicRoutes.length,
     },
     routes: publicRoutes,
-    flights: publicFlights,
+    flights: relabelledFlights,
   });
 }
 
@@ -328,18 +372,27 @@ type AirportLabelRow = Pick<
  * published map is still served with its stored labels rather than turning a
  * readable shared map into a 503.
  */
-async function relabelledPublicRoutes(
+async function relabelledPublicProjection(
   routes: PublicMapProjection["routes"],
-): Promise<PublicMapProjection["routes"]> {
+  flights: PublicMapProjection["flights"],
+): Promise<Pick<PublicMapProjection, "routes" | "flights">> {
+  // One lookup for every published label on the map, route endpoints and
+  // overflown waypoints alike. Relabelling only the routes would let the same
+  // airport render as `S05` on a route and `BDY` on a path through it.
   const codes = [
-    ...new Set(
-      routes.flatMap((route) => [
+    ...new Set([
+      ...routes.flatMap((route) => [
         route.origin.code.toUpperCase(),
         route.destination.code.toUpperCase(),
       ]),
-    ),
+      ...flights.flatMap((flight) =>
+        (flight.routePath ?? []).map((node) =>
+          node.airport.code.toUpperCase(),
+        ),
+      ),
+    ]),
   ];
-  if (codes.length === 0) return routes;
+  if (codes.length === 0) return { routes, flights };
   const rows = await airportLabelRows(codes);
   const byCode = new Map<string, AirportLabelRow[]>();
   for (const row of rows) {
@@ -354,12 +407,25 @@ async function relabelledPublicRoutes(
     matches.push(row);
     byCode.set(row.aliasCode, matches);
   }
-  if (byCode.size === 0) return routes;
-  return routes.map((route) => ({
-    ...route,
-    origin: relabelledPublicAirport(route.origin, byCode),
-    destination: relabelledPublicAirport(route.destination, byCode),
-  }));
+  if (byCode.size === 0) return { routes, flights };
+  return {
+    routes: routes.map((route) => ({
+      ...route,
+      origin: relabelledPublicAirport(route.origin, byCode),
+      destination: relabelledPublicAirport(route.destination, byCode),
+    })),
+    flights: flights.map((flight) =>
+      flight.routePath
+        ? {
+            ...flight,
+            routePath: flight.routePath.map((node) => ({
+              ...node,
+              airport: relabelledPublicAirport(node.airport, byCode),
+            })),
+          }
+        : flight,
+    ),
+  };
 }
 
 function relabelledPublicAirport(
@@ -418,6 +484,33 @@ async function airportLabelRows(
   }
 }
 
+/**
+ * Downgrades the canonical (contract=4) projection to the contract=3 shape
+ * that shipped before route waypoints existed. `routePath` must never appear
+ * here — see `PublicMapProjectionV3`. Built by naming fields rather than by
+ * spreading, so a field added to the public flight later cannot leak into
+ * this response by default, the same discipline `toLegacyPublicMapProjection`
+ * uses for contract=2.
+ */
+export function toV3PublicMapProjection(
+  projection: PublicMapProjection,
+): PublicMapProjectionV3 {
+  return {
+    schemaVersion: 3,
+    owner: projection.owner,
+    summary: projection.summary,
+    routes: projection.routes,
+    flights: projection.flights.map((flight) => ({
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: flight.aircraft,
+      registration: flight.registration,
+      routeLegs: flight.routeLegs,
+    })),
+  };
+}
+
 export function toLegacyPublicMapProjection(
   projection: PublicMapProjection,
 ): LegacyPublicMapProjection {
@@ -469,9 +562,20 @@ export function toLegacyPublicMapProjection(
       routeCount: routes.length,
     },
     routes,
-    flights: projection.flights.map(({ routeLegs, ...flight }) => ({
-      ...flight,
-      routeIds: routeLegs.map(({ routeId, direction }) => {
+    // `routePath` is deliberately dropped. A schema-2 response is served to
+    // browsers running an already-shipped bundle whose parser rejects an
+    // unrecognised key outright, so adding one here would turn a readable
+    // shared map into a parse error for exactly the clients this contract
+    // exists to keep working. Built by naming the fields rather than by
+    // spreading, so a field added to the public flight later cannot leak into
+    // this response by default.
+    flights: projection.flights.map((flight) => ({
+      date: flight.date,
+      kind: flight.kind,
+      role: flight.role,
+      aircraft: flight.aircraft,
+      registration: flight.registration,
+      routeIds: flight.routeLegs.map(({ routeId, direction }) => {
         const ids = routeIdsByDirection.get(routeId);
         if (!ids) throw new ShareValidationError();
         return ids[direction];
@@ -512,10 +616,16 @@ async function createSnapshot(
     throw new ShareEmptyMapError();
   }
   const flightIds = selectedFlights.map(({ id }) => id);
-  // Landings only. A shared map is a claim about where someone has been, so a
-  // waypoint the flight merely passed over must never appear as a visited
-  // airport — and the public share contract stays byte-identical to what it
-  // produced before route waypoints existed.
+  // Two reads of the same table, for two different questions.
+  //
+  // `selectedStops` is landings only and is the *only* input to routes,
+  // route legs, and the summary: a shared map's airport, route, and flight
+  // counts are claims about where someone has been, and a waypoint is not a
+  // place they went.
+  //
+  // `pathStops` is the full ordered path and feeds only the presentation-only
+  // `routePath`. Keeping them as separate queries is what makes it impossible
+  // for a waypoint to reach a count by accident.
   const selectedStops = await tx
     .select({
       flightId: flightStops.flightId,
@@ -530,6 +640,22 @@ async function createSnapshot(
       ),
     )
     .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
+  const pathStops = await tx
+    .select({
+      flightId: flightStops.flightId,
+      airportId: flightStops.airportId,
+      stopOrder: flightStops.stopOrder,
+      stopKind: flightStops.stopKind,
+    })
+    .from(flightStops)
+    .where(eq(flightStops.userId, userId))
+    .orderBy(asc(flightStops.flightId), asc(flightStops.stopOrder));
+  const pathStopsByFlight = new Map<string, typeof pathStops>();
+  for (const stop of pathStops) {
+    const stops = pathStopsByFlight.get(stop.flightId) ?? [];
+    stops.push(stop);
+    pathStopsByFlight.set(stop.flightId, stops);
+  }
   const stopsByFlight = new Map<string, typeof selectedStops>();
   for (const stop of selectedStops) {
     const stops = stopsByFlight.get(stop.flightId) ?? [];
@@ -562,7 +688,6 @@ async function createSnapshot(
       select ${flightStops.airportId}
       from ${flightStops}
       where ${flightStops.userId} = ${userId}::uuid
-        and ${flightStops.stopKind} = 'landing'
     )
   `);
   const airportById = new Map(airportRows.map((airport) => [airport.id, airport]));
@@ -647,6 +772,7 @@ async function createSnapshot(
         flight.aircraft,
       ]),
       registration: normalizeRegistrationMetadata(flight.registration) ?? null,
+      ...(publicRoutePath(pathStopsByFlight.get(flight.id), airportById) ?? {}),
       routeLegs,
     });
   }
@@ -677,14 +803,51 @@ export function rollbackCompatibleStoredProjection(
     canonicalRoutes: projection.routes,
     flights: legacy.flights.map((flight, index) => ({
       ...flight,
+      // Carried alongside `routeLegs` for the same reason `canonicalRoutes`
+      // is: a rolled-back build reads the stored snapshot with `Reflect.get`
+      // and simply never asks for this key, so a published map keeps
+      // rendering — landings only — instead of failing to parse.
+      ...(projection.flights[index]!.routePath
+        ? { routePath: projection.flights[index]!.routePath }
+        : {}),
       routeLegs: projection.flights[index]!.routeLegs,
     })),
   };
 }
 
+/**
+ * The presentation-only path for one flight, or nothing.
+ *
+ * Returns `undefined` unless the flight actually overflew somewhere, so a
+ * logbook without route waypoints publishes a byte-identical snapshot to the
+ * one it published before this shipped.
+ */
+function publicRoutePath(
+  stops:
+    | Array<{ airportId: string; stopKind: string }>
+    | undefined,
+  airportById: Map<string, PublicAirportRow & { id: string }>,
+): { routePath: NonNullable<PublicMapProjection["flights"][number]["routePath"]> } | undefined {
+  if (!stops || stops.length < 2) return undefined;
+  if (!stops.some((stop) => stop.stopKind === "waypoint")) return undefined;
+  const path = stops.map((stop) => {
+    const airport = airportById.get(stop.airportId);
+    if (!airport || !isRouteNodeKind(stop.stopKind)) {
+      throw new ShareValidationError("invalid-flight-route");
+    }
+    return { airport: publicAirportFromRow(airport), kind: stop.stopKind };
+  });
+  // A path has to start and end where the flight did. A leading or trailing
+  // waypoint would mean the drawn line begins somewhere the pilot never was.
+  if (path[0]!.kind !== "landing" || path.at(-1)!.kind !== "landing") {
+    throw new ShareValidationError("invalid-flight-route");
+  }
+  return { routePath: path };
+}
+
 function validatePublicMapProjection(value: unknown): PublicMapProjection {
   try {
-    return parsePublicMapProjection(value);
+    return parsePublicMapProjectionV4(value);
   } catch (error) {
     if (error instanceof PublicMapProjectionValidationError) {
       throw new ShareValidationError("invalid-generated-projection");
@@ -981,11 +1144,51 @@ function normalizeStoredPublicProjection(
           registration === null
             ? null
             : normalizeRegistrationMetadata(registration) ?? null,
+        ...storedRoutePath(Reflect.get(candidate, "routePath")),
         routeLegs,
       };
     },
   );
   return { routes, flights: publicFlights };
+}
+
+/**
+ * Reads a stored `routePath`, or nothing.
+ *
+ * A snapshot published before waypoints shipped simply has no such key, and
+ * that is not an error — it is a map that renders exactly as it always did.
+ * A *present but malformed* path is an error: this projection is what the
+ * public map draws, so silently discarding a broken path would publish a
+ * flight's route as a straight line and never say why.
+ */
+function storedRoutePath(
+  value: unknown,
+): Pick<PublicMapProjection["flights"][number], "routePath"> {
+  if (value === undefined) return {};
+  if (!Array.isArray(value) || value.length < 2) {
+    throw new ShareValidationError();
+  }
+  const routePath = value.map((node) => {
+    if (!node || typeof node !== "object") throw new ShareValidationError();
+    const kind = Reflect.get(node, "kind");
+    if (!isRouteNodeKind(kind)) throw new ShareValidationError();
+    return {
+      airport: sanitizeStoredPublicPlace(Reflect.get(node, "airport")),
+      kind,
+    };
+  });
+  if (
+    routePath[0]!.kind !== "landing" ||
+    routePath.at(-1)!.kind !== "landing" ||
+    !routePath.some((node) => node.kind === "waypoint")
+  ) {
+    throw new ShareValidationError();
+  }
+  return { routePath };
+}
+
+function isRouteNodeKind(value: unknown): value is "landing" | "waypoint" {
+  return value === "landing" || value === "waypoint";
 }
 
 function sanitizeStoredPublicPlace(

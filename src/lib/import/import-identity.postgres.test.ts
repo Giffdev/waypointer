@@ -15,11 +15,23 @@ import {
 } from "@/lib/db/schema";
 import { aggregateStatsSlice, type StatsPeriod } from "@/lib/flight-statistics";
 import { statsFactsFromFlights } from "@/lib/flight-insights";
-import { commitImportBatch, decideImportRows, getUserImportBatch } from "./service";
+import { getInitialFilters } from "@/components/dashboard-shared";
+import {
+  buildPersistedFlightData,
+  buildPersistedFlightStatisticsContext,
+} from "@/lib/persisted-flight-data";
+import { buildMapPageContract } from "@/lib/route-page-data";
+import {
+  createAirportFeatureCollection,
+  createFlightRoutePathFeatureCollection,
+  createRouteWaypointFeatureCollection,
+} from "@/lib/map-geojson";
+import { commitImportBatch, decideImportRows, getUserImportBatch, automaticallyCommitImport } from "./service";
 import { stageFlightImport } from "./worker";
 import { isAirportNamespaceMatch } from "./route-normalization";
 import {
   ACCEPTED_DUPLICATE_FINGERPRINT_VERSION,
+  createLegacyRowFingerprint,
   isAcceptedDuplicateFingerprintVersion,
   ROW_FINGERPRINT_VERSION,
 } from "./fingerprint";
@@ -861,6 +873,335 @@ postgresDescribe("PostgreSQL import identity and route waypoints", () => {
     expect(
       isAcceptedDuplicateFingerprintVersion(committed.fingerprintVersion),
     ).toBe(false);
+  });
+
+  /**
+   * The production incident this file exists to keep fixed.
+   *
+   * A ForeFlight logbook was imported before route waypoints were persisted,
+   * so an `S05 -> S05` leg with `Route=KRBG` committed as two landing stops
+   * and nothing else. Re-uploading the identical logbook after the waypoint
+   * release resolved every row to the flight already on record, the auto
+   * adoption path marked each one `skip_as_duplicate`, and the commit wrote
+   * nothing — so KRBG could never appear on the pilot's map no matter how many
+   * times they re-imported.
+   */
+  it("adds a re-imported route waypoint to the flight it was adopted into", async () => {
+    const userId = await createUser("reimport-route-enrichment");
+    const suffix = alphaSuffix();
+    const [base, waypoint] = await seedAirports([`S${suffix}`, `R${suffix}`]);
+    const repository = new DrizzleImportRepository();
+    const repositories = {
+      imports: repository,
+      flights: repository,
+      airports: repository,
+    };
+    const leg = (route: string) =>
+      `2024-10-07,SYNTH-A,${base.code},${base.code},${route},60,10:15,1.2`;
+
+    // The historical import. The Route cell is absent, exactly as it was for
+    // an importer that could not yet read one, so the flight commits with the
+    // landing spine alone.
+    const first = await stageAndCommitAll(
+      userId,
+      repository,
+      foreflightCsv([leg("")]),
+      "before-waypoints.csv",
+    );
+    const historicalProposal = first.detail!.rows.rows[0].proposedFlight;
+    const [historical] = await repository.listFlights(userId);
+    expect(historical.routePath).toBeUndefined();
+    expect(historical.routeRaw).toBeUndefined();
+
+    // ...and it carries a pre-v3 digest with no source-row key, which is what
+    // every flight committed before the identity release actually looks like.
+    const legacyFingerprint = createLegacyRowFingerprint(
+      userId,
+      historicalProposal,
+    )!;
+    await withUserDb(userId, (tx) =>
+      tx
+        .update(flights)
+        .set({
+          fingerprint: legacyFingerprint.value,
+          fingerprintVersion: legacyFingerprint.version,
+          sourceRowKey: null,
+        })
+        .where(eq(flights.userId, userId)),
+    );
+
+    const period: StatsPeriod = {
+      preset: "any",
+      startDate: "2024-01-01",
+      endDateExclusive: "2025-01-01",
+      isPartial: false,
+      elapsedDays: 366,
+    };
+    const before = aggregateStatsSlice(
+      statsFactsFromFlights(await repository.listFlights(userId)),
+      period,
+    );
+    // The screenshot state, asserted rather than assumed: nothing about the
+    // overflown airport reaches either map source, so the basemap can name a
+    // town the app draws no line to and puts no marker on.
+    const beforeContract = buildMapPageContract(
+      getInitialFilters(),
+      buildPersistedFlightData(await repository.listFlights(userId)),
+      buildPersistedFlightStatisticsContext(await repository.listFlights(userId)),
+    );
+    expect(beforeContract.routePathFlights ?? []).toEqual([]);
+    expect(
+      createRouteWaypointFeatureCollection(beforeContract.routePathFlights ?? [])
+        .features,
+    ).toEqual([]);
+
+    // The re-upload: same logbook row, now with the Route cell the current
+    // parser reads.
+    const staged = await stageFlightImport(
+      userId,
+      upload("with-route.csv", foreflightCsv([leg(waypoint.code)])),
+      repositories,
+    );
+    const completed = await automaticallyCommitImport(
+      userId,
+      staged,
+      repository,
+      repository,
+    );
+    expect(completed.status).toBe("committed");
+    // Nothing was created: the row was adopted, not imported.
+    expect(completed.completion?.importedRows).toBe(0);
+
+    const stops = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          airportId: flightStops.airportId,
+          stopOrder: flightStops.stopOrder,
+          stopKind: flightStops.stopKind,
+          sourceField: flightStops.sourceField,
+        })
+        .from(flightStops)
+        .where(eq(flightStops.userId, userId))
+        .orderBy(flightStops.stopOrder),
+    );
+    expect(stops).toEqual([
+      { airportId: base.id, stopOrder: 0, stopKind: "landing", sourceField: "endpoint" },
+      { airportId: waypoint.id, stopOrder: 1, stopKind: "waypoint", sourceField: "route" },
+      { airportId: base.id, stopOrder: 2, stopKind: "landing", sourceField: "endpoint" },
+    ]);
+
+    const enriched = await repository.listFlights(userId);
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0].id).toBe(historical.id);
+    expect(
+      enriched[0].routePath?.map(({ airport, kind }) => [airport.code, kind]),
+    ).toEqual([
+      [base.code, "landing"],
+      [waypoint.code, "waypoint"],
+      [base.code, "landing"],
+    ]);
+    expect(enriched[0].routeRaw).toContain(waypoint.code);
+    // The landing spine, and therefore every statistic, is byte-for-byte what
+    // it was before the waypoint arrived.
+    expect(enriched[0].airportSequence?.map(({ code }) => code)).toEqual([
+      base.code,
+      base.code,
+    ]);
+    expect(
+      aggregateStatsSlice(statsFactsFromFlights(enriched), period).metrics,
+    ).toEqual(before.metrics);
+
+    // The user-visible end of the chain, driven from the row that is actually
+    // in the database. The reported symptom was geometry, not styling: the
+    // basemap labelled Roseburg while the app drew no segment reaching it and
+    // put no marker on it, with the nearest app marker an unrelated airport.
+    // Persisting the stop is only half the fix; these assert the persisted
+    // stop reaches the two map sources that draw the line and the point.
+    const contract = buildMapPageContract(
+      getInitialFilters(),
+      buildPersistedFlightData(enriched),
+      buildPersistedFlightStatisticsContext(enriched),
+    );
+    expect(contract.routePathFlights?.map(({ id }) => id)).toEqual([
+      historical.id,
+    ]);
+    const overflown = enriched[0].routePath!.find(
+      (node) => node.kind === "waypoint",
+    )!.airport;
+    const routeLabel = `${base.code} → ${waypoint.code} → ${base.code}`;
+
+    const [drawnPath] = createFlightRoutePathFeatureCollection(
+      contract.routePathFlights ?? [],
+    ).features;
+    expect(drawnPath.properties.pathCodes).toEqual([
+      base.code,
+      waypoint.code,
+      base.code,
+    ]);
+    expect(drawnPath.properties.waypointCodes).toEqual([waypoint.code]);
+    expect(drawnPath.properties.hasWaypoints).toBe(true);
+    expect(drawnPath.properties.routeLabel).toBe(routeLabel);
+    // Two drawn legs whose joint is the overflown airport: the line reaches it
+    // instead of flying straight past, which is what the screenshot showed.
+    expect(drawnPath.geometry.coordinates).toHaveLength(2);
+    for (const position of [
+      drawnPath.geometry.coordinates[0].at(-1)!,
+      drawnPath.geometry.coordinates[1][0],
+    ]) {
+      expect(position[0]).toBeCloseTo(overflown.lon, 5);
+      expect(position[1]).toBeCloseTo(overflown.lat, 5);
+    }
+
+    const markers = createRouteWaypointFeatureCollection(
+      contract.routePathFlights ?? [],
+    );
+    expect(markers.features).toHaveLength(1);
+    expect(markers.features[0].properties.code).toBe(waypoint.code);
+    expect(markers.features[0].properties.name).toBeTruthy();
+    expect(markers.features[0].properties.routeLabels).toEqual([routeLabel]);
+    expect(markers.features[0].geometry.coordinates[0]).toBeCloseTo(
+      overflown.lon,
+      5,
+    );
+    expect(markers.features[0].geometry.coordinates[1]).toBeCloseTo(
+      overflown.lat,
+      5,
+    );
+    // Drawn, never counted: the visited-airport marker source, which carries
+    // "you have been here", still does not know about the overflown airport —
+    // while still carrying the airport the pilot actually landed at, so the
+    // check cannot pass by being empty.
+    const visited = createAirportFeatureCollection(
+      contract.airports,
+      contract.routes,
+    ).features.map((feature) => feature.properties.code);
+    expect(visited).toContain(base.code);
+    expect(visited).not.toContain(waypoint.code);
+
+    // Source identity is presentation-neutral and must survive untouched: the
+    // flight is still the same adopted row, not a re-identified one.
+    const [identity] = await withUserDb(userId, (tx) =>
+      tx
+        .select({
+          fingerprint: flights.fingerprint,
+          fingerprintVersion: flights.fingerprintVersion,
+          sourceRowKey: flights.sourceRowKey,
+          sourceType: flights.sourceType,
+        })
+        .from(flights)
+        .where(eq(flights.userId, userId)),
+    );
+    expect(identity.fingerprint).toBe(legacyFingerprint.value);
+    expect(identity.fingerprintVersion).toBe(legacyFingerprint.version);
+    expect(identity.sourceRowKey).toBeNull();
+
+    // A second re-upload of the same logbook is a no-op, not a second
+    // waypoint, a second flight, or a reshuffled path.
+    const again = await stageFlightImport(
+      userId,
+      upload("with-route-again.csv", `${foreflightCsv([leg(waypoint.code)])}\n`),
+      repositories,
+    );
+    await automaticallyCommitImport(userId, again, repository, repository);
+    const idempotent = await repository.listFlights(userId);
+    expect(idempotent).toHaveLength(1);
+    expect(
+      await withUserDb(userId, (tx) =>
+        tx
+          .select({
+            airportId: flightStops.airportId,
+            stopOrder: flightStops.stopOrder,
+            stopKind: flightStops.stopKind,
+            sourceField: flightStops.sourceField,
+          })
+          .from(flightStops)
+          .where(eq(flightStops.userId, userId))
+          .orderBy(flightStops.stopOrder),
+      ),
+    ).toEqual(stops);
+    // Still one line through the airport and one marker on it, not two.
+    const idempotentContract = buildMapPageContract(
+      getInitialFilters(),
+      buildPersistedFlightData(idempotent),
+      buildPersistedFlightStatisticsContext(idempotent),
+    );
+    expect(
+      createFlightRoutePathFeatureCollection(
+        idempotentContract.routePathFlights ?? [],
+      ).features.map((feature) => feature.properties.pathCodes),
+    ).toEqual([[base.code, waypoint.code, base.code]]);
+    expect(
+      createRouteWaypointFeatureCollection(
+        idempotentContract.routePathFlights ?? [],
+      ).features.map((feature) => feature.properties.code),
+    ).toEqual([waypoint.code]);
+  });
+
+  it("never rewrites a flight that a re-imported row only fuzzily resembles", async () => {
+    // The gate that keeps enrichment safe. A same-route, same-day candidate
+    // with no identity hit is a question for the user; answering it by
+    // mutating a stored flight would let a near miss redraw a real one.
+    const userId = await createUser("fuzzy-no-enrichment");
+    const suffix = alphaSuffix();
+    const [origin, waypoint, destination] = await seedAirports([
+      `K${suffix}`,
+      `R${suffix}`,
+      `P${suffix}`,
+    ]);
+    const repository = new DrizzleImportRepository();
+
+    await stageAndCommitAll(
+      userId,
+      repository,
+      foreflightCsv([
+        `2026-06-02,SYNTH-A,${origin.code},${destination.code},,120,9:00,1.5`,
+      ]),
+      "committed.csv",
+    );
+
+    // Same route and day, half an hour later: no fingerprint, source-row-key,
+    // or superseded-digest hit is possible.
+    const staged = await stageFlightImport(
+      userId,
+      upload(
+        "near-duplicate.csv",
+        foreflightCsv([
+          `2026-06-02,SYNTH-A,${origin.code},${destination.code},${waypoint.code},120,9:30,1.5`,
+        ]),
+      ),
+      { imports: repository, flights: repository, airports: repository },
+    );
+    const detail = await getUserImportBatch(
+      userId,
+      staged.batchId,
+      1,
+      100,
+      repository,
+    );
+    const [row] = detail?.rows.rows ?? [];
+    expect(row.duplicateCandidate?.signals.map(({ code }) => code)).not.toContain(
+      "exact-fingerprint",
+    );
+
+    await automaticallyCommitImport(userId, staged, repository, repository);
+    const stops = await withUserDb(userId, (tx) =>
+      tx
+        .select({ stopKind: flightStops.stopKind })
+        .from(flightStops)
+        .where(eq(flightStops.userId, userId)),
+    );
+    expect(stops.every(({ stopKind }) => stopKind === "landing")).toBe(true);
+    // ...and therefore nothing is drawn at the airport the near-miss row
+    // claimed to overfly.
+    const contract = buildMapPageContract(
+      getInitialFilters(),
+      buildPersistedFlightData(await repository.listFlights(userId)),
+      buildPersistedFlightStatisticsContext(await repository.listFlights(userId)),
+    );
+    expect(
+      createRouteWaypointFeatureCollection(contract.routePathFlights ?? [])
+        .features,
+    ).toEqual([]);
   });
 
   it("backfills fingerprint_version from the stop count the old algorithm used", async () => {

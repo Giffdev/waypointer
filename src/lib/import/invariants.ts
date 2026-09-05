@@ -143,6 +143,84 @@ export function assertCommittableRoute(
 }
 
 /**
+ * One node of a path offered for enrichment, already narrowed to a resolved
+ * airport so callers cannot accidentally persist an unplaced token.
+ */
+export type EnrichableRouteStop = {
+  identifier: string;
+  airportId: string;
+  kind: "landing" | "waypoint";
+  sourceField: ImportRouteNode["sourceField"];
+};
+
+/**
+ * The ordered path a staged row would persist, when — and only when — it adds
+ * an overflown waypoint to a flight that already exists.
+ *
+ * Non-throwing on purpose. `assertCommittableRoute` is the commit path and is
+ * allowed to fail an import; enrichment is an opportunistic repair of a flight
+ * the user already has, so anything it cannot describe with total confidence
+ * it declines to touch. Returns `undefined` unless every landing resolves,
+ * the path is within `MAX_ROUTE_PATH_NODES`, and at least one resolved
+ * waypoint is actually being contributed.
+ */
+export function enrichableRoutePath(
+  flight: ProposedImportFlight,
+): EnrichableRouteStop[] | undefined {
+  const landings = landingStopsOf(flight);
+  if (landings.length < 2) return undefined;
+  if (landings.some((node) => node.match.status !== "resolved")) {
+    return undefined;
+  }
+  const pathNodes = placedRouteNodesOf(flight).filter(
+    (node) => node.match.status === "resolved",
+  );
+  if (pathNodes.length > MAX_ROUTE_PATH_NODES) return undefined;
+  const path = pathNodes.flatMap((node) =>
+    node.match.status === "resolved"
+      ? [
+          {
+            identifier: node.identifier,
+            airportId: node.match.airportId,
+            kind: node.kind,
+            sourceField: node.sourceField,
+          },
+        ]
+      : [],
+  );
+  // A dropped landing would mean enriching a shorter route than the row
+  // describes, so the path is only offered when it still carries every one.
+  if (path.filter((stop) => stop.kind === "landing").length !== landings.length) {
+    return undefined;
+  }
+  return path.some((stop) => stop.kind === "waypoint") ? path : undefined;
+}
+
+/**
+ * The safety gate on enrichment: the path being offered must land at exactly
+ * the same airports, in exactly the same order, as the flight already on
+ * record.
+ *
+ * Identity, statistics, and every airport aggregate read the landing spine.
+ * Requiring it to match position-for-position is what makes adding a waypoint
+ * provably unable to move a single count — and what stops a near-miss
+ * candidate from rewriting a different flight's route.
+ */
+export function matchesLandingSpine(
+  path: readonly EnrichableRouteStop[],
+  landingAirportIds: readonly string[],
+): boolean {
+  const offered = path.flatMap((stop) =>
+    stop.kind === "landing" ? [stop.airportId] : [],
+  );
+  return (
+    offered.length >= 2 &&
+    offered.length === landingAirportIds.length &&
+    offered.every((airportId, index) => airportId === landingAirportIds[index])
+  );
+}
+
+/**
  * A row is committable when it has a date, at least two resolved **landing**
  * airports, and no error-severity issue. Unresolved *route* tokens are
  * warnings by construction, so they never block a commit.

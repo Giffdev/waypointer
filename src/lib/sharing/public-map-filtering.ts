@@ -31,6 +31,11 @@ export type PublicAirportFilterOption = {
 
 export type PublicMapSlice = {
   routes: PublicMapProjection["routes"];
+  /**
+   * Filtered flights that carry an overflown path, in projection order.
+   * Presentation only — `routes` and `summary` never read it.
+   */
+  routePathFlights: PublicMapProjection["flights"];
   summary: {
     flightCount: number;
     routeCount: number;
@@ -123,9 +128,11 @@ export function derivePublicMapSlice(
     { flightCount: number; forward: number; reverse: number }
   >();
   let flightCount = 0;
+  const routePathFlights: PublicMapProjection["flights"] = [];
   for (const flight of projection.flights) {
     if (!matchesFilters(flight, filters, routeAirportKeys)) continue;
     flightCount += 1;
+    if (flight.routePath) routePathFlights.push(flight);
     for (const { routeId, direction } of flight.routeLegs) {
       const counts = routeCounts.get(routeId) ?? {
         flightCount: 0,
@@ -157,6 +164,7 @@ export function derivePublicMapSlice(
   });
   return {
     routes,
+    routePathFlights,
     summary: summarizeRoutes(routes, flightCount),
     filteringAvailable: true,
   };

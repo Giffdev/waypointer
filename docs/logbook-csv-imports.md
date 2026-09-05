@@ -29,13 +29,19 @@ until you decide — which is exactly why they are named rather than left silent
 
 The **ForeFlight adapter only** reads the `Route` header. Route tokens become
 ordered *waypoints*: they are persisted as `flight_stops.stop_kind = 'waypoint'`
-and drawn on your private map as a dashed path through a hollow, labelled
-point, so a leg flown S05 → KRBG → S05 visibly bends through KRBG. They never
-count as a landing, never change `airportSequence`, never affect
-unique-airport, route, or landing statistics, and never become an airport
-marker — that marker means "you have been here". They are excluded from the
-public share contract, which stays landings-only. Only an explicit
-endpoint/landing column, or a deliberate user action, creates a landing.
+and drawn as a dashed path through a hollow, labelled point on your private map
+**and on your public shared map**, so a leg flown S05 → KRBG → S05 visibly bends
+through KRBG in both places. They never count as a landing, never change
+`airportSequence`, never affect unique-airport, route, or landing statistics,
+and never become an airport marker — that marker means "you have been here".
+The public share publishes the path geometry and nothing else: every published
+count is still built from landing stops alone. Only an explicit endpoint/landing
+column, or a deliberate user action, creates a landing.
+
+Your public map is a snapshot taken when you last published it. A map shared
+before route waypoints existed keeps drawing straight lines until you republish
+it from **Settings → Sharing**; republishing changes nothing else about what is
+shared.
 
 Generic and mapped CSV imports are deliberately **not** routed through this
 classifier. Their multi-airport columns are explicit airport-sequence fields
@@ -81,6 +87,19 @@ one, and a result that has since expired does not leave the batch permanently
 un-reprocessable. There is no reprocess button: uploading the file again does
 the same thing, and once the retention window has expired that is the only
 option anyway.
+
+An adopted row is not inert. If it supplies route waypoints the existing flight
+does not have, the commit adds them to that flight — this is how a logbook
+first imported before waypoint support gains its overflown airports without the
+pilot deleting and re-importing anything. The write is presentation only
+(`flight_stops` rows with `stop_kind = 'waypoint'`, plus `flights.route_raw`
+when it is empty) and is gated on the row having matched the flight by
+*identity* — its current fingerprint, its `sourceRowKey`, or a superseded
+fingerprint version — and landing at exactly the same airports in exactly the
+same order. Existing landing stops are re-ordered, never rewritten, so an
+`endpoint` stop is never demoted; a flight that already carries a waypoint is
+left alone; a merely similar (fuzzy) duplicate is never mutated without the
+user resolving it; and a second re-upload changes nothing.
 
 ## Presets
 

@@ -1175,6 +1175,7 @@ h1 span {
 .sharing-warning { background: rgba(246,199,101,.08); border: 1px solid rgba(246,199,101,.3); border-radius: 10px; display: grid; gap: 3px; padding: 12px; }
 .sharing-warning span, .sharing-snapshot { color: #9bb2b7; font-size: 12px; }
 .sharing-snapshot { border-left: 3px solid var(--teal); margin: 0; padding: 8px 11px; }
+.sharing-snapshot-note { color: #9bb2b7; font-size: 12px; line-height: 1.5; margin: 0; }
 .sharing-inclusion-summary { color: #bcd0d3; margin: 0; }
 .sharing-name-option { align-items: center; display: flex; flex-direction: row !important; gap: 9px !important; }
 .sharing-name-option input { height: 18px; width: 18px; }

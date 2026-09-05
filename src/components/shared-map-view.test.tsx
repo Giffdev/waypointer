@@ -19,11 +19,15 @@ vi.mock("@/components/globe-panel", () => ({
   default: ({
     airports,
     routes,
+    routePathFlights,
     viewMode,
     focusAirportCode,
   }: {
     airports: Array<{ code: string; name: string }>;
     routes: unknown[];
+    routePathFlights?: Array<{
+      routePath?: Array<{ airport: { code: string }; kind: string }>;
+    }>;
     viewMode: string;
     focusAirportCode: string;
   }) => (
@@ -31,6 +35,13 @@ vi.mock("@/components/globe-panel", () => ({
       data-testid="shared-globe"
       data-view-mode={viewMode}
       data-focus={focusAirportCode}
+      data-route-paths={(routePathFlights ?? [])
+        .map((flight) =>
+          (flight.routePath ?? [])
+            .map((node) => `${node.airport.code}:${node.kind}`)
+            .join(">"),
+        )
+        .join("|")}
     >
       {routes.length} routes ·{" "}
       {airports.map(({ code, name }) => `${code} ${name}`).join(" · ")}
@@ -43,6 +54,54 @@ describe("SharedMapView", () => {
     cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("draws an overflown waypoint the owner's map draws, without listing it as visited", async () => {
+    // Visual parity, not semantic conflation: the same ordered path reaches
+    // FlightGlobe, and the shared airport list — what the legend and the
+    // markers call "airports on this map" — is unchanged.
+    const map = sharedMap();
+    map.map.flights[0] = {
+      ...map.map.flights[0],
+      routePath: [
+        { airport: map.map.routes[0].origin, kind: "landing" },
+        {
+          airport: airport(
+            "KRBG",
+            "Roseburg Regional Airport",
+            "Roseburg",
+            "US",
+            43.2384,
+            -123.3565,
+          ),
+          kind: "waypoint",
+        },
+        { airport: map.map.routes[0].destination, kind: "landing" },
+      ],
+    } as (typeof map.map.flights)[number];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(map)));
+
+    render(<SharedMapView handle="public-handle" />);
+
+    const globe = await screen.findByTestId("shared-globe");
+    expect(globe).toHaveAttribute(
+      "data-route-paths",
+      "LAX:landing>KRBG:waypoint>SJD:landing",
+    );
+    // The overflown airport is drawn, never listed among the map's airports.
+    expect(globe).not.toHaveTextContent("KRBG Roseburg Regional Airport");
+    expect(globe).toHaveTextContent("LAX Los Angeles International Airport");
+    expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
+  });
+
+  it("renders a snapshot published before waypoints existed with no paths at all", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
+
+    render(<SharedMapView handle="public-handle" />);
+
+    const globe = await screen.findByTestId("shared-globe");
+    expect(globe).toHaveAttribute("data-route-paths", "");
+    expect(globe).toHaveTextContent("1 routes");
   });
 
   it("loads the public handle with real airport names and codes", async () => {
@@ -90,7 +149,7 @@ describe("SharedMapView", () => {
       "flat",
     );
     expect(fetch).toHaveBeenCalledWith(
-      "/api/shared/public-handle?contract=3",
+      "/api/shared/public-handle?contract=4",
       expect.objectContaining({ cache: "no-store" }),
     );
     expect(JSON.stringify(vi.mocked(fetch).mock.calls)).not.toContain("key");
@@ -509,7 +568,7 @@ describe("SharedMapView", () => {
 function sharedMap() {
   return {
     map: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       owner: { displayName: null },
       summary: { flightCount: 3, routeCount: 1 },
       routes: [

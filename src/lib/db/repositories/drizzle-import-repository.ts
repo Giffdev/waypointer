@@ -11,6 +11,7 @@ import {
   ne,
   notInArray,
   or,
+  sql,
 } from "drizzle-orm";
 import type { Airport, Flight, FlightSource } from "@/lib/flight-data";
 import { preferredAirportCode } from "@/lib/airport-preferred-code";
@@ -18,7 +19,11 @@ import type {
   ExistingFingerprintCandidate,
 } from "@/lib/import/dedupe";
 import { createAcceptedDuplicateFingerprint } from "@/lib/import/fingerprint";
-import { assertCommittableRoute } from "@/lib/import/invariants";
+import {
+  assertCommittableRoute,
+  enrichableRoutePath,
+  matchesLandingSpine,
+} from "@/lib/import/invariants";
 import {
   hasUnresolvedRouteToken,
   summarizePendingImportAttention,
@@ -1440,6 +1445,28 @@ export class DrizzleImportRepository
       }
 
       const committedAt = new Date();
+      // Route enrichment for adopted flights.
+      //
+      // A re-import of a logbook that was first imported before route
+      // waypoints were persisted resolves every row to a flight that already
+      // exists, so the loop above writes nothing: the auto-adoption path marks
+      // an exact duplicate `skipped`, and even an explicit `skip_as_duplicate`
+      // only attaches a source. The overflown airport the new parser
+      // extracted was therefore discarded on every re-upload, and the pilot
+      // had no way to make it appear short of deleting and re-importing the
+      // flight. This pass writes exactly that missing presentation data —
+      // never identity, never a landing, never a statistic — onto the flight
+      // the row was adopted into.
+      for (const row of databaseRows) {
+        if (row.userDecision === "pending") continue;
+        await enrichAdoptedFlightRoute(
+          tx,
+          userId,
+          restoreRow(row),
+          resolvedFlightByRow,
+          committedAt,
+        );
+      }
       await scrubDecidedRawSnapshots(tx, userId, batch.id, committedAt);
       const status = databaseRows.some(
         (row) => row.userDecision === "pending",
@@ -1932,6 +1959,134 @@ function persistedSourceField(
   if (sourceField === "manual") return "manual";
   if (sourceField === "Route") return "route";
   return "endpoint";
+}
+
+/**
+ * Adds the overflown waypoints a re-imported row supplies to the flight it was
+ * adopted into, and nothing else.
+ *
+ * Every guard here exists to make the write provably invisible to identity and
+ * statistics, and safe to repeat:
+ *
+ * - **Exact identity only.** The row must have resolved to the target through
+ *   the adoption chain (`exact-fingerprint`: current digest, source-row key,
+ *   or a superseded digest). A fuzzy same-route candidate is a *question* for
+ *   the user, and this function must never answer it by mutating a flight.
+ * - **Same landing spine.** The offered path must land at the same airports in
+ *   the same order as the flight on record, so `airportSequence`, unique
+ *   airports, routes, and every landing count are arithmetically unchanged.
+ * - **Never overwrite richer data.** A flight that already has a waypoint stop
+ *   is left alone; this repairs an absence, it does not arbitrate between two
+ *   descriptions of a route.
+ * - **Idempotent.** The second condition is also what makes a second re-upload
+ *   a no-op.
+ *
+ * Existing landing rows are re-ordered, never deleted and re-inserted, so an
+ * `endpoint` stop keeps its `source_field` and can never be demoted.
+ */
+async function enrichAdoptedFlightRoute(
+  tx: DatabaseTransaction,
+  userId: string,
+  row: StoredImportRow,
+  resolvedFlightByRow: Map<string, string>,
+  now: Date,
+): Promise<boolean> {
+  const candidate = row.duplicateCandidate;
+  if (
+    !row.commitReady ||
+    !candidate ||
+    candidate.resolution !== "skip_as_duplicate" ||
+    !candidate.signals.some((signal) => signal.code === "exact-fingerprint")
+  ) {
+    return false;
+  }
+  const flightId =
+    candidate.scope === "existing-flight"
+      ? candidate.candidateId
+      : resolvedFlightByRow.get(candidate.candidateId);
+  if (!flightId) return false;
+
+  const path = enrichableRoutePath(row.proposedFlight);
+  if (!path) return false;
+
+  const [flight] = await tx
+    .select({ id: flightTable.id, routeRaw: flightTable.routeRaw })
+    .from(flightTable)
+    .where(and(eq(flightTable.id, flightId), eq(flightTable.userId, userId)))
+    .limit(1)
+    .for("update");
+  if (!flight) return false;
+
+  const existing = await tx
+    .select()
+    .from(flightStops)
+    .where(
+      and(eq(flightStops.userId, userId), eq(flightStops.flightId, flightId)),
+    )
+    .orderBy(asc(flightStops.stopOrder));
+  if (existing.some((stop) => stop.stopKind === "waypoint")) return false;
+  const landings = existing.filter((stop) => stop.stopKind === "landing");
+  if (landings.length !== existing.length) return false;
+  if (!matchesLandingSpine(path, landings.map(({ airportId }) => airportId))) {
+    return false;
+  }
+
+  // Two-phase renumber. `(flight_id, stop_order)` is the primary key, so the
+  // existing rows are first parked beyond any order this path can use; without
+  // it, shifting a landing down one slot collides with the row still sitting
+  // there.
+  const offset = existing.length + path.length;
+  const reordered: Array<{ from: number; to: number }> = [];
+  const waypoints: Array<typeof flightStops.$inferInsert> = [];
+  let landingIndex = 0;
+  for (const [stopOrder, stop] of path.entries()) {
+    if (stop.kind === "landing") {
+      reordered.push({
+        from: landings[landingIndex++].stopOrder + offset,
+        to: stopOrder,
+      });
+      continue;
+    }
+    waypoints.push({
+      userId,
+      flightId,
+      stopOrder,
+      airportId: stop.airportId,
+      stopKind: "waypoint",
+      sourceField: persistedSourceField(stop.sourceField),
+    });
+  }
+  if (waypoints.length === 0) return false;
+
+  await tx
+    .update(flightStops)
+    .set({ stopOrder: sql`${flightStops.stopOrder} + ${offset}` })
+    .where(
+      and(eq(flightStops.userId, userId), eq(flightStops.flightId, flightId)),
+    );
+  for (const { from, to } of reordered) {
+    await tx
+      .update(flightStops)
+      .set({ stopOrder: to, updatedAt: now })
+      .where(
+        and(
+          eq(flightStops.userId, userId),
+          eq(flightStops.flightId, flightId),
+          eq(flightStops.stopOrder, from),
+        ),
+      );
+  }
+  await tx.insert(flightStops).values(waypoints);
+
+  // The raw route text is presentation only and is filled in solely when the
+  // flight has none, so a richer stored value is never replaced.
+  if (!flight.routeRaw && row.proposedFlight.routeRaw) {
+    await tx
+      .update(flightTable)
+      .set({ routeRaw: row.proposedFlight.routeRaw, updatedAt: now })
+      .where(and(eq(flightTable.id, flightId), eq(flightTable.userId, userId)));
+  }
+  return true;
 }
 
 async function insertFlightStops(
