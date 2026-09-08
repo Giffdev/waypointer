@@ -3090,6 +3090,15 @@ describe("unfinished import recovery", () => {
     expect(
       await screen.findByLabelText("Unresolved import rows"),
     ).toBeInTheDocument();
+    // The resumable batch is never re-fetched or cleared by the resume
+    // click, so it is still truthy in state when BatchReview mounts. The
+    // banner staying hidden behind it can only be the `activeBatchId`
+    // guard in the render.
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/resume",
+      ),
+    ).toHaveLength(1);
     expect(
       screen.queryByRole("button", { name: "Resume import" }),
     ).not.toBeInTheDocument();
@@ -3143,6 +3152,12 @@ describe("unfinished import recovery", () => {
   });
 
   it("keeps the banner away while an import is already selected", async () => {
+    // The resumable batch fetched on mount is never re-fetched or cleared by
+    // the upload path, so it is still sitting in state, truthy, when the
+    // upload completes. The banner disappearing here can only be the
+    // `activeBatchId ? undefined : resumableBatch` guard in the render — if
+    // that guard is removed, the resumable batch is still there to render
+    // and this assertion fails.
     const user = userEvent.setup();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -3183,6 +3198,14 @@ describe("unfinished import recovery", () => {
     expect(
       screen.queryByRole("button", { name: "Resume import" }),
     ).not.toBeInTheDocument();
+    // Proves the banner data is still present rather than having been
+    // cleared: only one fetch ever populated `resumableBatch`, and it is not
+    // this one.
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/api/import/resume",
+      ),
+    ).toHaveLength(1);
   });
 });
 

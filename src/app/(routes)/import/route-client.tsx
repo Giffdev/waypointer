@@ -687,7 +687,6 @@ function ImportWorkflow({
       setCompletion(response.completion);
       setRedirectBatchId(response.batchId);
       setActiveBatchId(response.batchId);
-      setResumableBatch(undefined);
       setPage(1);
       setPhase(phaseForStatus(response.status));
       setFile(null);
@@ -977,12 +976,12 @@ function ImportWorkflow({
               setDetail(undefined);
               setCompletion(undefined);
               setActiveBatchId(batchId);
-              setResumableBatch(undefined);
               setPage(1);
               setError(undefined);
             }}
           />
-        </div>      </section>
+        </div>
+      </section>
     </main>
   );
 }

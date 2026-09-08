@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { DrizzleImportRepository } from "@/lib/db/repositories/drizzle-import-repository";
 import type { DatabaseTransaction } from "@/lib/db";
 import { flightSources, importBatches, importRows } from "@/lib/db/schema";
+import {
+  RESUMABLE_IMPORT_BATCH_STATUSES,
+  RETRYABLE_IMPORT_FAILURE_CODES,
+} from "./resume";
 import { InMemoryImportRepository } from "./in-memory-repository";
 import { createFileFingerprint } from "./fingerprint";
 
-type RecordedSelect = { table: unknown; limit?: number };
+type RecordedSelect = { table: unknown; limit?: number; where?: unknown };
 
 type RecordingBuilder = {
   from: (table: unknown) => RecordingBuilder;
@@ -36,7 +42,8 @@ function recordingTransaction(
         recorded.push(entry);
         return builder;
       },
-      where() {
+      where(condition) {
+        entry.where = condition;
         return builder;
       },
       orderBy() {
@@ -120,6 +127,67 @@ describe("DrizzleImportRepository.findLatestActionableBatch", () => {
     expect(
       recorded.filter((entry) => entry.table === flightSources),
     ).toHaveLength(1);
+  });
+
+  it("filters actionable statuses and retryable failure codes in the SQL predicate, not in memory", async () => {
+    // Compile the actual condition object passed to `.where()` through the
+    // real Postgres dialect, the same way Drizzle would before sending it to
+    // the database. This proves the filter is a real SQL predicate rather
+    // than a string convention: it fails if a terminal status is added to
+    // the `inArray`, or if the retryable-failure-code condition is dropped
+    // or weakened, without needing a live database.
+    const recorded: RecordedSelect[] = [];
+    const repository = new DrizzleImportRepository(async (_userId, work) =>
+      work(
+        recordingTransaction(
+          new Map<unknown, unknown[]>([
+            [importBatches, [batchRow()]],
+            [importRows, []],
+            [flightSources, []],
+          ]),
+          recorded,
+        ),
+      ),
+    );
+
+    await repository.findLatestActionableBatch(
+      "22222222-2222-4222-8222-222222222222",
+    );
+
+    const batchSelect = recorded.find((entry) => entry.table === importBatches);
+    const { sql: text, params } = new PgDialect().sqlToQuery(
+      batchSelect!.where as SQL,
+    );
+
+    expect(text).toContain('"status" in');
+    expect(text).toContain('"failure_code" in');
+
+    for (const status of RESUMABLE_IMPORT_BATCH_STATUSES) {
+      expect(params, `missing actionable status ${status}`).toContain(status);
+    }
+    for (const code of RETRYABLE_IMPORT_FAILURE_CODES) {
+      expect(params, `missing retryable failure code ${code}`).toContain(
+        code,
+      );
+    }
+    // None of these ever belong in the actionable status list: they are
+    // finished, and re-surfacing them is the import history this query
+    // replaced.
+    for (const terminalStatus of [
+      "committed",
+      "deduplicated",
+      "cancelled",
+      "quarantined",
+      "expired",
+    ]) {
+      expect(
+        params,
+        `terminal status ${terminalStatus} leaked into the query`,
+      ).not.toContain(terminalStatus);
+    }
+    // A failure code the retry button does not accept must not make a
+    // failed batch actionable.
+    expect(params).not.toContain("malware-detected");
   });
 
   it("hydrates nothing when no batch is actionable", async () => {
