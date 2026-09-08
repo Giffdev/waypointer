@@ -41,6 +41,22 @@ export function sharingErrorMessage(body: unknown): string {
   return SHARING_UPDATE_FAILED_MESSAGE;
 }
 
+/**
+ * A mid-rollback server still answers with the old `publishedFlightCount`
+ * field, and this bundle reads `sharedFlightCount`. Falling back keeps the
+ * owner panel showing a count instead of "undefined flights" for the minutes
+ * that skew lasts.
+ */
+function normalizeShareStatus(
+  sharing: OwnerShareStatusResponse & { publishedFlightCount?: number },
+): OwnerShareStatusResponse {
+  return {
+    ...sharing,
+    sharedFlightCount:
+      sharing.sharedFlightCount ?? sharing.publishedFlightCount ?? 0,
+  };
+}
+
 async function fetchShareStatus(
   signal?: AbortSignal,
 ): Promise<OwnerShareStatusResponse> {
@@ -50,7 +66,7 @@ async function fetchShareStatus(
   });
   const body = await response.json();
   if (!response.ok) throw new Error(sharingErrorMessage(body));
-  return body.sharing as OwnerShareStatusResponse;
+  return normalizeShareStatus(body.sharing);
 }
 
 export type OwnerSharingController = {
@@ -178,7 +194,10 @@ export function useOwnerSharingStatus(
           const body = await response.json();
           if (!response.ok) throw new Error(sharingErrorMessage(body));
           if (requestIdRef.current !== id) return;
-          setStatusState({ phase: "loaded", value: body.sharing });
+          setStatusState({
+            phase: "loaded",
+            value: normalizeShareStatus(body.sharing),
+          });
           setMessage(successMessage);
         })
         .catch((requestError) => {

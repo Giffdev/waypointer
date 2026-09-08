@@ -3,6 +3,7 @@ import {
   getPublicMapProjection,
   publicHandleRateLimitKey,
   ShareNotFoundError,
+  ShareValidationError,
   toLegacyPublicMapProjection,
   toV3PublicMapProjection,
 } from "@/lib/sharing/service";
@@ -79,6 +80,22 @@ export async function GET(
         { error: { code: "not-found", message: "Waypointer shared map not found." } },
         { status: 404, headers: PUBLIC_HEADERS },
       );
+    }
+    // A live map that cannot be projected returns 503 until the offending
+    // owner row changes, and no owner action clears it, so the failure has
+    // to be visible to an operator. Logged in exactly the shape the owner
+    // enable route uses: the validation code, or the error type for anything
+    // else. Never the handle, owner id, or any flight or airport value —
+    // this is an unauthenticated path, and its log line must stay free of
+    // private data.
+    if (error instanceof ShareValidationError) {
+      console.error("Shared map projection validation failed.", {
+        code: error.code,
+      });
+    } else {
+      console.error("Shared map projection failed.", {
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
     }
     return Response.json(
       {

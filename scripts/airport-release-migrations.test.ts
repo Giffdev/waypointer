@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   AIRPORT_RELEASE_BOUNDARY_FLOOR_TAG,
@@ -302,6 +304,64 @@ describe("airport release migration ledger targeting", () => {
         diagnosticCode: "migration-ledger-mismatch",
       }),
     );
+  });
+
+  it("rolls 0019 back to a ledger boundary its schema verification accepts", async () => {
+    // The rollback re-attaches the invalidation triggers, and
+    // `verifyProductMigrationState` asserts those triggers are absent at
+    // boundary 0019 and present before it. A rollback that restores the
+    // schema but leaves 0019 in the ledger therefore reports schema drift
+    // and blocks the release tooling on the build it was meant to rescue.
+    const manifest = await loadAirportReleaseMigrationManifest();
+    const rollback = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../drizzle/rollback/0019_live_shared_maps_down.sql",
+          import.meta.url,
+        ),
+      ),
+      "utf8",
+    );
+    const liveSharedMaps = manifest.entries.find(
+      ({ tag }) => tag === "0019_live_shared_maps",
+    );
+    expect(liveSharedMaps).toBeDefined();
+    // Comment text is not a rollback step: only what the migration role will
+    // actually execute counts.
+    const executable = rollback.replace(/--[^\r\n]*/g, "");
+    expect(executable).toMatch(
+      /CREATE TRIGGER "flights_invalidate_selected_share"/,
+    );
+    expect(executable).toMatch(
+      /CREATE TRIGGER "flight_stops_invalidate_selected_share"/,
+    );
+
+    // Exactly one ledger statement, addressed by 0019's pinned manifest hash
+    // — never by count arithmetic, which would trim whichever row happened to
+    // be last.
+    const ledgerDeletes =
+      executable.match(
+        /delete\s+from\s+"?drizzle"?\s*\.\s*"?__drizzle_migrations"?[^;]*;/gi,
+      ) ?? [];
+    expect(ledgerDeletes).toHaveLength(1);
+    const pinnedHashes = ledgerDeletes[0]!.match(/'[a-f0-9]{64}'/g) ?? [];
+    expect(pinnedHashes).toEqual([`'${liveSharedMaps!.sha256}'`]);
+
+    // Executed against the ledger this release produces, that statement is
+    // the difference between boundary 0019 and boundary 0018.
+    const rows = manifest.entries.map((migration) => ({
+      hash: migration.sha256,
+      created_at: migration.createdAt,
+    }));
+    expect(validateAirportMigrationLedger(rows, manifest, "production")).toBe(
+      "0019",
+    );
+    const deletedHash = pinnedHashes[0]!.slice(1, -1);
+    const rolledBack = rows.filter((row) => row.hash !== deletedHash);
+    expect(rolledBack).toHaveLength(rows.length - 1);
+    expect(
+      validateAirportMigrationLedger(rolledBack, manifest, "production"),
+    ).toBe("0018");
   });
 
   it("allows an empty ledger only for disposable test databases", async () => {
