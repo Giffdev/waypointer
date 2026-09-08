@@ -56,6 +56,11 @@ import {
   airportResultLabel,
 } from "@/components/airport-search-picker";
 import { CSV_MIME_TYPES } from "@/lib/import/csv-mime";
+import {
+  describeResumableImportAction,
+  isRetryableImportFailureCode,
+  resumableImportAction,
+} from "@/lib/import/resume";
 import { CsvDecodeError, decodeCsvBytes } from "@/lib/import/csv-decode";
 
 const PAGE_SIZE = 25;
@@ -219,7 +224,7 @@ function ImportWorkflow({
   });
   const [uploadBusy, setUploadBusy] = useState(false);
   const [phase, setPhase] = useState<ClientPhase>("idle");
-  const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
+  const [resumableBatch, setResumableBatch] = useState<ImportBatchSummary>();
   const [activeBatchId, setActiveBatchId] = useState<string>();
   const [detail, setDetail] = useState<OwnerImportBatchDetail>();
   const [page, setPage] = useState(1);
@@ -349,11 +354,13 @@ function ImportWorkflow({
     };
   }, []);
 
-  const loadBatches = useCallback(async () => {
-    const response = await apiRequest<{ batches: unknown[] }>(
-      "/api/import/batches",
+  const loadResumableBatch = useCallback(async () => {
+    const response = await apiRequest<{ batch?: unknown }>(
+      "/api/import/resume",
     );
-    setBatches(response.batches.map(normalizeBatchSummary));
+    setResumableBatch(
+      response.batch ? normalizeBatchSummary(response.batch) : undefined,
+    );
   }, []);
 
   const loadDetail = useCallback(
@@ -383,10 +390,6 @@ function ImportWorkflow({
       setCompletion(completionFromCounts(next.counts));
       setPage(next.rows.page);
       setPhase(phaseForStatus(next.status));
-      setBatches((current) => [
-        next,
-        ...current.filter((batch) => batch.id !== next.id),
-      ]);
       if (next.status === "failed") {
         setError(next.error?.message ?? "The import failed.");
       } else {
@@ -401,12 +404,12 @@ function ImportWorkflow({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      loadBatches().catch(() => {
-        setError("Import history is temporarily unavailable.");
+      loadResumableBatch().catch(() => {
+        setError("Any unfinished import could not be checked right now.");
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadBatches]);
+  }, [loadResumableBatch]);
 
   useEffect(() => {
     if (
@@ -684,6 +687,7 @@ function ImportWorkflow({
       setCompletion(response.completion);
       setRedirectBatchId(response.batchId);
       setActiveBatchId(response.batchId);
+      setResumableBatch(undefined);
       setPage(1);
       setPhase(phaseForStatus(response.status));
       setFile(null);
@@ -692,11 +696,6 @@ function ImportWorkflow({
       let refreshFailed = false;
       try {
         await loadDetail(response.batchId, 1);
-      } catch {
-        refreshFailed = true;
-      }
-      try {
-        await loadBatches();
       } catch {
         refreshFailed = true;
       }
@@ -723,7 +722,6 @@ function ImportWorkflow({
       });
       await loadDetail(activeBatchId, page);
       restartPollingState();
-      await loadBatches();
     } catch (actionError) {
       setError(messageFor(actionError));
     }
@@ -738,7 +736,6 @@ function ImportWorkflow({
       });
       await loadDetail(activeBatchId, page);
       restartPollingState();
-      await loadBatches();
     } catch (actionError) {
       setError(messageFor(actionError));
     }
@@ -927,12 +924,7 @@ function ImportWorkflow({
               ) : null}
               {durableImportEnabled &&
               detail.status === "failed" &&
-              [
-                "scanner-unavailable",
-                "scanner-timeout",
-                "scanner-signatures-stale",
-                "processing-failed",
-              ].includes(detail.error?.code ?? "") ? (
+              isRetryableImportFailureCode(detail.error?.code) ? (
                 <button type="button" onClick={retryActiveImport}>
                   Retry import
                 </button>
@@ -976,22 +968,21 @@ function ImportWorkflow({
             </>
           ) : null}
 
-          <BatchHistory
-            batches={batches}
-            activeBatchId={activeBatchId}
-            onSelect={(batchId) => {
+          <ResumeImportBanner
+            batch={activeBatchId ? undefined : resumableBatch}
+            onResume={(batchId) => {
               detailRequest.current += 1;
               resetPollingState();
               setRedirectBatchId(undefined);
               setDetail(undefined);
               setCompletion(undefined);
               setActiveBatchId(batchId);
+              setResumableBatch(undefined);
               setPage(1);
               setError(undefined);
             }}
           />
-        </div>
-      </section>
+        </div>      </section>
     </main>
   );
 }
@@ -1406,40 +1397,38 @@ function AirportCorrectionSearch({
   );
 }
 
-function BatchHistory({
-  batches,
-  activeBatchId,
-  onSelect,
+/**
+ * The single recovery affordance left on the import screen.
+ *
+ * The completed-batch history this replaced showed every import a user had
+ * ever run, and was also the only way to re-select a batch after a reload.
+ * Only the second part was load-bearing, so this renders at most one batch —
+ * the newest one that still owes the user something — and only when nothing
+ * is already selected. Choosing it goes through the same `activeBatchId` path
+ * the history used, so review, polling, retry, and cancel are unchanged.
+ */
+function ResumeImportBanner({
+  batch,
+  onResume,
 }: {
-  batches: ImportBatchSummary[];
-  activeBatchId?: string;
-  onSelect: (batchId: string) => void;
+  batch?: ImportBatchSummary;
+  onResume: (batchId: string) => void;
 }) {
-  if (batches.length === 0) return null;
+  const action = batch ? resumableImportAction(batch) : undefined;
+  if (!batch || !action) return null;
   return (
-    <section aria-labelledby="import-history-heading">
-      <div className="section-heading record-heading">
-        <div>
-          <p className="eyebrow">Import history</p>
-          <h2 id="import-history-heading">Your batches</h2>
-        </div>
-      </div>
-      <div className="workflow-grid">
-        {batches.map((batch) => (
-          <button
-            key={batch.id}
-            type="button"
-            aria-current={batch.id === activeBatchId ? "true" : undefined}
-            onClick={() => onSelect(batch.id)}
-          >
-            <strong>{batch.fileName}</strong>
-            <small style={{ display: "block" }}>
-              {batch.status} · {batch.counts.totalRows} rows
-            </small>
-          </button>
-        ))}
-      </div>
-    </section>
+    <div className="local-source-status" role="status">
+      <AlertTriangle size={19} aria-hidden="true" />
+      <span>
+        <strong>Pick up where you left off</strong>
+        <small>
+          {batch.fileName} — {describeResumableImportAction(action)}
+        </small>
+        <button type="button" onClick={() => onResume(batch.id)}>
+          Resume import
+        </button>
+      </span>
+    </div>
   );
 }
 

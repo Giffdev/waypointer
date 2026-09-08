@@ -2253,7 +2253,7 @@ describe("import polling controls", () => {
           },
         });
       }
-      return jsonResponse({ batches: [batch] });
+      return jsonResponse({ batch });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2268,7 +2268,7 @@ describe("import polling controls", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     fireEvent.click(
-      screen.getByRole("button", { name: /changing-timestamps\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2346,7 +2346,7 @@ describe("import polling controls", () => {
           },
         });
       }
-      return jsonResponse({ batches: [batch] });
+      return jsonResponse({ batch });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2361,7 +2361,7 @@ describe("import polling controls", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     fireEvent.click(
-      screen.getByRole("button", { name: /terminal-after-twenty\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2439,7 +2439,7 @@ describe("import polling controls", () => {
           },
         });
       }
-      return jsonResponse({ batches: [batch] });
+      return jsonResponse({ batch });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2455,7 +2455,7 @@ describe("import polling controls", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     fireEvent.click(
-      screen.getByRole("button", { name: /cancelling\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2521,7 +2521,7 @@ describe("import polling controls", () => {
           },
         });
       }
-      return jsonResponse({ batches: [batch] });
+      return jsonResponse({ batch });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2536,7 +2536,7 @@ describe("import polling controls", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     fireEvent.click(
-      screen.getByRole("button", { name: /rejected-polls\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2610,7 +2610,7 @@ describe("import polling controls", () => {
             }),
           );
         }
-        return Promise.resolve(jsonResponse({ batches: [batch] }));
+        return Promise.resolve(jsonResponse({ batch }));
       },
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -2625,7 +2625,7 @@ describe("import polling controls", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    fireEvent.click(screen.getByRole("button", { name: /hung-polls\.csv/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume import" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
@@ -2744,7 +2744,7 @@ describe("import polling controls", () => {
             }),
           );
         }
-        return Promise.resolve(jsonResponse({ batches: [batch] }));
+        return Promise.resolve(jsonResponse({ batch }));
       },
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -2760,7 +2760,7 @@ describe("import polling controls", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     fireEvent.click(
-      screen.getByRole("button", { name: /cleaned-up-poll\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2842,7 +2842,7 @@ describe("import polling controls", () => {
           },
         });
       }
-      return jsonResponse({ batches: [batch] });
+      return jsonResponse({ batch });
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2858,7 +2858,7 @@ describe("import polling controls", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("button", { name: /long-running\.csv/i }),
+      screen.getByRole("button", { name: "Resume import" }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -2906,6 +2906,283 @@ describe("import polling controls", () => {
       screen.queryByRole("button", { name: "Resume status checks" }),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Processing uploaded CSV")).toBeInTheDocument();
+  });
+});
+
+describe("unfinished import recovery", () => {
+  const reviewRow = {
+    id: "row-resume",
+    batchId: "batch-resume",
+    rowNumber: 2,
+    rawSnapshot: null,
+    proposedFlight: {
+      date: "2026-04-05",
+      origin: { status: "not-found", identifier: "ZZZZ" },
+      destination: {
+        status: "resolved",
+        identifier: "KJFK",
+        airportId: "airport-jfk",
+        airport: {
+          code: "JFK",
+          name: "New York",
+          city: "New York",
+          country: "US",
+          lat: 40,
+          lon: -73,
+          facility: "commercial",
+        },
+      },
+      kind: "commercial",
+      role: "passenger",
+      flightNumber: "AS100",
+      source: "FlightRadar24",
+    },
+    issues: [],
+    validationState: "invalid",
+    commitReady: false,
+    decision: "pending",
+    provenance: {
+      adapterId: "myflightradar24-v1",
+      adapterLabel: "myFlightradar24 Flight Diary CSV",
+      adapterVersion: 1,
+      source: "FlightRadar24",
+      sourceRowNumber: 2,
+    },
+  };
+
+  const summary = (overrides: Record<string, unknown> = {}) => ({
+    contractVersion: 1,
+    id: "batch-resume",
+    fileName: "unfinished.csv",
+    adapterId: "myflightradar24-v1",
+    adapterLabel: "myFlightradar24 Flight Diary CSV",
+    adapterVersion: 1,
+    source: "FlightRadar24",
+    status: "review",
+    counts: {
+      totalRows: 3,
+      parsedRows: 3,
+      readyRows: 0,
+      acceptedRows: 0,
+      skippedRows: 0,
+      pendingRows: 1,
+      importedRows: 2,
+      committedFlights: 0,
+      attachedSources: 0,
+    },
+    createdAt: "2026-08-20T00:00:00.000Z",
+    updatedAt: "2026-08-20T00:00:01.000Z",
+    ...overrides,
+  });
+
+  const detail = (overrides: Record<string, unknown> = {}) => ({
+    ...summary(overrides),
+    rows: {
+      page: 1,
+      pageSize: 25,
+      totalRows: 1,
+      totalPages: 1,
+      rows: [reviewRow],
+    },
+  });
+
+  function stubResume(batch: unknown, batchDetail: unknown = detail()) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/resume") return jsonResponse({ batch });
+      if (url.startsWith("/api/import/batches/batch-resume")) {
+        return jsonResponse({ batch: batchDetail });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("shows nothing at all on a healthy visit with no unfinished import", async () => {
+    const fetchMock = stubResume(null);
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input]) => String(input) === "/api/import/resume",
+        ),
+      ).toHaveLength(1),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Resume import" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Pick up where you left off")).not.toBeInTheDocument();
+    // The completed-import history this replaced rendered a heading and one
+    // button per batch. Neither may come back.
+    expect(screen.queryByText("Your batches")).not.toBeInTheDocument();
+    expect(screen.queryByText("Import history")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("never offers to resume a finished, superseded, or unrecoverable batch", async () => {
+    for (const finished of [
+      { status: "committed" },
+      { status: "deduplicated" },
+      { status: "cancelled" },
+      { status: "quarantined" },
+      { status: "expired" },
+      {
+        status: "failed",
+        error: { code: "malware-detected", message: "Malware detected." },
+      },
+    ]) {
+      const fetchMock = stubResume(summary(finished));
+      render(
+        <ImportRouteClientView
+          data={data}
+          apiEnabled
+          developmentPreviewEnabled={false}
+        />,
+      );
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(
+            ([input]) => String(input) === "/api/import/resume",
+          ),
+        ).toHaveLength(1),
+      );
+      expect(
+        screen.queryByRole("button", { name: "Resume import" }),
+      ).not.toBeInTheDocument();
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("offers exactly one resume banner for a review batch and reopens its review", async () => {
+    const fetchMock = stubResume(summary());
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+
+    const resume = await screen.findByRole("button", { name: "Resume import" });
+    expect(screen.getAllByRole("button", { name: "Resume import" })).toHaveLength(
+      1,
+    );
+    expect(screen.getByText(/unfinished\.csv/)).toHaveTextContent(
+      /rows still need your review/i,
+    );
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).startsWith("/api/import/batches/batch-resume"),
+      ),
+    ).toHaveLength(0);
+
+    fireEvent.click(resume);
+
+    expect(
+      await screen.findByLabelText("Unresolved import rows"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Resume import" }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).startsWith("/api/import/batches/batch-resume"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("resumes an import that never finished and a failure the retry path accepts", async () => {
+    for (const [batch, wording] of [
+      [summary({ status: "processing" }), /did not finish/i],
+      [
+        summary({
+          status: "failed",
+          error: {
+            code: "scanner-unavailable",
+            message: "The scanner is unavailable.",
+          },
+        }),
+        /can be retried/i,
+      ],
+    ] as const) {
+      const fetchMock = stubResume(batch, detail(batch));
+      render(
+        <ImportRouteClientView
+          data={data}
+          apiEnabled
+          developmentPreviewEnabled
+          durableImportEnabled
+        />,
+      );
+
+      const resume = await screen.findByRole("button", {
+        name: "Resume import",
+      });
+      expect(screen.getByText(/unfinished\.csv/)).toHaveTextContent(wording);
+      fireEvent.click(resume);
+
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.filter(([input]) =>
+            String(input).startsWith("/api/import/batches/batch-resume"),
+          ).length,
+        ).toBeGreaterThan(0),
+      );
+      cleanup();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the banner away while an import is already selected", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/import/upload") {
+        return jsonResponse({
+          batchId: "batch-resume",
+          status: "review",
+          reused: false,
+        });
+      }
+      if (url === "/api/import/resume") {
+        return jsonResponse({ batch: summary() });
+      }
+      if (url.startsWith("/api/import/batches/batch-resume")) {
+        return jsonResponse({ batch: detail() });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ImportRouteClientView
+        data={data}
+        apiEnabled
+        developmentPreviewEnabled={false}
+      />,
+    );
+    await screen.findByRole("button", { name: "Resume import" });
+
+    await user.upload(
+      screen.getByLabelText("Choose one supported CSV"),
+      new File([fr24Csv], "unfinished.csv", { type: "text/csv" }),
+    );
+
+    expect(
+      await screen.findByLabelText("Unresolved import rows"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Resume import" }),
+    ).not.toBeInTheDocument();
   });
 });
 

@@ -99,6 +99,17 @@ export interface ImportRepository {
   expireBatchAndScrub(userId: string, batchId: string): Promise<void>;
   listBatches(userId: string): Promise<ImportBatchSummary[]>;
   /**
+   * The single newest batch that still owes the user something — rows to
+   * review, an unfinished run to pick back up, or a retryable failure.
+   *
+   * Deliberately not `listBatches(...)[0]`. The import screen only needs one
+   * recovery target, and hydrating an account's whole import corpus (plus a
+   * per-batch row/source summary for each one) to render a single banner is
+   * work that grows without bound as a user imports more files. Implementations
+   * must filter by status in the query and return at most one batch.
+   */
+  findLatestActionableBatch(userId: string): Promise<ImportBatchSummary | null>;
+  /**
    * One aggregate for every surface that shows an import badge (map, flights,
    * import). Counting attention centrally is what lets the pipeline stop
    * silently auto-redirecting users past rows it could not resolve: the work

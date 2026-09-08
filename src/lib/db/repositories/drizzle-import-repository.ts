@@ -34,6 +34,10 @@ import {
   SUPERSEDABLE_IMPORT_BATCH_STATUSES,
 } from "@/lib/import/batch-lifecycle";
 import {
+  RESUMABLE_IMPORT_BATCH_STATUSES,
+  RETRYABLE_IMPORT_FAILURE_CODES,
+} from "@/lib/import/resume";
+import {
   airportSearchPhoneticKeys,
   selectBestAirportAliasMatches,
 } from "@/lib/import/airport-resolution";
@@ -705,6 +709,40 @@ export class DrizzleImportRepository
         .where(eq(importBatches.userId, userId))
         .orderBy(desc(importBatches.createdAt));
       return Promise.all(batches.map((batch) => summarize(tx, userId, batch)));
+    });
+  }
+
+  /**
+   * One bounded query: the status filter runs in SQL and `limit(1)` caps the
+   * result, so exactly one batch is ever summarized. Opening the import screen
+   * must not scale with how many files a user has ever imported.
+   */
+  async findLatestActionableBatch(
+    userId: string,
+  ): Promise<ImportBatchSummary | null> {
+    return this.runWithUserDb(userId, async (tx) => {
+      const [batch] = await tx
+        .select()
+        .from(importBatches)
+        .where(
+          and(
+            eq(importBatches.userId, userId),
+            or(
+              inArray(importBatches.status, [
+                ...RESUMABLE_IMPORT_BATCH_STATUSES,
+              ]),
+              and(
+                eq(importBatches.status, "failed"),
+                inArray(importBatches.failureCode, [
+                  ...RETRYABLE_IMPORT_FAILURE_CODES,
+                ]),
+              ),
+            ),
+          ),
+        )
+        .orderBy(desc(importBatches.createdAt))
+        .limit(1);
+      return batch ? summarize(tx, userId, batch) : null;
     });
   }
 

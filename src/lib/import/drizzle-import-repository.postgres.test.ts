@@ -1054,8 +1054,86 @@ postgresDescribe("PostgreSQL import journey", () => {
     ).toEqual([]);
   });
 
-  it("caps one cleanup sweep and keeps the remainder discoverable", async () => {
-    const userId = await createUser("cleanup-cap");
+  it("returns only the newest actionable batch, ignoring finished history", async () => {
+    const userId = await createUser("latest-actionable");
+    const repository = new DrizzleImportRepository();
+    let sequence = 0;
+    const stage = async (
+      fileName: string,
+      status: "committed" | "deduplicated" | "cancelled" | "review" | "failed",
+      failure?: { code: string; message: string },
+    ) => {
+      const batchId = randomUUID();
+      await repository.createBatch(userId, {
+        id: batchId,
+        fileName,
+        fileSizeBytes: 64,
+        fileFingerprint: {
+          algorithm: "sha256",
+          version: 1,
+          value: createHash("sha256").update(batchId).digest("hex"),
+        },
+        originalObjectKey: `imports/${userId}/${batchId}/original.csv`,
+        status: "processing",
+      });
+      if (status === "failed" && failure) {
+        await repository.failBatch(userId, batchId, failure);
+      }
+      // `created_at` decides which batch is newest, so it is stamped
+      // explicitly: same-transaction-clock ties would make the assertion
+      // below depend on insert timing rather than on the ordering.
+      sequence += 1;
+      const createdAt = new Date(
+        Date.parse("2026-08-01T00:00:00.000Z") + sequence * 60_000,
+      );
+      await withUserDb(userId, (tx) =>
+        tx
+          .update(importBatches)
+          .set(
+            status === "failed"
+              ? { createdAt }
+              : { status, createdAt },
+          )
+          .where(
+            and(
+              eq(importBatches.id, batchId),
+              eq(importBatches.userId, userId),
+            ),
+          ),
+      );
+      return batchId;
+    };
+
+    await stage("committed.csv", "committed");
+    await stage("deduplicated.csv", "deduplicated");
+    await stage("cancelled.csv", "cancelled");
+    await stage("malware.csv", "failed", {
+      code: "malware-detected",
+      message: "Malware detected.",
+    });
+    const reviewId = await stage("needs-review.csv", "review");
+
+    // Finished, superseded, and unrecoverable batches are excluded in SQL, so
+    // the import screen never sees the account's import history.
+    const latest = await repository.findLatestActionableBatch(userId);
+    expect(latest?.id).toBe(reviewId);
+    expect(latest?.fileName).toBe("needs-review.csv");
+
+    // A newer retryable failure outranks the older review batch.
+    const retryableId = await stage("scanner.csv", "failed", {
+      code: "scanner-unavailable",
+      message: "The scanner is unavailable.",
+    });
+    expect((await repository.findLatestActionableBatch(userId))?.id).toBe(
+      retryableId,
+    );
+
+    await repository.expireBatchAndScrub(userId, retryableId);
+    await repository.expireBatchAndScrub(userId, reviewId);
+    expect(await repository.findLatestActionableBatch(userId)).toBeNull();
+  });
+
+  it("caps one cleanup sweep and keeps the remainder discoverable", async () => {    const userId = await createUser("cleanup-cap");
     const repository = new DrizzleImportRepository();
     const total = MAX_OBJECT_CLEANUP_BATCH + 3;
     const created: string[] = [];
