@@ -24,7 +24,7 @@ describe("MapShareControl", () => {
             enabled,
             publicHandle: "test-pilot",
             sharePath: enabled ? "/test-pilot" : null,
-            publishedFlightCount: enabled ? 3 : 0,
+            sharedFlightCount: enabled ? 3 : 0,
           },
         });
       }),
@@ -120,8 +120,10 @@ describe("MapShareControl", () => {
       screen.queryByRole("button", { name: "Disable sharing" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Republish map" }),
+      screen.queryByRole("button", { name: /republish/i }),
     ).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(/republish/i);
+    expect(screen.getByText(/stays current with your map/i)).toBeVisible();
   });
 
   it("gives Copy link its own visible chrome so it isn't squeezed by the icon-row's 44x44 button styling", async () => {
@@ -199,7 +201,7 @@ describe("MapShareControl", () => {
             enabled: false,
             publicHandle: "test-pilot",
             sharePath: null,
-            publishedFlightCount: 0,
+            sharedFlightCount: 0,
           },
         }),
       ),
@@ -245,7 +247,7 @@ describe("MapShareControl", () => {
             enabled: false,
             publicHandle: "test-pilot",
             sharePath: null,
-            publishedFlightCount: 0,
+            sharedFlightCount: 0,
           },
         }),
         { headers: { "content-type": "application/json" } },

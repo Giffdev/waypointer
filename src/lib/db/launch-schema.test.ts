@@ -73,6 +73,15 @@ const publicShareHandleMigration = readFileSync(
   ),
   "utf8",
 );
+const liveSharedMapsMigration = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../drizzle/migrations/0019_live_shared_maps.sql",
+      import.meta.url,
+    ),
+  ),
+  "utf8",
+);
 const multiStopMigration = readFileSync(
   fileURLToPath(
     new URL(
@@ -363,6 +372,48 @@ describe("launch schema", () => {
     }
     expect(sharingSerializationMigration).toContain(
       "CREATE OR REPLACE FUNCTION invalidate_selected_map_share_for_stop()",
+    );
+  });
+
+  it("resolves a live share owner and stops revoking shares on owner edits", () => {
+    // The public read resolves an owner id, then derives the map from that
+    // owner's current rows. The function must stay `SECURITY DEFINER` with a
+    // pinned search path and no `PUBLIC` grant, exactly like the projection
+    // function it replaces on the read path.
+    expect(liveSharedMapsMigration).toContain(
+      "CREATE OR REPLACE FUNCTION public_share_owner_by_handle(",
+    );
+    expect(liveSharedMapsMigration).toContain("RETURNS uuid");
+    expect(liveSharedMapsMigration).toContain("SECURITY DEFINER");
+    expect(liveSharedMapsMigration).toContain(
+      "SET search_path = pg_catalog, public",
+    );
+    expect(liveSharedMapsMigration).toContain(
+      "REVOKE ALL ON FUNCTION public_share_owner_by_handle(text) FROM PUBLIC",
+    );
+    expect(liveSharedMapsMigration).not.toContain("GRANT EXECUTE");
+    // Revocation is unchanged and still explicit.
+    expect(liveSharedMapsMigration).toContain("u.disabled_at IS NULL");
+    expect(liveSharedMapsMigration).toContain("ms.enabled_at IS NOT NULL");
+    expect(liveSharedMapsMigration).toContain("ms.disabled_at IS NULL");
+    // A live view cannot disagree with the owner's map, so editing a flight
+    // or a route stop must no longer disable the whole share.
+    expect(liveSharedMapsMigration).toContain(
+      'DROP TRIGGER IF EXISTS "flights_invalidate_selected_share" ON "flights"',
+    );
+    expect(liveSharedMapsMigration).toContain(
+      'DROP TRIGGER IF EXISTS "flight_stops_invalidate_selected_share" ON "flight_stops"',
+    );
+    expect(liveSharedMapsMigration).not.toMatch(/CREATE TRIGGER/i);
+    // The stored projection survives only as a rollback artefact, and says so.
+    expect(liveSharedMapsMigration).toContain(
+      'COMMENT ON COLUMN "map_shares"."projection"',
+    );
+    expect(liveSharedMapsMigration).not.toMatch(
+      /DROP\s+(COLUMN|TABLE)|ALTER\s+TABLE\s+"map_shares"\s+DROP/i,
+    );
+    expect(liveSharedMapsMigration).not.toMatch(
+      /email|notes|route_raw|source_row_key/i,
     );
   });
 

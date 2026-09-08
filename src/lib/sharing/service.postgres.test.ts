@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import postgres from "postgres";
 import {
   afterAll,
@@ -63,7 +63,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     fixtureAdmin = undefined;
   });
 
-  it("starts private and publishes every owner flight at the username", async () => {
+  it("starts private and shares every current owner flight at the username", async () => {
     const owner = await createOwner("Public Pilot");
     const [originId, destinationId] = await createAirports();
     const firstId = await createFlight(owner.id, originId, destinationId);
@@ -80,8 +80,11 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       enabled: true,
       publicHandle: owner.username,
       sharePath: `/${owner.username}`,
-      publishedFlightCount: 2,
+      sharedFlightCount: 2,
     });
+    // The stored document is a rollback artefact only. It is still written so
+    // an older build has something to serve, and it is asserted here so a
+    // rollback cannot silently start finding an unreadable shape.
     const [storedShare] = await withUserDb(owner.id, (tx) =>
       tx
         .select({ projection: mapShares.projection })
@@ -215,7 +218,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
 
     await expect(enableMapSharing(owner.id)).resolves.toMatchObject({
       enabled: true,
-      publishedFlightCount: 1,
+      sharedFlightCount: 1,
     });
     const projection = await getPublicMapProjection(owner.username);
     expect(
@@ -226,16 +229,16 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     ).toContain("Chewelah Municipal Airport");
   });
 
-  it("refreshes an already-published airport label from the live catalog", async () => {
+  it("labels airports from the live catalog on every read", async () => {
     const owner = await createOwner("Bandon Pilot");
     const [originId, destinationId] = await createBandonAirports();
     await createFlight(owner.id, originId, destinationId);
 
     await expect(enableMapSharing(owner.id)).resolves.toMatchObject({
       enabled: true,
-      publishedFlightCount: 1,
+      sharedFlightCount: 1,
     });
-    // A published route orders its endpoints by internal airport id, which is
+    // A route orders its endpoints by internal airport id, which is
     // a random UUID here, so the airports are addressed by name rather than by
     // route position.
     const codesByName = (projection: {
@@ -250,8 +253,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
         ),
       );
 
-    // Published while the catalog still carried the unused IATA code, so the
-    // frozen snapshot captured the stale label.
+    // Read while the catalog still carried the unused IATA code.
     const published = await getPublicMapProjection(owner.username);
     expect(codesByName(published)).toEqual({
       "Bandon State Airport": "BDY",
@@ -272,8 +274,10 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       "Seattle-Tacoma International Airport": "SEA",
     });
 
-    // An airport catalog release withholds the unused IATA code; the owner
-    // does not republish and the stored snapshot is never rewritten.
+    // An airport catalog release withholds the unused IATA code. The live
+    // read takes its label from the catalog row itself, so the correction
+    // lands on the next request — and the deprecated rollback document is
+    // left exactly as it was, proving it is not what is being served.
     await requireFixtureAdmin()`
       update airports
       set iata = null
@@ -305,18 +309,17 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
     await expect(getOwnerShareStatus(owner.id)).resolves.toMatchObject({
       enabled: false,
-      publishedFlightCount: 0,
     });
   });
 
-  it("does not cap the complete published map", async () => {
+  it("does not cap the complete shared map", async () => {
     const owner = await createOwner("Large Map Pilot");
     const [originId, destinationId] = await createAirports();
     await createFlights(owner.id, originId, destinationId, 501);
 
     await expect(enableMapSharing(owner.id)).resolves.toMatchObject({
       enabled: true,
-      publishedFlightCount: 501,
+      sharedFlightCount: 501,
     });
     await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject({
       summary: { flightCount: 501 },
@@ -329,7 +332,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     });
   });
 
-  it("omits placeholder aircraft metadata from the public snapshot", async () => {
+  it("omits placeholder aircraft metadata from the public map", async () => {
     const owner = await createOwner("Metadata Pilot");
     const [originId, destinationId] = await createAirports();
     await createFlight(owner.id, originId, destinationId, {
@@ -373,18 +376,19 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
       from pg_proc proc
       join pg_namespace namespace on namespace.oid = proc.pronamespace
       where namespace.nspname = 'public'
-        and proc.proname = 'public_map_projection_by_handle'
+        and proc.proname = 'public_share_owner_by_handle'
         and pg_get_function_identity_arguments(proc.oid) = 'requested_handle text'
     `;
     expect(functionDefinition.definition).toContain(
       "lower(u.username) = lower(requested_handle)",
     );
+    expect(functionDefinition.definition).toContain("u.disabled_at IS NULL");
 
     const plan = await requireFixtureAdmin().begin(async (tx) => {
       await tx`set local enable_seqscan = off`;
       return tx<{ "QUERY PLAN": string }[]>`
         explain (format text)
-        select ms.projection
+        select u.id
         from users u
         join map_shares ms on ms.user_id = u.id
         where lower(u.username) = lower(${owner.username})
@@ -398,25 +402,205 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     );
 
     const [grants] = await requireFixtureAdmin()<{
-      currentAllowed: boolean;
+      ownerResolutionAllowed: boolean;
+      rollbackProjectionAllowed: boolean;
       legacyExists: boolean;
     }[]>`
       select
         has_function_privilege(
           'flight_map_test_app',
+          'public.public_share_owner_by_handle(text)',
+          'EXECUTE'
+        ) as "ownerResolutionAllowed",
+        has_function_privilege(
+          'flight_map_test_app',
           'public.public_map_projection_by_handle(text)',
           'EXECUTE'
-        ) as "currentAllowed",
+        ) as "rollbackProjectionAllowed",
         to_regprocedure('public.public_map_projection(uuid,text)') is not null
           as "legacyExists"
     `;
     expect(grants).toEqual({
-      currentAllowed: true,
+      ownerResolutionAllowed: true,
+      // Kept granted so a rollback keeps working; nothing on the live path
+      // calls it.
+      rollbackProjectionAllowed: true,
       legacyExists: false,
     });
   });
 
-  it("publishes route waypoints as path geometry without counting them as visited", async () => {
+  it("serves flights added after sharing was enabled, with no republish", async () => {
+    const owner = await createOwner("Live Import Pilot");
+    const [originId, destinationId] = await createAirports();
+    await createFlight(owner.id, originId, destinationId);
+    await enableMapSharing(owner.id);
+    await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject(
+      { summary: { flightCount: 1 } },
+    );
+
+    // A later import. Nothing touches map_shares.
+    const importedId = await createFlight(owner.id, destinationId, originId);
+
+    const afterImport = await getPublicMapProjection(owner.username);
+    expect(afterImport.summary).toMatchObject({
+      flightCount: 2,
+      routeCount: 1,
+    });
+    expect(afterImport.routes[0]).toMatchObject({
+      flightCount: 2,
+      forwardFlightCount: 1,
+      reverseFlightCount: 1,
+      directionMode: "both",
+    });
+    // The link is still the same link, and still enabled: an owner-flight
+    // mutation no longer revokes a share.
+    await expect(getOwnerShareStatus(owner.id)).resolves.toMatchObject({
+      enabled: true,
+      sharePath: `/${owner.username}`,
+      sharedFlightCount: 2,
+    });
+
+    // ...and a deletion disappears from the same handle just as directly.
+    await withUserDb(owner.id, (tx) =>
+      tx.delete(flights).where(eq(flights.id, importedId)),
+    );
+    await expect(getPublicMapProjection(owner.username)).resolves.toMatchObject(
+      { summary: { flightCount: 1 } },
+    );
+    await expect(getOwnerShareStatus(owner.id)).resolves.toMatchObject({
+      enabled: true,
+      sharePath: `/${owner.username}`,
+    });
+  });
+
+  it("draws route waypoints enriched after sharing was enabled", async () => {
+    const owner = await createOwner("Live Waypoint Pilot");
+    const [originId, destinationId] = await createAirports();
+    const flightId = await createFlight(owner.id, originId, destinationId);
+    await withUserDb(owner.id, (tx) =>
+      tx.insert(flightStops).values([
+        {
+          userId: owner.id,
+          flightId,
+          airportId: originId,
+          stopOrder: 0,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+        {
+          userId: owner.id,
+          flightId,
+          airportId: destinationId,
+          stopOrder: 1,
+          stopKind: "landing",
+          sourceField: "endpoint",
+        },
+      ]),
+    );
+    await enableMapSharing(owner.id);
+    const before = await getPublicMapProjection(owner.username);
+    expect(before.flights[0]).not.toHaveProperty("routePath");
+
+    // Re-import enriches the same flight with an overflown waypoint. Under
+    // the old snapshot model this route-stop mutation revoked the share
+    // outright; now it simply changes what the link draws.
+    const waypointId = randomUUID();
+    airportIds.push(waypointId);
+    await requireFixtureAdmin()`
+      insert into airports (
+        id, source_ident, name, city, country, latitude, longitude, facility, dataset_version
+      )
+      values (
+        ${waypointId}::uuid,
+        'WPT2',
+        'Later waypoint',
+        'Waypoint',
+        'US',
+        43.238,
+        -123.356,
+        'general-aviation',
+        'sharing-test'
+      )
+    `;
+    await withUserDb(owner.id, async (tx) => {
+      await tx
+        .update(flightStops)
+        .set({ stopOrder: 2 })
+        .where(
+          and(
+            eq(flightStops.flightId, flightId),
+            eq(flightStops.stopOrder, 1),
+          ),
+        );
+      await tx.insert(flightStops).values({
+        userId: owner.id,
+        flightId,
+        airportId: waypointId,
+        stopOrder: 1,
+        stopKind: "waypoint",
+        sourceField: "route",
+      });
+    });
+
+    await expect(getOwnerShareStatus(owner.id)).resolves.toMatchObject({
+      enabled: true,
+    });
+    const after = await getPublicMapProjection(owner.username);
+    expect(after.flights[0]!.routePath?.map((node) => node.airport.name)).toEqual(
+      ["Public origin", "Later waypoint", "Public destination"],
+    );
+    // Landing-only statistics are unmoved by the new geometry.
+    expect(after.summary).toEqual(before.summary);
+    expect(
+      after.routes.flatMap(({ origin, destination }) => [
+        origin.name,
+        destination.name,
+      ]),
+    ).not.toContain("Later waypoint");
+  });
+
+  it("keeps a disabled share unavailable while the owner keeps flying", async () => {
+    const owner = await createOwner("Revoked Pilot");
+    const [originId, destinationId] = await createAirports();
+    await createFlight(owner.id, originId, destinationId);
+    await enableMapSharing(owner.id);
+    await disableMapSharing(owner.id);
+
+    await createFlight(owner.id, destinationId, originId);
+
+    await expect(
+      getPublicMapProjection(owner.username),
+    ).rejects.toBeInstanceOf(ShareNotFoundError);
+  });
+
+  it("cannot serve one owner's flights at another owner's handle", async () => {
+    // Both handles are live at once, read through the non-superuser runtime
+    // role, so row-level security is doing the separating.
+    const first = await createOwner("Isolated Pilot One");
+    const second = await createOwner("Isolated Pilot Two");
+    const [originId, destinationId] = await createAirports();
+    await createFlight(first.id, originId, destinationId);
+    await createFlights(second.id, destinationId, originId, 3);
+    await enableMapSharing(first.id);
+    await enableMapSharing(second.id);
+
+    const firstMap = await getPublicMapProjection(first.username);
+    const secondMap = await getPublicMapProjection(second.username);
+
+    expect(firstMap.summary.flightCount).toBe(1);
+    expect(secondMap.summary.flightCount).toBe(3);
+    expect(firstMap.routes[0]!.flightCount).toBe(1);
+    expect(secondMap.routes[0]!.flightCount).toBe(3);
+    for (const serialized of [
+      JSON.stringify(firstMap),
+      JSON.stringify(secondMap),
+    ]) {
+      expect(serialized).not.toContain(first.id);
+      expect(serialized).not.toContain(second.id);
+    }
+  });
+
+  it("serves route waypoints as path geometry without counting them as visited", async () => {
     const owner = await createOwner("Waypoint Pilot");
     const [originId, destinationId] = await createAirports();
     const waypointId = randomUUID();
@@ -519,7 +703,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     }
   });
 
-  it("publishes a landing-only logbook exactly as it did before waypoints", async () => {
+  it("serves a landing-only logbook exactly as it did before waypoints", async () => {
     const owner = await createOwner("Landing Only Pilot");
     const [originId, destinationId] = await createAirports();
     const flightId = await createFlight(owner.id, originId, destinationId);
@@ -548,7 +732,7 @@ postgresDescribe("public map sharing PostgreSQL boundary", () => {
     const projection = await getPublicMapProjection(owner.username);
 
     // No overflown geometry means no key at all, so a logbook without route
-    // waypoints publishes the snapshot it always published.
+    // waypoints serves the map it always served.
     expect(projection.flights[0]).not.toHaveProperty("routePath");
     expect(JSON.stringify(projection)).not.toContain("routePath");
   });

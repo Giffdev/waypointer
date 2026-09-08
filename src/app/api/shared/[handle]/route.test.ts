@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -19,14 +21,15 @@ vi.mock("@/lib/sharing/service", () => ({
   toLegacyPublicMapProjection: mocks.toLegacyPublicMapProjection,
   toV3PublicMapProjection: mocks.toV3PublicMapProjection,
   ShareNotFoundError: class ShareNotFoundError extends Error {},
-  ShareRepublishRequiredError: class ShareRepublishRequiredError extends Error {},
+  ShareValidationError: class ShareValidationError extends Error {
+    constructor(readonly code = "invalid-share-projection") {
+      super("Invalid share projection.");
+    }
+  },
 }));
 
 import { GET, POST } from "./route";
-import {
-  ShareNotFoundError,
-  ShareRepublishRequiredError,
-} from "@/lib/sharing/service";
+import { ShareNotFoundError, ShareValidationError } from "@/lib/sharing/service";
 
 describe("public shared map API", () => {
   beforeEach(() => {
@@ -80,7 +83,20 @@ describe("public shared map API", () => {
     expect(mocks.toV3PublicMapProjection).not.toHaveBeenCalled();
   });
 
-  it("downgrades a freshly republished waypoint snapshot to the frozen contract=3 shape", async () => {
+  it("has no republish-required response left to send", async () => {
+    // The 409 existed only for a stored snapshot too old to serve. Nothing
+    // stored is read any more, so an unserveable handle is a 404 and a
+    // failing derivation is a 503 — never an instruction to press a button
+    // that no longer exists.
+    const source = readFileSync(
+      fileURLToPath(new URL("./route.ts", import.meta.url)),
+      "utf8",
+    );
+    expect(source).not.toMatch(/republish/i);
+    expect(source).not.toContain("409");
+  });
+
+  it("downgrades a waypoint-carrying live map to the frozen contract=3 shape", async () => {
     const canonical = {
       schemaVersion: 4,
       owner: { displayName: "Waypoint Pilot" },
@@ -253,24 +269,6 @@ describe("public shared map API", () => {
     );
   });
 
-  it("tells viewers when an old projection must be republished", async () => {
-    mocks.getPublicMapProjection.mockRejectedValueOnce(
-      new ShareRepublishRequiredError(),
-    );
-    const response = await GET(
-      new Request("https://example.test/api/shared/legacy"),
-      { params: Promise.resolve({ handle: "legacy" }) },
-    );
-
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: {
-        code: "republish-required",
-        message: "This shared map must be republished to show real airports.",
-      },
-    });
-  });
-
   it("reads a public username with no token and no-store caching", async () => {
     const response = await GET(
       new Request("https://example.test/api/shared/DeVSiN", {
@@ -321,6 +319,67 @@ describe("public shared map API", () => {
     expect(await response.json()).toEqual({
       error: { code: "not-found", message: "Waypointer shared map not found." },
     });
+  });
+
+  it("surfaces a failed live projection as a logged 503 that leaks nothing", async () => {
+    // A live map has no republish to fall back on, so an owner row the public
+    // projection refuses is a 503 that persists until someone notices. The
+    // only thing that makes it noticeable is this log line, and the only
+    // thing it may carry is the validation code.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    mocks.getPublicMapProjection.mockRejectedValueOnce(
+      new ShareValidationError("invalid-flight-route"),
+    );
+
+    const response = await GET(
+      new Request("https://example.test/api/shared/DeVSiN?contract=4", {
+        headers: { "x-real-ip": "192.0.2.1" },
+      }),
+      { params: Promise.resolve({ handle: "DeVSiN" }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(await response.json()).toEqual({
+      error: {
+        code: "shared-map-unavailable",
+        message: "The Waypointer shared map is temporarily unavailable.",
+      },
+    });
+    expect(consoleError).toHaveBeenCalledWith(
+      "Shared map projection validation failed.",
+      { code: "invalid-flight-route" },
+    );
+    // Nothing private, and nothing that identifies whose map failed.
+    expect(JSON.stringify(consoleError.mock.calls)).not.toMatch(
+      /devsin|192\.0\.2\.1|api\/shared|owner|email|flightId|userId|N12345|S05/i,
+    );
+    consoleError.mockRestore();
+  });
+
+  it("logs a non-validation projection failure by type only", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    mocks.getPublicMapProjection.mockRejectedValueOnce(
+      new TypeError("connection to 10.0.0.4 as owner-a failed"),
+    );
+
+    const response = await GET(
+      new Request("https://example.test/api/shared/devsin"),
+      { params: Promise.resolve({ handle: "devsin" }) },
+    );
+
+    expect(response.status).toBe(503);
+    expect(consoleError).toHaveBeenCalledWith("Shared map projection failed.", {
+      errorType: "TypeError",
+    });
+    expect(JSON.stringify(consoleError.mock.calls)).not.toMatch(
+      /10\.0\.0\.4|owner-a|devsin/i,
+    );
+    consoleError.mockRestore();
   });
 
   it("does not accept a legacy POST capability body", async () => {

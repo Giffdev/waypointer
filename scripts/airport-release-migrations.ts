@@ -102,7 +102,7 @@ export const AIRPORT_RELEASE_SCOPE: AirportReleaseScope = {
 };
 
 export interface AirportMigrationState {
-  boundary: "empty" | "0014" | "0015" | "0016" | "0017" | "0018";
+  boundary: "empty" | "0014" | "0015" | "0016" | "0017" | "0018" | "0019";
   appliedCount: number;
   ledgerSha256: string;
   schemaSha256: string;
@@ -478,7 +478,10 @@ async function relationExists(
   return row?.present === true;
 }
 
-async function verifyProductMigrationState(sql: UnsafeSqlClient) {
+async function verifyProductMigrationState(
+  sql: UnsafeSqlClient,
+  boundary: AirportMigrationState["boundary"],
+) {
   const [defaults] = await sql.unsafe(
     `select
        max(column_default) filter (where column_name = 'distance_unit')
@@ -520,23 +523,27 @@ async function verifyProductMigrationState(sql: UnsafeSqlClient) {
     [requiredObjects],
   );
   assertEqualList(stringArray(objectRows, "relname"), requiredObjects);
+  // The snapshot-invalidation triggers exist only up to `0018`. `0019` makes
+  // a shared map a live view and drops them, because disabling someone's
+  // share when they edit a flight is no longer a safeguard. Asserted in both
+  // directions rather than simply relaxed: a database that still carries them
+  // at `0019` did not fully apply the migration, and one that has lost them
+  // earlier has drifted.
+  const sharingTriggers = [
+    "flight_stops_invalidate_selected_share",
+    "flights_invalidate_selected_share",
+  ];
   const triggerRows = await sql.unsafe(
     `select tgname
      from pg_trigger
      where not tgisinternal
        and tgname = any($1::text[])
      order by tgname`,
-    [[
-      "flights_invalidate_selected_share",
-      "flight_stops_invalidate_selected_share",
-    ]],
+    [sharingTriggers],
   );
   assertEqualList(
     stringArray(triggerRows, "tgname"),
-    [
-      "flight_stops_invalidate_selected_share",
-      "flights_invalidate_selected_share",
-    ],
+    boundary === "0019" ? [] : sharingTriggers,
   );
 }
 
@@ -566,7 +573,7 @@ async function verifyAirportSchema(
     await tableColumns(sql, "airport_aliases"),
     ALIAS_COLUMNS,
   );
-  await verifyProductMigrationState(sql);
+  await verifyProductMigrationState(sql, boundary);
   let provenanceConstraint = "";
   // Every boundary at or after 0015 carries the provenance constraint.
   if (boundary !== "0014") {

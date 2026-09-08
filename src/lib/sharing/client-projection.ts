@@ -212,8 +212,8 @@ function parsePublicFlightsV3(
 
 /**
  * Parses the contract=4 wire shape: the same structural rules as contract=3,
- * plus an optional ordered `routePath` per flight — present only on a
- * snapshot republished after route waypoints shipped.
+ * plus an optional ordered `routePath` per flight — present only when the
+ * owner's flight actually overflew somewhere.
  */
 export function parsePublicMapProjectionV4(
   value: unknown,
@@ -336,7 +336,7 @@ function parsePublicFlightsV4(
     throw new PublicMapProjectionValidationError();
   }
   return value.map((entry) => {
-    // `routePath` is optional: a snapshot published before waypoints shipped
+    // `routePath` is optional: a map whose flights never overflew anywhere
     // simply does not have one, and that map is still valid.
     const flight = exactRecord(
       entry,

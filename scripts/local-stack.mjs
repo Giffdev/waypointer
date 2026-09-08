@@ -249,6 +249,7 @@ async function provisionPostgresTestRole() {
       grant usage on schema public to ${role};
       grant select, insert, update, delete on all tables in schema public to ${role};
       grant usage, select, update on all sequences in schema public to ${role};
+      grant execute on function public_share_owner_by_handle(text) to ${role};
       grant execute on function public_map_projection_by_handle(text) to ${role};
     `);
   } finally {

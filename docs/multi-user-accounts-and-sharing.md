@@ -17,17 +17,21 @@ Sharing has one deliberately simple contract:
 
 - The public route is `/{username}`.
 - The route contains no additional secret or opaque identifier.
-- Sharing publishes the owner's complete eligible map without a flight limit.
-- Owners cannot choose individual flights or publish a partial map.
+- Sharing exposes the owner's complete eligible map without a flight limit.
+- A shared map is a **live view**, not a publication: it always shows the
+  owner's current eligible map. Newly imported, edited, enriched, and deleted
+  flights appear at the same link without any republish step.
+- Owners cannot choose individual flights or share a partial map.
 - Account settings present one toggle whose states are **Share my map** and
   **Disable sharing**.
 - A lightweight "Share map" popover on `/map` mirrors owner status
   (enable/copy/open) for discoverability and deep-links to
-  `/settings#sharing-title` for the full management surface (disable,
-  republish); it is not a second sharing contract.
+  `/settings#sharing-title` for the full management surface (disable); it is
+  not a second sharing contract.
 - Enabling sharing makes the page intentionally public to anyone who knows or
   discovers the username.
-- Disabling sharing makes the public route unavailable.
+- Disabling sharing makes the public route unavailable immediately, and is the
+  only way (short of deleting the account) that a link stops working.
 
 [`map-sharing-api.md`](map-sharing-api.md) is the endpoint-level reference for
 this contract.
@@ -108,20 +112,22 @@ registration/tail number only as a disclosed viewer-local filter field.
 Every account starts with sharing off. The full sharing management surface
 lives in `/settings`; a lightweight status/enable/copy popover is also
 reachable from the map page toolbar and deep-links back to
-`/settings#sharing-title` for disable/republish:
+`/settings#sharing-title` for disable:
 
 | Current state | Available action | Result |
 | --- | --- | --- |
-| Off | **Share my map** | Publishes the complete current eligible map at `/{username}` |
+| Off | **Share my map** | Makes the complete current eligible map live at `/{username}` |
 | On | **Disable sharing** | Makes `/{username}` unavailable |
 
-There is no second publishing workflow, partial-map mode, item picker, or
-separate refresh action. The service derives the complete eligible flight set;
-clients cannot submit flight IDs or exclusions.
+There is no second workflow, partial-map mode, item picker, or refresh action.
+Each public request derives the complete eligible flight set; clients cannot
+submit flight IDs or exclusions.
 
 The sharing panel displays the full absolute URL, provides a normal link that
 opens it in a new browser tab, and provides a copy action. The link uses
-`target="_blank"` with `rel="noopener noreferrer"`.
+`target="_blank"` with `rel="noopener noreferrer"`. The URL is stable across
+every change to the owner's flights: only disabling sharing (or deleting the
+account) takes it offline.
 
 ### Public route behavior
 
@@ -130,19 +136,21 @@ opens it in a new browser tab, and provides a copy action. The link uses
   behavior.
 - The browser loads public map data with `GET /api/shared/{username}`.
 - No request body is required for a public read.
-- An enabled account returns only the public map projection.
+- An enabled account returns the public map projection derived from its
+  current flights, flight stops, and airports.
 - An unknown, disabled, suspended, renamed, or deleted account returns the same
   generic unavailable result.
 - Public responses do not reveal hidden-row counts or owner-only fields.
 - Public requests are rate limited by network and normalized username.
 - Shared responses use no-store caching because disable must take effect on a
-  subsequent load.
+  subsequent load and because the view is live; the open page revalidates on
+  focus, visibility restoration, and a 30-second interval.
 
 ### Complete, uncapped map
 
-The Share action publishes every current eligible flight. The public
-projection aggregates flights into canonical-airport routes and preserves the
-complete represented flight count. It must not:
+Every public read covers every current eligible flight. The public projection
+aggregates flights into canonical-airport routes and preserves the complete
+represented flight count. It must not:
 
 - impose a maximum number of flights;
 - truncate routes because a map is large;
@@ -247,13 +255,17 @@ No fixture may contain a real person's private flight data.
 
 - Private account data is isolated by immutable owner identity.
 - Sharing is off by default.
-- Settings provide only the Share/Disable toggle for publishing control.
-- Share publishes the whole eligible map with no flight or route cap.
+- Settings provide only the Share/Disable toggle for sharing control.
+- Share exposes the whole eligible map with no flight or route cap.
+- An enabled share is a live view of the owner's current eligible map: flight
+  and route-stop changes are reflected on the next public read, with no
+  republish step and no change to the URL.
 - The only public map URL is `/{username}`.
 - The public page and endpoint require no additional secret or request body.
-- Public responses contain only the approved schema-v3 projection (with a
-  legacy schema-v2 shape retained for callers that omit `?contract=3`) with
-  canonical public airport metadata and viewer-local filter facts.
+- Public responses contain only the approved schema-v4 projection (with the
+  frozen schema-v3 shape at `?contract=3` and a legacy schema-v2 shape for
+  callers that omit `?contract`) with canonical public airport metadata and
+  viewer-local filter facts.
 - Disable, suspension, rename, and deletion prevent subsequent public loads.
 - Old sharing URLs remain broken and do not redirect.
 - Unit, desktop Playwright, and mobile Playwright coverage enforce this

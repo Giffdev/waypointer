@@ -108,6 +108,72 @@ describe("useOwnerSharingStatus request races", () => {
     unmount();
     expect(signal?.aborted).toBe(true);
   });
+
+  it("reads a rolled-back server's published count as the shared count", async () => {
+    // Rollback skew: this bundle is live while the server behind it still
+    // answers with the pre-0019 field name. Without the fallback the panel
+    // renders "undefined flights" until the deploy settles.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              sharing: {
+                enabled: true,
+                publicHandle: "test-pilot",
+                sharePath: "/test-pilot",
+                publishedFlightCount: 4,
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+
+    const { result } = renderHook(() =>
+      useOwnerSharingStatus({ autoLoad: false }),
+    );
+    act(() => {
+      result.current.ensureLoaded();
+    });
+
+    await waitFor(() =>
+      expect(result.current.status?.sharedFlightCount).toBe(4),
+    );
+  });
+
+  it("falls back to zero when neither flight count is present", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              sharing: {
+                enabled: false,
+                publicHandle: "test-pilot",
+                sharePath: null,
+              },
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+
+    const { result } = renderHook(() =>
+      useOwnerSharingStatus({ autoLoad: false }),
+    );
+    act(() => {
+      result.current.ensureLoaded();
+    });
+
+    await waitFor(() =>
+      expect(result.current.status?.sharedFlightCount).toBe(0),
+    );
+  });
 });
 
 function statusResponse(options: {
@@ -121,7 +187,7 @@ function statusResponse(options: {
         enabled: options.enabled,
         publicHandle: "test-pilot",
         sharePath: options.sharePath,
-        publishedFlightCount: options.flights,
+        sharedFlightCount: options.flights,
       },
     }),
     { headers: { "content-type": "application/json" } },

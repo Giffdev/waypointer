@@ -20,6 +20,9 @@ function databaseUrl(): string {
 export const RUNTIME_READ_ONLY_POSTGRES_OPTIONS =
   "-c default_transaction_read_only=on";
 
+const USER_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function runtimeDatabaseUrl(
   value: string,
   environment: NodeJS.ProcessEnv = process.env,
@@ -135,7 +138,7 @@ export async function withUserDb<T>(
   userId: string,
   work: (tx: DatabaseTransaction) => Promise<T>,
 ): Promise<T> {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
+  if (!USER_ID_PATTERN.test(userId)) {
     throw new Error("A valid immutable user ID is required.");
   }
 
@@ -156,4 +159,47 @@ export async function withUserDb<T>(
     );
     return work(tx);
   });
+}
+
+/**
+ * Read-only owner scope for serving a public shared map.
+ *
+ * A shared map is a live view, so the public read has to see the owner's
+ * current rows — but the request itself is unauthenticated. The owner id is
+ * never taken from the request: callers must resolve it first from an enabled
+ * share (`public_share_owner_by_handle`), and this helper only ever narrows
+ * from there. Scoping is fail-closed in both directions: the transaction is
+ * declared read only before anything reads a row, and `app.current_user_id`
+ * is set transaction-locally so every row-level-security policy filters to
+ * that single owner. If the setting were ever missing the policies compare
+ * against NULL and return nothing at all.
+ *
+ * The isolation level is `repeatable read` because one map is assembled from
+ * several statements. Under the default `read committed` each statement takes
+ * its own snapshot, so an owner deleting a flight mid-read could produce a
+ * flight whose airport no longer appears in the airport result — a torn map,
+ * served as a 503. A single snapshot means a public read always shows one
+ * coherent moment of the owner's map.
+ *
+ * Unlike {@link withUserDb} this does not take the airport-release write
+ * barrier: it writes nothing, and a catalog release should not take every
+ * public map offline.
+ */
+export async function withPublicShareDb<T>(
+  ownerId: string,
+  work: (tx: DatabaseTransaction) => Promise<T>,
+): Promise<T> {
+  if (!USER_ID_PATTERN.test(ownerId)) {
+    throw new Error("A valid immutable user ID is required.");
+  }
+
+  return getDb().transaction(
+    async (tx) => {
+      await tx.execute(
+        sql`select set_config('app.current_user_id', ${ownerId}, true)`,
+      );
+      return work(tx);
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 }

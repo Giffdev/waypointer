@@ -190,7 +190,7 @@ Use separate PostgreSQL roles where supported:
 - `MIGRATION_DATABASE_URL`: CI/release-only DDL role used by Drizzle.
 
 Production deployment does not auto-migrate. Before deploying application
-code that requires `0017_public_share_handles.sql`, configure both variables
+code that requires `0019_live_shared_maps.sql`, configure both variables
 in the release shell and run:
 
 ```powershell
@@ -198,13 +198,27 @@ npm run db:migrate
 ```
 
 The safe migration runner uses `MIGRATION_DATABASE_URL` for DDL and derives
-the runtime role name from `DATABASE_URL`. After applying `0017`, it revokes
-runtime execution of the obsolete
-legacy projection functions and grants only
-`public_map_projection_by_handle(text)`. The handle function remains
-revoked from `PUBLIC`; the runtime role must not own the function or receive
-schema-creation rights. Verify the exact migration ledger boundary is `0017`
-and retain the migration receipt before starting the Vercel deployment.
+the runtime role name from `DATABASE_URL`. After applying `0019`, it revokes
+runtime execution of the obsolete legacy projection functions and grants only
+`public_share_owner_by_handle(text)` and `public_map_projection_by_handle(text)`.
+Both remain revoked from `PUBLIC`; the runtime role must not own either
+function or receive schema-creation rights. `0019` also drops the
+`flights_invalidate_selected_share` and `flight_stops_invalidate_selected_share`
+triggers, because a shared map is now a live view and an owner's flight edit
+must no longer revoke their share. Verify the exact migration ledger boundary
+is `0019` and retain the migration receipt before starting the Vercel
+deployment.
+
+Rolling the application back past live shared maps requires one manual step,
+because schema migrations are not reverted with the application. Apply
+`drizzle/rollback/0019_live_shared_maps_down.sql` with the migration role
+**before** promoting the older build: it re-attaches the two invalidation
+triggers, deletes `0019`'s row from `drizzle.__drizzle_migrations` by its
+pinned manifest hash so the ledger boundary returns to `0018` alongside the
+schema, and disables every currently enabled share, so a build that reads
+`map_shares.projection` again cannot serve a snapshot that predates a flight
+its owner has since deleted. Re-verify the boundary reads `0018` after
+applying it. Owners re-enable sharing on the older build.
 
 A future dedicated import worker can use an explicitly bounded pool near
 `DB_POOL_MAX=5`. The internal `background_jobs` table deliberately has no user
@@ -250,7 +264,7 @@ The release order is:
    procedure.
 2. Run `npm run db:migrate` from the approved release environment with the DDL
    and runtime URLs above.
-3. Verify migration boundary `0017` and the runtime handle-function grant.
+3. Verify migration boundary `0019` and the runtime handle-function grant.
 4. Deploy the reviewed application artifact.
 5. Complete the public-auth and handle-sharing acceptance checks before
    removing the release fence.

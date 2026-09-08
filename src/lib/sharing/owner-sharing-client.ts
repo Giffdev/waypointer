@@ -6,7 +6,7 @@ import { canonicalPublicUrl } from "@/lib/public-origin";
 export type OwnerShareStatusResponse = {
   enabled: boolean;
   sharePath: string | null;
-  publishedFlightCount: number;
+  sharedFlightCount: number;
   publicHandle: string;
 };
 
@@ -41,6 +41,22 @@ export function sharingErrorMessage(body: unknown): string {
   return SHARING_UPDATE_FAILED_MESSAGE;
 }
 
+/**
+ * A mid-rollback server still answers with the old `publishedFlightCount`
+ * field, and this bundle reads `sharedFlightCount`. Falling back keeps the
+ * owner panel showing a count instead of "undefined flights" for the minutes
+ * that skew lasts.
+ */
+function normalizeShareStatus(
+  sharing: OwnerShareStatusResponse & { publishedFlightCount?: number },
+): OwnerShareStatusResponse {
+  return {
+    ...sharing,
+    sharedFlightCount:
+      sharing.sharedFlightCount ?? sharing.publishedFlightCount ?? 0,
+  };
+}
+
 async function fetchShareStatus(
   signal?: AbortSignal,
 ): Promise<OwnerShareStatusResponse> {
@@ -50,7 +66,7 @@ async function fetchShareStatus(
   });
   const body = await response.json();
   if (!response.ok) throw new Error(sharingErrorMessage(body));
-  return body.sharing as OwnerShareStatusResponse;
+  return normalizeShareStatus(body.sharing);
 }
 
 export type OwnerSharingController = {
@@ -64,7 +80,6 @@ export type OwnerSharingController = {
   ensureLoaded: () => void;
   retryStatus: () => void;
   toggleSharing: () => void;
-  republishSharing: () => void;
   copyLink: () => void;
 };
 
@@ -85,14 +100,13 @@ export function useOwnerSharingStatus(
   const [error, setError] = useState("");
   const hasRequestedRef = useRef(false);
 
-  // Every state-affecting request (status fetch or enable/disable/
-  // republish) is tagged with a monotonically increasing id and aborts
-  // whatever request was previously in flight. A resolving request only
-  // applies its result if it is still the most recent one, so a slow,
-  // superseded response (e.g. a stale retry resolving after a newer
-  // enable call, or vice versa) can never clobber fresher state. The
-  // controller is also aborted on unmount to avoid setting state on an
-  // unmounted component.
+  // Every state-affecting request (status fetch or enable/disable) is
+  // tagged with a monotonically increasing id and aborts whatever request
+  // was previously in flight. A resolving request only applies its result
+  // if it is still the most recent one, so a slow, superseded response
+  // (e.g. a stale retry resolving after a newer enable call, or vice
+  // versa) can never clobber fresher state. The controller is also
+  // aborted on unmount to avoid setting state on an unmounted component.
   const requestIdRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
 
@@ -171,16 +185,19 @@ export function useOwnerSharingStatus(
       setError("");
       setMessage("");
       // Only the request id is used here (not its controller/signal): an
-      // enable/disable/republish mutation that's already in flight should
-      // still complete server-side even if superseded by a newer request,
-      // so we only need to ignore a stale *result*, not cancel the call.
+      // enable/disable mutation that's already in flight should still
+      // complete server-side even if superseded by a newer request, so we
+      // only need to ignore a stale *result*, not cancel the call.
       const { id } = beginRequest();
       void fetch("/api/account/sharing", { method })
         .then(async (response) => {
           const body = await response.json();
           if (!response.ok) throw new Error(sharingErrorMessage(body));
           if (requestIdRef.current !== id) return;
-          setStatusState({ phase: "loaded", value: body.sharing });
+          setStatusState({
+            phase: "loaded",
+            value: normalizeShareStatus(body.sharing),
+          });
           setMessage(successMessage);
         })
         .catch((requestError) => {
@@ -210,13 +227,6 @@ export function useOwnerSharingStatus(
     );
   }, [status, updateSharing]);
 
-  const republishSharing = useCallback(() => {
-    updateSharing(
-      "POST",
-      "Public map republished with the latest flights and airports.",
-    );
-  }, [updateSharing]);
-
   const copyLink = useCallback(() => {
     if (!shareUrl) return;
     void navigator.clipboard
@@ -240,7 +250,6 @@ export function useOwnerSharingStatus(
     ensureLoaded,
     retryStatus,
     toggleSharing,
-    republishSharing,
     copyLink,
   };
 }

@@ -107,10 +107,10 @@ describe("public share projection carries the ordered path", () => {
     ]);
   });
 
-  it("downgrades a freshly republished waypoint snapshot to the frozen contract=3 shape, which the previous-generation parser still accepts", () => {
+  it("downgrades a waypoint-carrying live map to the frozen contract=3 shape, which the previous-generation parser still accepts", () => {
     // The pre-waypoint parser (`parsePublicMapProjection`) is exactly what
-    // every already-shipped browser bundle runs. A freshly republished
-    // waypoint snapshot must still parse under it once downgraded to
+    // every already-shipped browser bundle runs. A live map carrying
+    // waypoints must still parse under it once downgraded to
     // contract=3 — the whole point of freezing that contract.
     const v3 = toV3PublicMapProjection(projection(true));
     const parsed = parsePublicMapProjection(JSON.parse(JSON.stringify(v3)));
@@ -129,8 +129,8 @@ describe("public share projection carries the ordered path", () => {
   });
 
   it("never errors a stale contract=3 poller, waypoints or not", () => {
-    // A browser tab left open across a republish keeps polling contract=3.
-    // Whether or not the underlying snapshot now carries waypoints, that
+    // A browser tab left open while the owner enriches a flight keeps
+    // polling contract=3. Whether or not the map now carries waypoints, that
     // poll must never throw.
     for (const withWaypoints of [false, true]) {
       const v3 = toV3PublicMapProjection(projection(withWaypoints));

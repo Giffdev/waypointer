@@ -94,7 +94,7 @@ describe("SharedMapView", () => {
     expect(screen.getByText(/Showing 3 of 3 shared flights/)).toBeVisible();
   });
 
-  it("renders a snapshot published before waypoints existed with no paths at all", async () => {
+  it("renders a live map without waypoints with no paths at all", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(sharedMap())));
 
     render(<SharedMapView handle="public-handle" />);
@@ -138,7 +138,7 @@ describe("SharedMapView", () => {
       "SJD — Los Cabos International Airport",
     );
     expect(
-      screen.getByText(/route details use published airport codes and names/i),
+      screen.getByText(/route details use the owner’s current airport/i),
     ).toBeVisible();
     expect(document.body).not.toHaveTextContent(/Approximate region/i);
     expect(screen.getByText("Map legend")).toBeVisible();
@@ -284,15 +284,15 @@ describe("SharedMapView", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("clears a selected airport when republishing removes that identity", async () => {
+  it("clears a selected airport when the owner's map no longer has that identity", async () => {
     const user = userEvent.setup();
     const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
     let completeRevalidation!: (response: Response) => void;
     const revalidation = new Promise<Response>((resolve) => {
       completeRevalidation = resolve;
     });
-    const republished = sharedMap();
-    republished.map.routes[0]!.origin = airport(
+    const rerouted = sharedMap();
+    rerouted.map.routes[0]!.origin = airport(
       "SEA",
       "Seattle-Tacoma International Airport",
       "Seattle",
@@ -300,7 +300,7 @@ describe("SharedMapView", () => {
       47.44898,
       -122.30931,
     );
-    republished.map.routes[0]!.destination = airport(
+    rerouted.map.routes[0]!.destination = airport(
       "JFK",
       "John F Kennedy International Airport",
       "New York",
@@ -347,7 +347,7 @@ describe("SharedMapView", () => {
     expect(airportFilter).toHaveValue(
       "LAX — Los Angeles International Airport, Los Angeles",
     );
-    await act(async () => completeRevalidation(json(republished)));
+    await act(async () => completeRevalidation(json(rerouted)));
     await waitFor(() =>
       expect(
         screen.getByRole("combobox", {
@@ -365,7 +365,7 @@ describe("SharedMapView", () => {
     );
   });
 
-  it("never fabricates airports for a malformed current snapshot", async () => {
+  it("never fabricates airports for a malformed live map", async () => {
     const malformed = sharedMap();
     (malformed.map as { flights: unknown }).flights = null;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(malformed)));
@@ -378,32 +378,56 @@ describe("SharedMapView", () => {
     expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
   });
 
-  it("asks owners to republish snapshots that predate real airports", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        json(
-          {
-            error: {
-              code: "republish-required",
-              message:
-                "This shared map must be republished to show real airports.",
-            },
-          },
-          409,
-        ),
+  it("picks up newly enriched route geometry on the next revalidation", async () => {
+    // The viewer half of live sharing: the owner adds a waypoint, and the
+    // already-open public page draws it on its next poll. Nothing on this
+    // page asks anyone to republish anything.
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    const enriched = sharedMap();
+    enriched.map.flights[0] = {
+      ...enriched.map.flights[0],
+      routePath: [
+        { airport: enriched.map.routes[0].origin, kind: "landing" },
+        {
+          airport: airport(
+            "KRBG",
+            "Roseburg Regional Airport",
+            "Roseburg",
+            "US",
+            43.2384,
+            -123.3565,
+          ),
+          kind: "waypoint",
+        },
+        { airport: enriched.map.routes[0].destination, kind: "landing" },
+      ],
+    } as (typeof enriched.map.flights)[number];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(sharedMap()))
+      .mockResolvedValueOnce(json(enriched));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SharedMapView handle="public-handle" />);
+
+    const globe = await screen.findByTestId("shared-globe");
+    expect(globe).toHaveAttribute("data-route-paths", "");
+
+    now.mockReturnValue(131_000);
+    act(() => window.dispatchEvent(new Event("focus")));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("shared-globe")).toHaveAttribute(
+        "data-route-paths",
+        "LAX:landing>KRBG:waypoint>SJD:landing",
       ),
     );
-
-    render(<SharedMapView handle="legacy-handle" />);
-
-    expect(
-      await screen.findByRole("heading", {
-        name: "Shared map needs republishing",
-      }),
-    ).toBeVisible();
-    expect(screen.getByText(/real airport names and codes/i)).toBeVisible();
-    expect(screen.queryByTestId("shared-globe")).not.toBeInTheDocument();
+    // Geometry appeared; the visited-airport claims did not change.
+    expect(screen.getByTestId("shared-globe")).not.toHaveTextContent(
+      "KRBG Roseburg Regional Airport",
+    );
+    expect(document.body).not.toHaveTextContent(/republish/i);
+    now.mockRestore();
   });
 
   it("bounds framing work for thousands of unique public routes", () => {

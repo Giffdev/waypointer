@@ -3,21 +3,23 @@ import {
   getPublicMapProjection,
   publicHandleRateLimitKey,
   ShareNotFoundError,
-  ShareRepublishRequiredError,
+  ShareValidationError,
   toLegacyPublicMapProjection,
   toV3PublicMapProjection,
 } from "@/lib/sharing/service";
 import { SHARING_NO_STORE_HEADERS } from "@/lib/sharing/http";
 
 export const runtime = "nodejs";
-// Revoking a public share must take effect on the next request, so this
-// response deliberately stays out of browser and CDN caches.
+// A shared map is a live view of the owner's current map, and revoking one
+// must take effect on the next request, so this response deliberately stays
+// out of browser and CDN caches. Freshness is bounded instead by the viewer's
+// 30-second poll, not by a cached copy of a map that has since changed.
 const PUBLIC_HEADERS = {
   ...SHARING_NO_STORE_HEADERS,
   "X-Content-Type-Options": "nosniff",
 };
-// Published projections include one compact filter record per flight. Keep
-// each viewer bounded without making one busy public handle deny other viewers.
+// The projection includes one compact filter record per flight. Keep each
+// viewer bounded without making one busy public handle deny other viewers.
 const PUBLIC_MAP_IP_REQUESTS_PER_MINUTE = 120;
 const PUBLIC_MAP_HANDLE_REQUESTS_PER_MINUTE = 10;
 
@@ -79,17 +81,21 @@ export async function GET(
         { status: 404, headers: PUBLIC_HEADERS },
       );
     }
-    if (error instanceof ShareRepublishRequiredError) {
-      return Response.json(
-        {
-          error: {
-            code: "republish-required",
-            message:
-              "This shared map must be republished to show real airports.",
-          },
-        },
-        { status: 409, headers: PUBLIC_HEADERS },
-      );
+    // A live map that cannot be projected returns 503 until the offending
+    // owner row changes, and no owner action clears it, so the failure has
+    // to be visible to an operator. Logged in exactly the shape the owner
+    // enable route uses: the validation code, or the error type for anything
+    // else. Never the handle, owner id, or any flight or airport value —
+    // this is an unauthenticated path, and its log line must stay free of
+    // private data.
+    if (error instanceof ShareValidationError) {
+      console.error("Shared map projection validation failed.", {
+        code: error.code,
+      });
+    } else {
+      console.error("Shared map projection failed.", {
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
     }
     return Response.json(
       {

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Shared maps are now live views of your current map, not published
+  snapshots.** An enabled `/{username}` link always shows the flights you have
+  right now: import a logbook, edit or delete a flight, or re-import to add
+  route waypoints, and the link reflects it on its next read (within about the
+  30-second interval the shared page already polls on). The **Republish map**
+  action is gone, because there is nothing left to republish, and the sharing
+  copy now says the map stays current until you disable sharing.
+  - **Existing share links migrate themselves.** No one has to recreate a
+    link, and no URL changes. A handle enabled months ago starts serving live
+    data on the first read after deploy, including the route-waypoint geometry
+    that previously required a republish.
+  - **Editing a flight no longer silently revokes your share.** Migration
+    `0019_live_shared_maps` drops the `flights_invalidate_selected_share` and
+    `flight_stops_invalidate_selected_share` triggers, which existed only to
+    stop a frozen snapshot disagreeing with the owner's map. A live view
+    cannot disagree with itself. Revocation stays explicit and unchanged:
+    disabling sharing, renaming, disabling the account, or deleting it.
+  - What is shared is unchanged. The public read resolves a handle to an owner
+    through the new `SECURITY DEFINER` `public_share_owner_by_handle(text)` —
+    which answers only for an enabled, unrevoked share on a live account — and
+    then derives the map inside a read-only, owner-scoped transaction where
+    row-level security fails closed. The projection is still built from the
+    same allowlist: airports, dates, kind, role, aircraft, tail number, and
+    route geometry, and never notes, raw route text, source rows, flight IDs,
+    or account identity. Landing-only statistics are unchanged.
+  - Contracts 2, 3, and 4 are unchanged on the wire, so browsers still running
+    an older bundle keep working. The `409 republish-required` response no
+    longer exists, since it only ever described a stored snapshot too old to
+    serve.
+  - `map_shares.projection` and `map_share_flights` are retained, written on
+    enable, and marked deprecated: they exist so a rolled-back build still has
+    a map to serve. Nothing in the live path reads them, so a stale document
+    can never be served as though it were current.
+  - Airport display codes now come from the live catalog row on every read
+    rather than from a stored label plus a corrective lookup, so a code
+    correction lands with one fewer query and no special case.
+  - Cost is flat: one owner resolution plus three bounded owner-scoped
+    queries per request, with no per-flight or per-airport query, and
+    `Cache-Control: no-store` as before — a cached copy would reintroduce
+    exactly the frozen view this removes.
+
 ### Added
 - Route waypoints on your map, private and shared: a ForeFlight `Route` column
   is now parsed into an ordered path of *waypoints* alongside the flight's
@@ -32,14 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ForeFlight's landing-count columns are deliberately not read: they say how
   many landings a leg had, never where, so they can neither place a stop nor
   honestly raise a warning.
-- Published shared maps carry the waypoint path. `map_shares.projection` is
-  `jsonb`, so the ordered path was added to the existing snapshot with no
-  migration, inside the schema-2 rollback document a previous build reads
-  without ever asking for it. **A map published before this shipped keeps
-  drawing straight lines until its owner republishes it** — a published map is
-  a frozen snapshot by design — and the sharing panel now says so. The
-  schema-2 response served to already-shipped browsers deliberately omits the
-  path, because that parser rejects unrecognised keys.
+- Shared maps carry the waypoint path. The ordered path is part of the
+  contract=4 public projection and is derived from the owner's current route
+  stops on every read, so a map shared before waypoints existed draws them as
+  soon as its flights carry them. The schema-2 and schema-3 responses served
+  to already-shipped browsers deliberately omit the path, because those
+  parsers reject unrecognised keys.
 - Import review notice on `/map`: when rows are still awaiting a decision,
   carrying an unresolved duplicate, or carrying a route point that could not be
   placed, a small banner says how many and links into the existing import
@@ -57,8 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second control would be a redundant path to the same outcome.
 - Map-page Share control: a lightweight "Share map" popover on `/map` shows
   sharing status, enables sharing, and copies/opens the public link, and
-  deep-links to `/settings#sharing-title` for full management
-  (disable/republish). (#44)
+  deep-links to `/settings#sharing-title` for full management (disable). (#44)
 
 ### Fixed
 - Re-importing a logbook now adds the route waypoints it carries to flights

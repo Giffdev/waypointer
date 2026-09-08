@@ -33,6 +33,9 @@ export function quotedPostgresIdentifier(value: string): string {
 export function runtimeProjectionGrantStatements(role: string): string[] {
   const identifier = quotedPostgresIdentifier(role);
   return [
+    // The live public read: resolves an enabled share handle to its owner.
+    `GRANT EXECUTE ON FUNCTION public_share_owner_by_handle(text) TO ${identifier}`,
+    // Deprecated, still granted so a rolled-back build keeps serving maps.
     `GRANT EXECUTE ON FUNCTION public_map_projection_by_handle(text) TO ${identifier}`,
   ];
 }
