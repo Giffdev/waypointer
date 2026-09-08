@@ -79,7 +79,7 @@ export interface ImportService {
     file: File,
     mapping?: GenericCsvMapping,
   ): Promise<UploadImportResponse>;
-  listBatches(userId: string): Promise<ImportBatchSummary[]>;
+  findLatestActionableBatch(userId: string): Promise<ImportBatchSummary | null>;
   getPendingImportAttention(userId: string): Promise<PendingImportAttention>;
   getBatch(
     userId: string,
@@ -247,6 +247,8 @@ function storageAwareImportRepository(input: {
     expireBatchAndScrub: (...args) =>
       repository.expireBatchAndScrub(...args),
     listBatches: (...args) => repository.listBatches(...args),
+    findLatestActionableBatch: (...args) =>
+      repository.findLatestActionableBatch(...args),
     getBatch: (...args) => repository.getBatch(...args),
     listRows: (...args) => repository.listRows(...args),
     getRowsForCommit: (...args) => repository.getRowsForCommit(...args),
@@ -349,9 +351,13 @@ export const importService: ImportService = {
     );
   },
 
-  async listBatches(userId) {
+  // The import screen's only read on load. It keeps the retention sweep that
+  // `listBatches` used to carry on this exact entry point — opening /import
+  // still expires and scrubs originals past their window — while the batch
+  // read itself is now a single bounded row instead of the whole corpus.
+  async findLatestActionableBatch(userId) {
     await expireOriginalUploads(userId);
-    return repository.listBatches(userId);
+    return repository.findLatestActionableBatch(userId);
   },
 
   async getPendingImportAttention(userId) {

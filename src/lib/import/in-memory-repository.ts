@@ -40,6 +40,7 @@ import {
   SUPERSEDABLE_IMPORT_BATCH_STATUSES,
   isReusableImportBatchStatus,
 } from "./batch-lifecycle";
+import { isResumableImportBatch } from "./resume";
 
 type BatchRecord = {
   userId: string;
@@ -412,6 +413,23 @@ export class InMemoryImportRepository
     userId: string,
   ): Promise<PendingImportAttention> {
     return summarizePendingImportAttention(await this.listBatches(userId));
+  }
+
+  async findLatestActionableBatch(
+    userId: string,
+  ): Promise<ImportBatchSummary | null> {
+    requireUser(userId);
+    return (
+      [...this.batches.values()]
+        .filter(
+          (record) =>
+            record.userId === userId && isResumableImportBatch(record.summary),
+        )
+        .sort((left, right) =>
+          right.summary.createdAt.localeCompare(left.summary.createdAt),
+        )
+        .map((record) => clone(record.summary))[0] ?? null
+    );
   }
 
   async listReviewBatchIds(userId: string): Promise<string[]> {

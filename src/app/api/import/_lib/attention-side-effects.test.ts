@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   recordBatchObjectCleanup: vi.fn(),
   storageDelete: vi.fn(),
   getPendingImportAttention: vi.fn(),
+  findLatestActionableBatch: vi.fn(),
 }));
 
 vi.mock("@/lib/storage", () => ({
@@ -31,6 +32,7 @@ vi.mock("@/lib/db/repositories/drizzle-import-repository", () => ({
     expireBatchAndScrub = mocks.expireBatchAndScrub;
     recordBatchObjectCleanup = mocks.recordBatchObjectCleanup;
     getPendingImportAttention = mocks.getPendingImportAttention;
+    findLatestActionableBatch = mocks.findLatestActionableBatch;
   },
 }));
 
@@ -77,5 +79,45 @@ describe("importService.getPendingImportAttention", () => {
     expect(mocks.scrubBatchRawSnapshots).not.toHaveBeenCalled();
     expect(mocks.expireBatchAndScrub).not.toHaveBeenCalled();
     expect(mocks.recordBatchObjectCleanup).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Opening /import is the write-adjacent entry point that has always carried
+ * the retention sweep, back when it read the whole batch list. Narrowing that
+ * read to one bounded row must not quietly take retention with it: an account
+ * that only ever visits /import would stop expiring its own uploads.
+ */
+describe("importService.findLatestActionableBatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.findLatestActionableBatch.mockResolvedValue(null);
+    mocks.listBatchesPendingObjectCleanup.mockResolvedValue([
+      {
+        batchId: "batch-1",
+        status: "committed",
+        objectKeys: ["imports/u/b/hash.csv"],
+      },
+    ]);
+    mocks.storageDelete.mockResolvedValue(undefined);
+  });
+
+  it("still expires, scrubs, and deletes retained originals past their window", async () => {
+    await expect(
+      importService.findLatestActionableBatch(userId),
+    ).resolves.toBeNull();
+
+    expect(mocks.listBatchesPendingObjectCleanup).toHaveBeenCalledWith(userId);
+    expect(mocks.scrubBatchRawSnapshots).toHaveBeenCalledWith(
+      userId,
+      "batch-1",
+    );
+    expect(mocks.storageDelete).toHaveBeenCalledWith("imports/u/b/hash.csv");
+    expect(mocks.expireBatchAndScrub).toHaveBeenCalledWith(userId, "batch-1");
+    expect(mocks.recordBatchObjectCleanup).toHaveBeenCalledWith(
+      userId,
+      "batch-1",
+    );
+    expect(mocks.findLatestActionableBatch).toHaveBeenCalledWith(userId);
   });
 });

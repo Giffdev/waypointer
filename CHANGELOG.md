@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The import screen no longer lists your past imports.** The "Your batches"
+  history showed every import you had ever run — committed, deduplicated,
+  cancelled, and expired alike — which is a growing list of finished work you
+  cannot act on. In its place there is at most one compact banner, and only
+  when an import is genuinely unfinished: rows still awaiting your review, a
+  run that never completed, or a failure the **Retry import** button can
+  actually recover. **Resume import** reopens that batch into the same review,
+  polling, retry, and cancel flow the history used to reach, so nothing about
+  recovery is lost. A visit with nothing outstanding now renders nothing at
+  all.
+  - Opening `/import` no longer reads your whole import corpus. The new
+    `GET /api/import/resume` filters by status in SQL and returns a single
+    row, replacing `GET /api/import/batches`, which summarized every batch —
+    counting rows and committed flights for each one — to render a list. The
+    retention sweep that entry point has always carried is unchanged: opening
+    `/import` still expires and scrubs originals past their window.
+  - The set of failure codes that can be retried is now defined once and read
+    by both the banner and the retry button, so the banner can never offer to
+    resume an import whose retry button would never appear.
 - **Shared maps are now live views of your current map, not published
   snapshots.** An enabled `/{username}` link always shows the flights you have
   right now: import a logbook, edit or delete a flight, or re-import to add
