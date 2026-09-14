@@ -22,6 +22,7 @@ vi.mock("@/components/globe-panel", () => ({
     routePathFlights,
     viewMode,
     focusAirportCode,
+    dismissInteractionHintOnMobileInteraction,
   }: {
     airports: Array<{ code: string; name: string }>;
     routes: unknown[];
@@ -30,11 +31,15 @@ vi.mock("@/components/globe-panel", () => ({
     }>;
     viewMode: string;
     focusAirportCode: string;
+    dismissInteractionHintOnMobileInteraction?: boolean;
   }) => (
     <div
       data-testid="shared-globe"
       data-view-mode={viewMode}
       data-focus={focusAirportCode}
+      data-dismiss-mobile-hint={
+        dismissInteractionHintOnMobileInteraction ? "true" : "false"
+      }
       data-route-paths={(routePathFlights ?? [])
         .map((flight) =>
           (flight.routePath ?? [])
@@ -84,6 +89,7 @@ describe("SharedMapView", () => {
     render(<SharedMapView handle="public-handle" />);
 
     const globe = await screen.findByTestId("shared-globe");
+    expect(globe).toHaveAttribute("data-dismiss-mobile-hint", "false");
     expect(globe).toHaveAttribute(
       "data-route-paths",
       "LAX:landing>KRBG:waypoint>SJD:landing",

@@ -33,12 +33,20 @@ vi.mock("@/components/globe-panel", () => ({
     routes,
     airports,
     viewMode,
+    dismissInteractionHintOnMobileInteraction,
   }: {
     routes: unknown[];
     airports: unknown[];
     viewMode: string;
+    dismissInteractionHintOnMobileInteraction?: boolean;
   }) => (
-    <div aria-label="Cartographic flight map" data-view-mode={viewMode}>
+    <div
+      aria-label="Cartographic flight map"
+      data-view-mode={viewMode}
+      data-dismiss-mobile-hint={
+        dismissInteractionHintOnMobileInteraction ? "true" : "false"
+      }
+    >
       {routes.length} routes and {airports.length} airports
     </div>
   ),
@@ -70,7 +78,6 @@ describe("route clients", () => {
         }}
       />,
     );
-    expect(screen.getByLabelText("Cartographic flight map")).toBeInTheDocument();
     const typeFilter = screen.getByRole("combobox", {
       name: "Filter flights by flight role or type",
     });
@@ -153,6 +160,24 @@ describe("route clients", () => {
       screen.queryByText(/Explore flights committed to your private account/),
     ).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["representative", "false"],
+    ["local-preview", "false"],
+    ["persisted", "true"],
+  ] as const)(
+    "sets mobile hint dismissal to %s only for persisted map data",
+    (dataMode, expected) => {
+      const mapData = buildMapPageContract(getInitialFilters(), null, null);
+
+      render(<MapRouteClient data={{ ...mapData, dataMode }} />);
+
+      expect(screen.getByLabelText("Cartographic flight map")).toHaveAttribute(
+        "data-dismiss-mobile-hint",
+        expected,
+      );
+    },
+  );
 
   it("switches projection without losing focus and persists explicit owner preference", async () => {
     const user = userEvent.setup();

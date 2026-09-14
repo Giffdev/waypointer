@@ -70,7 +70,13 @@ describe("route split layout", () => {
     const narrowBlockStart = css.indexOf("@media (max-width: 580px)");
     expect(narrowBlockStart).toBeGreaterThan(-1);
     const narrowRules = css.slice(narrowBlockStart);
+    expect(narrowRules).toMatch(
+      /\.map-stage\s*>\s*\.globe-frame\s*>\s*\.globe-shell\s*\{[^}]*height:\s*calc\(55svh\s*-\s*40px\)[^}]*min-height:\s*390px/,
+    );
     expect(narrowRules).toMatch(/\.globe-shell\s*\{[^}]*height:\s*calc\(50svh\s*-\s*40px\)/);
+    expect(
+      narrowRules.indexOf(".map-stage > .globe-frame > .globe-shell"),
+    ).toBeLessThan(narrowRules.indexOf(".globe-shell {"));
   });
 
   it("keeps the flown-airport legend token decoupled from the unrelated private-route literal", () => {

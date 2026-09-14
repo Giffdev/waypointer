@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { installOpenMapAttributionFixture } from "./map-style-fixture";
 
+const persistedEmail = process.env.FLIGHT_MAP_E2E_EMAIL;
+const persistedPassword = process.env.FLIGHT_MAP_E2E_PASSWORD;
+const persistedCredentialsEnabled =
+  process.env.FLIGHT_MAP_E2E_PERSISTED === "true" &&
+  Boolean(persistedEmail && persistedPassword);
+
 function shownCount(status: string): number {
   const match = /^([\d,]+) of/.exec(status);
   if (!match) throw new Error(`Unexpected records status: ${status}`);
@@ -82,7 +88,10 @@ test("mobile map removes promotional spacing and exposes filters in the first vi
       exact: false,
     }),
   ).toHaveCount(0);
-  await expect(filters).toBeInViewport({ ratio: 0.1 });
+  // The taller phone map intentionally trades a small amount of the initial
+  // filter exposure for more usable map space; the filter panel must still
+  // begin within the first viewport.
+  await expect(filters).toBeInViewport({ ratio: 0.05 });
 
   const [overlayBox, controlsBox] = await Promise.all([
     overlay.boundingBox(),
@@ -101,6 +110,118 @@ test("mobile map removes promotional spacing and exposes filters in the first vi
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
+});
+
+test("representative preview keeps its hint while map-route sizing remains responsive", async ({
+  page,
+}, testInfo) => {
+  await installOpenMapAttributionFixture(page);
+  await page.goto("/map");
+  await expect(page.locator(".map-intro")).toContainText(
+    "Representative flight history",
+  );
+
+  const globe = page.locator(".map-stage > .globe-frame > .globe-shell");
+  await expect(globe).toHaveCount(1);
+  await expect(globe).toHaveAttribute("data-map-ready", "true", {
+    timeout: 15_000,
+  });
+
+  if (testInfo.project.name === "mobile-chrome") {
+    const [globeBox, creditsBox, viewportHeight] = await Promise.all([
+      globe.boundingBox(),
+      page.locator(".terrain-attribution").boundingBox(),
+      page.evaluate(() => window.innerHeight),
+    ]);
+    expect(globeBox).not.toBeNull();
+    expect(creditsBox).not.toBeNull();
+    expect(globeBox!.height).toBeCloseTo(
+      Math.max(390, viewportHeight * 0.55 - 40),
+      0,
+    );
+    expect(creditsBox!.y).toBeGreaterThanOrEqual(
+      globeBox!.y + globeBox!.height,
+    );
+
+    const hint = page.getByText(
+      "Drag to explore · Wheel or pinch to zoom",
+      { exact: true },
+    );
+    await expect(hint).toBeVisible();
+    await globe.dispatchEvent("pointerdown", {
+      pointerType: "touch",
+      isPrimary: true,
+    });
+    await expect(hint).toBeVisible();
+    return;
+  }
+
+  const [globeBox, stageBox] = await Promise.all([
+    globe.boundingBox(),
+    page.locator(".map-stage").boundingBox(),
+  ]);
+  expect(globeBox).not.toBeNull();
+  expect(stageBox).not.toBeNull();
+  expect(globeBox!.height).toBeCloseTo(stageBox!.height, 0);
+  await globe.dispatchEvent("pointerdown", { pointerType: "mouse" });
+  await expect(
+    page.getByText("Drag to explore · Wheel or pinch to zoom", {
+      exact: true,
+    }),
+  ).toBeVisible();
+});
+
+test("persisted authenticated mobile map is taller and dismisses its hint on interaction", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "mobile-chrome",
+    "The mobile project verifies the authenticated phone-only behavior.",
+  );
+  test.skip(
+    !persistedCredentialsEnabled,
+    "Persisted E2E credentials are not configured.",
+  );
+
+  await installOpenMapAttributionFixture(page);
+  await page.goto("/auth/sign-in");
+  await page
+    .getByLabel("Email address", { exact: true })
+    .fill(persistedEmail!);
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill(persistedPassword!);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/map$/);
+  await expect(page.locator(".map-intro")).toContainText(
+    "Your saved flight history",
+  );
+  await expect(page.getByRole("button", { name: "Share map" })).toBeVisible();
+
+  const globe = page.locator(".map-stage > .globe-frame > .globe-shell");
+  await expect(globe).toHaveAttribute("data-map-ready", "true", {
+    timeout: 15_000,
+  });
+  const [globeBox, viewportHeight] = await Promise.all([
+    globe.boundingBox(),
+    page.evaluate(() => window.innerHeight),
+  ]);
+  expect(globeBox).not.toBeNull();
+  expect(globeBox!.height).toBeCloseTo(
+    Math.max(390, viewportHeight * 0.55 - 40),
+    0,
+  );
+
+  const hint = page.getByText(
+    "Drag to explore · Wheel or pinch to zoom",
+    { exact: true },
+  );
+  await expect(hint).toBeVisible();
+  await globe.dispatchEvent("pointerdown", {
+    pointerType: "touch",
+    isPrimary: true,
+  });
+  await expect(hint).toHaveCount(0);
 });
 
 test("source filtering updates history, URL, navigation, stats, and map data", async ({
@@ -125,7 +246,9 @@ test("source filtering updates history, URL, navigation, stats, and map data", a
     Array(Math.min(foreFlightCount, 50)).fill("ForeFlight"),
   );
 
-  await page.getByRole("link", { name: "Map" }).first().click();
+  const mapLink = page.getByRole("link", { name: "Map" }).first();
+  await mapLink.focus();
+  await mapLink.press("Enter");
   await expect(page).toHaveURL(/\/map\?source=ForeFlight$/);
   await expect(page.locator(".filter-heading strong")).toContainText(
     `${foreFlightCount.toLocaleString()} flights`,

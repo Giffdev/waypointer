@@ -24,6 +24,7 @@ type GlobePanelProps = {
   homeFrame: MapFrame;
   autoRotate: boolean;
   viewMode: MapViewMode;
+  dismissInteractionHintOnMobileInteraction?: boolean;
   onSelectAirport: (identity: string) => void;
   onSelectRoute: (routeId: string) => void;
   onZoomChange: (zoom: number) => void;
