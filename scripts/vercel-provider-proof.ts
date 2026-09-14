@@ -19,7 +19,10 @@ import {
 } from "./airport-release-provenance.ts";
 import { requireRepositoryPath } from "./airport-release-safety.ts";
 import { AirportCatalogSafetyError } from "./postgres-diagnostics.ts";
-import type { VercelPrebuiltArtifactFile } from "./vercel-prebuilt-artifact.ts";
+import type {
+  VercelPrebuiltArtifactEntry,
+  VercelPrebuiltArtifactFile,
+} from "./vercel-prebuilt-artifact.ts";
 
 export const RELEASE_DEPLOYMENT_TRUST = {
   platform: "vercel",
@@ -89,7 +92,7 @@ export interface PrebuiltProviderReleaseExpectation
   deploymentMethod: "vercel-cli-prebuilt";
   prebuiltArtifact: {
     manifestSha256: string;
-    files: readonly VercelPrebuiltArtifactFile[];
+    files: readonly VercelPrebuiltArtifactEntry[];
   };
 }
 
@@ -313,6 +316,28 @@ function validateDeploymentSourceFiles(
   }
 }
 
+function validatePrebuiltArtifactEntries(
+  files: readonly VercelPrebuiltArtifactEntry[],
+): void {
+  validateDeploymentSourceFiles(files);
+  if (
+    files.some(
+      (file) =>
+        (file.type !== "file" && file.type !== "symlink") ||
+        (file.type === "file" &&
+          Object.prototype.hasOwnProperty.call(file, "linkTarget")) ||
+        (file.type === "symlink" &&
+          (typeof file.linkTarget !== "string" ||
+            Buffer.byteLength(file.linkTarget, "utf8") !== file.bytes ||
+            createHash("sha1").update(file.linkTarget).digest("hex") !==
+              file.sha1 ||
+            sha256Bytes(file.linkTarget) !== file.sha256)),
+    )
+  ) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+}
+
 function validateExpectation(
   expectation: ProviderReleaseExpectation,
   requiredPhase: ReleasePhase,
@@ -331,7 +356,11 @@ function validateExpectation(
   const providerFiles = prebuilt
     ? expectation.prebuiltArtifact.files
     : expectation.sourceArchive.files;
-  validateDeploymentSourceFiles(providerFiles);
+  if (prebuilt) {
+    validatePrebuiltArtifactEntries(expectation.prebuiltArtifact.files);
+  } else {
+    validateDeploymentSourceFiles(providerFiles);
+  }
   const sourceArchiveManifestSha256 = source
     ? sha256Bytes(
         canonicalJson({

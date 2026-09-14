@@ -83,6 +83,7 @@ function expectationFixture(): PrebuiltProviderReleaseExpectation {
       files: [
         {
           path: "package.json",
+          type: "file" as const,
           bytes: Buffer.byteLength(fileContents),
           sha1: createHash("sha1").update(fileContents).digest("hex"),
           sha256: createHash("sha256").update(fileContents).digest("hex"),

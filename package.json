@@ -43,6 +43,8 @@
     "import:migrate-local": "node --env-file-if-exists=.env.local --experimental-strip-types scripts/migrate-local-artifact.ts",
     "deploy:preview": "npm run check:public-auth && npm run check:preview-config && vercel deploy --target=preview --yes --archive=tgz",
     "deploy:production": "tsx scripts/deploy-production.ts",
+    "pack:production-artifact": "tsx scripts/vercel-prebuilt-transport.ts pack",
+    "restore:production-artifact": "tsx scripts/vercel-prebuilt-transport.ts restore",
     "verify:production-candidate": "tsx scripts/verify-control-plane-deployment.ts",
     "promote:production": "tsx scripts/promote-production.ts",
     "check:preview-config": "node scripts/check-preview-release-config.mjs && node scripts/check-firebase-oauth-host.mjs flight-map-preview-giffdev.vercel.app",
