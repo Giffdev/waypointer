@@ -2493,7 +2493,17 @@ footer { border-top: 1px solid var(--line); color: #617980; display: flex; font-
 @media (max-width: 580px) {
   .profile-button span { display: none; }
   .profile-button { min-width: 44px; padding: 0; }
-  /* Same in-flow terrain-credits compensation as the 800px breakpoint. */
+  /*
+   * Keep the authenticated phone map plus its in-flow terrain credits near
+   * 55svh overall. The direct-child chain mirrors the rendered structure and
+   * deliberately excludes shared maps, whose established 70svh sizing stays
+   * unchanged.
+   */
+  .map-stage > .globe-frame > .globe-shell {
+    height: calc(55svh - 40px);
+    min-height: 390px;
+  }
+  /* Shared and other narrow maps retain the existing compact fallback. */
   .globe-shell { height: calc(50svh - 40px); min-height: 360px; }
   .map-overlay { gap: 12px; grid-template-columns: 1fr; padding: 12px; }
   .map-intro { border-radius: 14px; padding: 18px; }

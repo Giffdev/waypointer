@@ -3,7 +3,14 @@
 import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   airportExactIdentity,
@@ -37,6 +44,10 @@ const mapMocks = vi.hoisted(() => {
     // waypoint the map is supposed to draw actually reached it.
     const sourceData = new Map<string, unknown>();
     const imageIds = new Set<string>();
+    const eventHandlers = new Map<
+      string,
+      Set<(event: Record<string, unknown>) => void>
+    >();
     const indexOfLayer = (id: string) =>
       layers.findIndex((layer) => layer.id === id);
 
@@ -97,10 +108,18 @@ const mapMocks = vi.hoisted(() => {
       getZoom: vi.fn(() => 4),
       hasImage: vi.fn((id: string) => imageIds.has(id)),
       jumpTo: vi.fn(),
-      off: vi.fn(),
+      emit: (event: string, data: Record<string, unknown> = {}) => {
+        for (const handler of eventHandlers.get(event) ?? []) handler(data);
+      },
+      off: vi.fn(
+        (event: string, handler: (data: Record<string, unknown>) => void) => {
+          eventHandlers.get(event)?.delete(handler);
+        },
+      ),
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-        void event;
-        void handler;
+        const handlers = eventHandlers.get(event) ?? new Set();
+        handlers.add(handler as (data: Record<string, unknown>) => void);
+        eventHandlers.set(event, handlers);
       }),
       once: vi.fn((event: string, callback: () => void) => {
         if (event === "load" || event === "moveend") queueMicrotask(callback);
@@ -233,6 +252,159 @@ afterEach(() => {
 });
 
 describe("FlightGlobe reduced motion", () => {
+  it.each(["pointerdown", "touchstart", "wheel", "gesturestart"])(
+    "dismisses the mobile interaction hint on %s without cancelling the gesture",
+    async (eventName) => {
+      installMatchMedia(false, true);
+      const view = render(
+        <FlightGlobe
+          {...defaultProps()}
+          dismissInteractionHintOnMobileInteraction
+        />,
+      );
+      await readyMap();
+      const region = screen.getByRole("region", {
+        name: /interactive 3d globe/i,
+      });
+      const event = new Event(eventName, {
+        bubbles: true,
+        cancelable: true,
+      });
+
+      fireEvent(region, event);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(
+        screen.queryByText("Drag to explore · Wheel or pinch to zoom"),
+      ).not.toBeInTheDocument();
+
+      const removeEventListener = vi.spyOn(region, "removeEventListener");
+      view.unmount();
+      expect(removeEventListener).toHaveBeenCalledWith(
+        eventName,
+        expect.any(Function),
+      );
+    },
+  );
+
+  it("dismisses for user-originated MapLibre movement but not programmatic movement", async () => {
+    installMatchMedia(false, true);
+    const view = render(
+      <FlightGlobe
+        {...defaultProps()}
+        dismissInteractionHintOnMobileInteraction
+      />,
+    );
+    const map = await readyMap();
+    const hint = () =>
+      screen.queryByText("Drag to explore · Wheel or pinch to zoom");
+
+    act(() => map.emit("movestart"));
+    expect(hint()).toBeInTheDocument();
+
+    act(() =>
+      map.emit("movestart", { originalEvent: new Event("pointermove") }),
+    );
+    expect(hint()).not.toBeInTheDocument();
+
+    view.unmount();
+    expect(map.off).toHaveBeenCalledWith("movestart", expect.any(Function));
+  });
+
+  it("keeps the interaction hint on desktop map interactions", async () => {
+    installMatchMedia(false, false);
+    render(
+      <FlightGlobe
+        {...defaultProps()}
+        dismissInteractionHintOnMobileInteraction
+      />,
+    );
+    await readyMap();
+
+    fireEvent.pointerDown(
+      screen.getByRole("region", { name: /interactive 3d globe/i }),
+    );
+
+    expect(
+      screen.getByText("Drag to explore · Wheel or pinch to zoom"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the shared-map default hint after mobile touch, wheel, and user movement", async () => {
+    installMatchMedia(false, true);
+    render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+    const region = screen.getByRole("region", {
+      name: /interactive 3d globe/i,
+    });
+    const hint = () =>
+      screen.queryByText("Drag to explore · Wheel or pinch to zoom");
+
+    fireEvent.touchStart(region);
+    fireEvent.wheel(region);
+    act(() =>
+      map.emit("movestart", { originalEvent: new Event("pointermove") }),
+    );
+
+    expect(hint()).toBeInTheDocument();
+  });
+
+  it("honors a false-to-true opt-in transition for DOM and MapLibre interactions", async () => {
+    installMatchMedia(false, true);
+    const view = render(<FlightGlobe {...defaultProps()} />);
+    const map = await readyMap();
+    const region = screen.getByRole("region", {
+      name: /interactive 3d globe/i,
+    });
+    const hint = () =>
+      screen.queryByText("Drag to explore · Wheel or pinch to zoom");
+
+    fireEvent.pointerDown(region);
+    act(() =>
+      map.emit("movestart", { originalEvent: new Event("pointermove") }),
+    );
+    expect(hint()).toBeInTheDocument();
+
+    view.rerender(
+      <FlightGlobe
+        {...defaultProps()}
+        dismissInteractionHintOnMobileInteraction
+      />,
+    );
+    act(() =>
+      map.emit("movestart", { originalEvent: new Event("pointermove") }),
+    );
+    expect(hint()).not.toBeInTheDocument();
+  });
+
+  it("restores and preserves the default hint after a true-to-false opt-in transition", async () => {
+    installMatchMedia(false, true);
+    const view = render(
+      <FlightGlobe
+        {...defaultProps()}
+        dismissInteractionHintOnMobileInteraction
+      />,
+    );
+    const map = await readyMap();
+    const region = screen.getByRole("region", {
+      name: /interactive 3d globe/i,
+    });
+    const hint = () =>
+      screen.queryByText("Drag to explore · Wheel or pinch to zoom");
+
+    fireEvent.pointerDown(region);
+    expect(hint()).not.toBeInTheDocument();
+
+    view.rerender(<FlightGlobe {...defaultProps()} />);
+    await waitFor(() => expect(hint()).toBeInTheDocument());
+
+    fireEvent.wheel(region);
+    act(() =>
+      map.emit("movestart", { originalEvent: new Event("pointermove") }),
+    );
+    expect(hint()).toBeInTheDocument();
+  });
+
   it("keeps required map attribution compact and persistent without unnecessary branding text", async () => {
     installMatchMedia(false);
 
@@ -875,10 +1047,13 @@ function expectReliefBeneathRoutes(layerIds: string[]) {
   }
 }
 
-function installMatchMedia(matches: boolean) {
-  vi.stubGlobal("matchMedia", vi.fn(() => ({
-    matches,
-    media: "(prefers-reduced-motion: reduce)",
+function installMatchMedia(reducedMotion: boolean, mobile = false) {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+    matches:
+      query === "(max-width: 800px)"
+        ? mobile
+        : reducedMotion,
+    media: query,
     onchange: null,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),

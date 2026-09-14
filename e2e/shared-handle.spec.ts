@@ -3,7 +3,7 @@ import { CANONICAL_PRODUCTION_ORIGIN } from "../scripts/production-reauth-gate";
 import { installOpenMapAttributionFixture } from "./map-style-fixture";
 
 const projection = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   owner: { displayName: null },
   summary: { flightCount: 4, routeCount: 2 },
   routes: [
@@ -336,6 +336,23 @@ test("keeps the view toggle usable at mobile widths", async ({ page }) => {
   await installOpenMapAttributionFixture(page);
 
   await page.goto("/readable-pilot");
+  const sharedGlobe = page.locator(".shared-map-canvas .globe-shell");
+  const hint = page.getByText("Drag to explore · Wheel or pinch to zoom", {
+    exact: true,
+  });
+  await expect(hint).toBeVisible();
+  await sharedGlobe.dispatchEvent("pointerdown", {
+    pointerType: "touch",
+    isPrimary: true,
+  });
+  await sharedGlobe.dispatchEvent("wheel", { deltaY: 120 });
+  await expect(hint).toBeVisible();
+  const sharedGlobeBox = await sharedGlobe.boundingBox();
+  expect(sharedGlobeBox).not.toBeNull();
+  expect(sharedGlobeBox!.height).toBeCloseTo(
+    Math.max(440, Math.min(812 * 0.7, 760)),
+    0,
+  );
   const globeButton = page.getByRole("button", { name: "3D globe" });
   const flatButton = page.getByRole("button", { name: "Flat map" });
   await expect(globeButton).toBeVisible();

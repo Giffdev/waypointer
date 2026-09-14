@@ -105,6 +105,8 @@ type FlightGlobeProps = {
   homeFrame: MapFrame;
   autoRotate: boolean;
   viewMode: MapViewMode;
+  /** Allows the owning route to hide the hint after a mobile user interaction. */
+  dismissInteractionHintOnMobileInteraction?: boolean;
   onSelectAirport: (code: string) => void;
   onSelectRoute: (routeId: string) => void;
   onZoomChange: (zoom: number) => void;
@@ -130,6 +132,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   // control once it renders outside that region (see the `aria-describedby`
   // usage below, and the comment on `.terrain-attribution`'s placement).
   const terrainAttributionId = useId();
+  const shellRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const loadedRef = useRef(false);
@@ -151,14 +154,52 @@ export default function FlightGlobe(props: FlightGlobeProps) {
   const selectedRouteIdRef = useRef("");
   const routePathFlightsRef = useRef(props.routePathFlights ?? []);
   const viewModeRef = useRef(props.viewMode);
+  const dismissInteractionHintOnMobileInteractionRef = useRef(
+    props.dismissInteractionHintOnMobileInteraction ?? false,
+  );
   const [basemapMode, setBasemapMode] = useState<BasemapMode>("loading");
   const [mapReady, setMapReady] = useState(false);
   const [initializationError, setInitializationError] = useState("");
   const [terrainActive, setTerrainActive] = useState(false);
   const [terrainError, setTerrainError] = useState("");
+  const [interactionHintDismissed, setInteractionHintDismissed] =
+    useState(false);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+
+    const dismissMobileInteractionHint = () => {
+      if (
+        dismissInteractionHintOnMobileInteractionRef.current &&
+        window.matchMedia("(max-width: 800px)").matches
+      ) {
+        setInteractionHintDismissed(true);
+      }
+    };
+    const interactionEvents = [
+      "pointerdown",
+      "touchstart",
+      "wheel",
+      "gesturestart",
+    ];
+    for (const eventName of interactionEvents) {
+      shell.addEventListener(eventName, dismissMobileInteractionHint, {
+        passive: true,
+      });
+    }
+
+    return () => {
+      for (const eventName of interactionEvents) {
+        shell.removeEventListener(eventName, dismissMobileInteractionHint);
+      }
+    };
+  }, []);
 
   useLayoutEffect(() => {
     viewModeRef.current = props.viewMode;
+    dismissInteractionHintOnMobileInteractionRef.current =
+      props.dismissInteractionHintOnMobileInteraction ?? false;
     routePathFlightsRef.current = props.routePathFlights ?? [];
     dataReadinessRef.current.setLatest({
       airports: props.airports,
@@ -168,6 +209,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     });
   }, [
     props.airports,
+    props.dismissInteractionHintOnMobileInteraction,
     props.focusAirportCode,
     props.routePathFlights,
     props.routes,
@@ -190,6 +232,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     const abortController = new AbortController();
     let disposed = false;
     let unbindZoomSync: (() => void) | undefined;
+    let unbindInteractionHint: (() => void) | undefined;
     const failInitialization = (error: unknown) => {
       if (disposed) return;
       const message =
@@ -308,6 +351,21 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       unbindZoomSync = bindCompletedMapZoom(map, (zoom) => {
         onZoomChangeRef.current(zoom);
       });
+      const dismissHintForUserMovement = (event: {
+        originalEvent?: unknown;
+      }) => {
+        if (
+          dismissInteractionHintOnMobileInteractionRef.current &&
+          event.originalEvent &&
+          window.matchMedia("(max-width: 800px)").matches
+        ) {
+          setInteractionHintDismissed(true);
+        }
+      };
+      map.on("movestart", dismissHintForUserMovement);
+      unbindInteractionHint = () => {
+        map.off("movestart", dismissHintForUserMovement);
+      };
       map.on("click", (event) => {
         const feature = map.queryRenderedFeatures(event.point, {
           layers: AIRPORT_CIRCLE_LAYERS.filter((layerId) => Boolean(map.getLayer(layerId))),
@@ -380,6 +438,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
       disposed = true;
       abortController.abort();
       unbindZoomSync?.();
+      unbindInteractionHint?.();
       loadedRef.current = false;
       mapRef.current?.remove();
       mapRef.current = null;
@@ -576,6 +635,7 @@ export default function FlightGlobe(props: FlightGlobeProps) {
     <div className="globe-frame">
       <div
         className="globe-shell cartographic-map"
+        ref={shellRef}
         role="region"
         aria-label={`Interactive ${props.viewMode === "globe" ? "3D globe" : "flat projected map"} with land, water, place labels${terrainActive ? ", terrain relief" : ""}, airports, and flight routes`}
         aria-busy={!mapReady}
@@ -603,7 +663,12 @@ export default function FlightGlobe(props: FlightGlobeProps) {
               : "Basemap unavailable · routes remain local"}
           </div>
         )}
-        <div className="globe-hint">Drag to explore · Wheel or pinch to zoom</div>
+        {(!props.dismissInteractionHintOnMobileInteraction ||
+          !interactionHintDismissed) && (
+          <div className="globe-hint">
+            Drag to explore · Wheel or pinch to zoom
+          </div>
+        )}
       </div>
       {/*
         `.terrain-attribution` renders as a sibling of `.globe-shell` under
