@@ -133,10 +133,34 @@ describe("vercel-prebuilt-artifact", () => {
     });
 
     expect(result.manifest.files[0]).toMatchObject({
+      type: "symlink",
+      linkTarget: "target.txt",
       bytes: 10,
       sha1: createHash("sha1").update("target.txt").digest("hex"),
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "requires the prebuilt output root to be a real directory",
+    async () => {
+      const root = await createWorkspace();
+      await mkdir(path.join(root, ".vercel"), { recursive: true });
+      await mkdir(path.join(root, "outside"), { recursive: true });
+      await symlink(
+        path.join(root, "outside"),
+        path.join(root, ".vercel", "output"),
+        "dir",
+      );
+
+      await expect(
+        createVercelPrebuiltArtifactManifest({
+          repositoryRoot: root,
+          sourceCommitSha: "a".repeat(40),
+          candidateManifestSha256: "b".repeat(64),
+        }),
+      ).rejects.toThrow(/real directory/i);
+    },
+  );
 
   it("writes and reloads a content-addressed manifest", async () => {
     const root = await createWorkspace();

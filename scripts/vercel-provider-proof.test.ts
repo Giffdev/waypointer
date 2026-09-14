@@ -146,7 +146,10 @@ function expectationFixture(
     },
     prebuiltArtifact: {
       manifestSha256: "a".repeat(64),
-      files,
+      files: files.map((file) => ({
+        ...file,
+        type: "file" as const,
+      })),
     },
     candidateManifestSha256: "3".repeat(64),
     approvedAirportCandidateSha256: "4".repeat(64),

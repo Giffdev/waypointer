@@ -179,28 +179,65 @@ jobs:
           FLIGHT_MAP_DEPLOY_PREPARE_ONLY: "true"
         run: npm run deploy:production
 
+      - name: Package exact prebuilt artifact for transport
+        if: inputs.operation == 'prepare'
+        env:
+          FLIGHT_MAP_APPROVED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+        run: npm run pack:production-artifact
+
       - name: Upload artifact for independent review
         if: inputs.operation == 'prepare'
         uses: actions/upload-artifact@v4
         with:
           name: vercel-prebuilt-${{ inputs.reviewed_commit_sha }}
           path: |
-            .vercel/output/**
             artifacts/release-evidence/airport-catalog/candidate-*.json
             artifacts/release-evidence/vercel-prebuilt-artifact/manifest-*.json
+            artifacts/release-evidence/vercel-prebuilt-transport/bundle-*.tar
+            artifacts/release-evidence/vercel-prebuilt-transport/transport-*.json
           if-no-files-found: error
           include-hidden-files: true
+          compression-level: 0
           retention-days: 14
+
+      - name: Validate prepared workflow run provenance
+        if: inputs.operation == 'deploy'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+          REVIEWED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PREPARED_RUN_ID" =~ ^[0-9]+$ ]]
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "$API_URL/repos/$REPOSITORY/actions/runs/$PREPARED_RUN_ID" |
+            node node_modules/tsx/dist/cli.mjs \
+              scripts/validate-prepared-vercel-run.ts \
+              "$REVIEWED_COMMIT_SHA"
 
       - name: Download independently reviewed artifact
         if: inputs.operation == 'deploy'
         uses: actions/download-artifact@v4
         with:
           name: vercel-prebuilt-${{ inputs.reviewed_commit_sha }}
-          path: .
+          path: artifacts/release-evidence
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ inputs.prepared_run_id }}
+
+      - name: Restore and verify exact prebuilt artifact
+        if: inputs.operation == 'deploy'
+        env:
+          FLIGHT_MAP_APPROVED_COMMIT_SHA: ${{ inputs.reviewed_commit_sha }}
+          AIRPORT_RELEASE_CANDIDATE_MANIFEST_SHA256: ${{ inputs.candidate_manifest_sha256 }}
+          FLIGHT_MAP_APPROVED_PREBUILT_ARTIFACT_MANIFEST_SHA256: ${{ inputs.prebuilt_artifact_manifest_sha256 }}
+        run: npm run restore:production-artifact
 
       - name: Restore fixed Vercel project linkage
         if: inputs.operation == 'deploy'

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Vercel production-candidate artifacts now carry `.vercel/output` inside a
+  deterministic, content-addressed GNU tar transport. Deploy runs verify the
+  prepared workflow run, archive hash, tar member paths and types, duplicate
+  names, and symlink targets before extraction. The independently approved
+  prebuilt manifest now distinguishes regular files from symlinks and binds
+  exact link targets, preventing GitHub artifact handling or type substitution
+  from producing a different deployable bundle.
 - **The import screen no longer lists your past imports.** The "Your batches"
   history showed every import you had ever run — committed, deduplicated,
   cancelled, and expired alike — which is a growing list of finished work you

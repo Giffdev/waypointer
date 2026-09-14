@@ -289,8 +289,16 @@ distinct identity:
    itself succeeded), and additionally requires the workflow requester
    (`github.actor`) to be the repository owner. It fails closed if either
    identity check does not resolve to the owner.
-3. `prepare` builds and uploads a prebuilt artifact for review; `deploy`
-   downloads that reviewed artifact and deploys it unmodified.
+3. `prepare` builds the prebuilt output, records its file manifest, and wraps
+   `.vercel/output` in a deterministic GNU tar archive so GitHub artifact
+   transport cannot expand Vercel function symlinks. The manifest binds each
+   entry's filesystem type and each symlink's exact target. Before downloading,
+   `deploy` verifies that the supplied prepare run successfully completed this
+   workflow on `main` at the reviewed commit. It then verifies the
+   content-addressed transport manifest and archive hash and rejects unsafe,
+   duplicate, linked, special, or traversing tar members before extraction.
+   The restored file manifest must exactly match the independently approved
+   prebuilt manifest before deployment.
 
 This replaced an earlier requirement that the approver be a *different*
 GitHub identity from the requester, which is impossible for a solo
