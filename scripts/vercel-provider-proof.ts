@@ -18,6 +18,10 @@ import {
   sha256Bytes,
 } from "./airport-release-provenance.ts";
 import { requireRepositoryPath } from "./airport-release-safety.ts";
+import {
+  compareCanonicalPaths,
+  isWellFormedString,
+} from "./canonical-path-order.ts";
 import { AirportCatalogSafetyError } from "./postgres-diagnostics.ts";
 import type {
   VercelPrebuiltArtifactEntry,
@@ -302,6 +306,7 @@ function validateDeploymentSourceFiles(
     files.some(
       (file, index) =>
         !file.path ||
+        !isWellFormedString(file.path) ||
         path.posix.isAbsolute(file.path) ||
         file.path.split("/").includes("..") ||
         file.path.includes("\\") ||
@@ -309,7 +314,8 @@ function validateDeploymentSourceFiles(
         file.bytes < 0 ||
         !/^[a-f0-9]{40}$/.test(file.sha1 ?? "") ||
         !validSha256(file.sha256) ||
-        (index > 0 && files[index - 1]!.path >= file.path),
+        (index > 0 &&
+          compareCanonicalPaths(files[index - 1]!.path, file.path) >= 0),
     )
   ) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
@@ -546,6 +552,7 @@ function flattenProviderFileTree(
       !name ||
       name === "." ||
       name === ".." ||
+      !isWellFormedString(name) ||
       name.includes("/") ||
       name.includes("\\")
     ) {
@@ -575,9 +582,14 @@ function verifyProviderSource(
   expectation: PrebuiltProviderReleaseExpectation,
   entries: VercelFileTreeEntry[],
 ): string {
-  const providerFiles = flattenProviderFileTree(entries).sort((left, right) =>
-    left.path.localeCompare(right.path),
-  );
+  let providerFiles: ReturnType<typeof flattenProviderFileTree>;
+  try {
+    providerFiles = flattenProviderFileTree(entries).sort((left, right) =>
+      compareCanonicalPaths(left.path, right.path),
+    );
+  } catch {
+    throw new AirportCatalogSafetyError("health-check-failed");
+  }
   const expectedFiles = expectation.prebuiltArtifact.files;
   if (
     providerFiles.length !== expectedFiles.length ||
@@ -618,6 +630,7 @@ function walkProviderFileTree(
       !name ||
       name === "." ||
       name === ".." ||
+      !isWellFormedString(name) ||
       name.includes("/") ||
       name.includes("\\") ||
       typeof entry.type !== "string"
@@ -804,7 +817,9 @@ function parseSourceTar(
   if (!terminated) {
     throw new AirportCatalogSafetyError("health-check-failed");
   }
-  return files.sort((left, right) => left.path.localeCompare(right.path));
+  return files.sort((left, right) =>
+    compareCanonicalPaths(left.path, right.path),
+  );
 }
 
 export function verifyProviderSourceArchiveContents(

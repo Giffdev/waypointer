@@ -8,6 +8,10 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import {
+  compareCanonicalPaths,
+  isWellFormedString,
+} from "./canonical-path-order.ts";
+import {
   AirportCatalogSafetyError,
   assertNoRawPostgresNotice,
 } from "./postgres-diagnostics.ts";
@@ -157,9 +161,13 @@ export interface ValidationCommandEvidence {
 function sortedValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortedValue);
   if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (entries.some(([key]) => !isWellFormedString(key))) {
+      throw new TypeError("Canonical JSON keys must be well-formed Unicode strings");
+    }
     return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => left.localeCompare(right))
+      entries
+        .sort(([left], [right]) => compareCanonicalPaths(left, right))
         .map(([key, entry]) => [key, sortedValue(entry)]),
     );
   }
@@ -255,16 +263,30 @@ function validBaselineSelection(
     extraFiles: [...historicalSelection.extraFiles],
   };
   return (
-    canonicalJson(selection) === canonicalJson(legacySelection) ||
-    canonicalJson(selection) === canonicalJson(historicalSelection) ||
-    canonicalJson(selection) === canonicalJson(selectionValue())
+    canonicalJsonForProvenance(selection) ===
+      canonicalJsonForProvenance(legacySelection) ||
+    canonicalJsonForProvenance(selection) ===
+      canonicalJsonForProvenance(historicalSelection) ||
+    canonicalJsonForProvenance(selection) ===
+      canonicalJsonForProvenance(selectionValue())
   );
+}
+
+function canonicalJsonForProvenance(value: unknown): string {
+  try {
+    return canonicalJson(value);
+  } catch {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
 }
 
 async function hashFiles(relativePaths: string[]): Promise<
   CandidateFileEntry[]
 > {
-  const uniquePaths = [...new Set(relativePaths)].sort();
+  if (relativePaths.some((relativePath) => !isWellFormedString(relativePath))) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+  const uniquePaths = [...new Set(relativePaths)].sort(compareCanonicalPaths);
   if (uniquePaths.length !== relativePaths.length || uniquePaths.length === 0) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
   }
@@ -356,11 +378,14 @@ function validateFileEntries(files: CandidateFileEntry[]) {
     files.length === 0 ||
     files.some(
       (file, index) =>
+        typeof file.path !== "string" ||
         !file.path ||
+        !isWellFormedString(file.path) ||
         !Number.isSafeInteger(file.bytes) ||
         file.bytes < 0 ||
         !/^[a-f0-9]{64}$/.test(file.sha256) ||
-        (index > 0 && files[index - 1]!.path >= file.path),
+        (index > 0 &&
+          compareCanonicalPaths(files[index - 1]!.path, file.path) >= 0),
     )
   ) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
@@ -434,7 +459,8 @@ async function loadBaseline() {
     const baselineFile = baselineByPath.get(rejectedFile.path);
     if (
       !baselineFile ||
-      canonicalJson(baselineFile) !== canonicalJson(rejectedFile)
+      canonicalJsonForProvenance(baselineFile) !==
+        canonicalJsonForProvenance(rejectedFile)
     ) {
       throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
     }
@@ -452,19 +478,24 @@ async function loadBaseline() {
   };
 }
 
-export async function createCandidateManifest(): Promise<
-  AirportReleaseCandidateManifest
-> {
-  const {
-    baseline,
-    baselineReference,
-    rejectedReference,
-  } = await loadBaseline();
-  const source = await createRepositorySourceManifest();
-  const deploymentSource = await createDeploymentSourceManifest();
-  const before = new Map(baseline.files.map((file) => [file.path, file]));
-  const after = new Map(source.files.map((file) => [file.path, file]));
-  const paths = [...new Set([...before.keys(), ...after.keys()])].sort();
+export function createCandidateDiff(
+  beforeFiles: readonly CandidateFileEntry[],
+  afterFiles: readonly CandidateFileEntry[],
+): AirportReleaseCandidateManifest["diff"] {
+  if (
+    [...beforeFiles, ...afterFiles].some(
+      (file) =>
+        typeof file.path !== "string" ||
+        !isWellFormedString(file.path),
+    )
+  ) {
+    throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
+  }
+  const before = new Map(beforeFiles.map((file) => [file.path, file]));
+  const after = new Map(afterFiles.map((file) => [file.path, file]));
+  const paths = [...new Set([...before.keys(), ...after.keys()])].sort(
+    compareCanonicalPaths,
+  );
   const entries: CandidateDiffEntry[] = [];
   let unchanged = 0;
   for (const filePath of paths) {
@@ -501,6 +532,23 @@ export async function createCandidateManifest(): Promise<
     entries,
   };
   return {
+    sha256: sha256Bytes(canonicalJson(diffCore)),
+    ...diffCore,
+  };
+}
+
+export async function createCandidateManifest(): Promise<
+  AirportReleaseCandidateManifest
+> {
+  const {
+    baseline,
+    baselineReference,
+    rejectedReference,
+  } = await loadBaseline();
+  const source = await createRepositorySourceManifest();
+  const deploymentSource = await createDeploymentSourceManifest();
+  const diff = createCandidateDiff(baseline.files, source.files);
+  return {
     schemaVersion: 3,
     provenanceMode: "content-addressed-repository-and-provider-source",
     baseline: {
@@ -519,10 +567,7 @@ export async function createCandidateManifest(): Promise<
       selection: deploymentSource.selection,
       files: deploymentSource.files,
     },
-    diff: {
-      sha256: sha256Bytes(canonicalJson(diffCore)),
-      ...diffCore,
-    },
+    diff,
   };
 }
 
@@ -573,11 +618,15 @@ export async function loadCandidateManifestArtifact(
     (entry, index) =>
       typeof entry.path === "string" &&
       entry.path !== "" &&
+      isWellFormedString(entry.path) &&
       !path.posix.isAbsolute(entry.path) &&
       !entry.path.includes("\\") &&
       !entry.path.split("/").includes("..") &&
       (index === 0 ||
-        manifest.diff.entries[index - 1]!.path < entry.path) &&
+        compareCanonicalPaths(
+          manifest.diff.entries[index - 1]!.path,
+          entry.path,
+        ) < 0) &&
       ["added", "modified", "deleted"].includes(entry.status) &&
       (entry.beforeSha256 === undefined ||
         /^[a-f0-9]{64}$/.test(entry.beforeSha256)) &&
@@ -604,10 +653,10 @@ export async function loadCandidateManifestArtifact(
     entries: manifest.diff.entries,
   };
   if (
-    canonicalJson(manifest.source.selection) !==
-      canonicalJson(selectionValue()) ||
-    canonicalJson(manifest.deploymentSource.selection) !==
-      canonicalJson({
+    canonicalJsonForProvenance(manifest.source.selection) !==
+      canonicalJsonForProvenance(selectionValue()) ||
+    canonicalJsonForProvenance(manifest.deploymentSource.selection) !==
+      canonicalJsonForProvenance({
         roots: [...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.roots],
         topLevelFiles: [
           ...DEPLOYMENT_SOURCE_MANIFEST_SELECTION.topLevelFiles,
@@ -642,11 +691,12 @@ export async function loadCandidateManifestArtifact(
         .length ||
     !Number.isSafeInteger(manifest.diff.unchanged) ||
     manifest.diff.unchanged < 0 ||
-    sha256Bytes(canonicalJson(sourceManifest)) !==
+    sha256Bytes(canonicalJsonForProvenance(sourceManifest)) !==
       manifest.source.manifestSha256 ||
-    sha256Bytes(canonicalJson(deploymentManifest)) !==
+    sha256Bytes(canonicalJsonForProvenance(deploymentManifest)) !==
       manifest.deploymentSource.manifestSha256 ||
-    sha256Bytes(canonicalJson(diffCore)) !== manifest.diff.sha256
+    sha256Bytes(canonicalJsonForProvenance(diffCore)) !==
+      manifest.diff.sha256
   ) {
     throw new AirportCatalogSafetyError("candidate-provenance-mismatch");
   }

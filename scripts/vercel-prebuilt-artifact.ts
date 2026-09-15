@@ -9,6 +9,11 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  compareCanonicalPaths,
+  isWellFormedString,
+} from "./canonical-path-order.ts";
+
 const PREBUILT_OUTPUT_DIRECTORY = ".vercel/output";
 const CONTENT_ADDRESS_PATTERN = /^[a-f0-9]{64}$/u;
 
@@ -95,7 +100,7 @@ async function collectFiles(directory: string): Promise<string[]> {
   const files: string[] = [];
 
   for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    compareCanonicalPaths(left.name, right.name),
   )) {
     const absolutePath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
@@ -204,7 +209,7 @@ export async function createVercelPrebuiltArtifactManifest(options: {
   const files = await Promise.all(
     uploadFiles.map((filePath) => hashUploadFile(repositoryRoot, filePath)),
   );
-  files.sort((left, right) => left.path.localeCompare(right.path));
+  files.sort((left, right) => compareCanonicalPaths(left.path, right.path));
 
   if (options.dryRun !== undefined) {
     const dryRunByPath = new Map(
@@ -305,6 +310,7 @@ export async function loadVercelPrebuiltArtifactManifest(
     manifest.files.some(
       (file, index) =>
         typeof file.path !== "string" ||
+        !isWellFormedString(file.path) ||
         !file.path.startsWith(`${PREBUILT_OUTPUT_DIRECTORY}/`) ||
         file.path.includes("\\") ||
         path.posix.isAbsolute(file.path) ||
@@ -324,7 +330,11 @@ export async function loadVercelPrebuiltArtifactManifest(
               file.sha1 ||
             createHash("sha256").update(file.linkTarget).digest("hex") !==
               file.sha256)) ||
-        (index > 0 && manifest.files[index - 1]!.path >= file.path),
+        (index > 0 &&
+          compareCanonicalPaths(
+            manifest.files[index - 1]!.path,
+            file.path,
+          ) >= 0),
     )
   ) {
     throw new Error("Prebuilt artifact manifest is invalid");
