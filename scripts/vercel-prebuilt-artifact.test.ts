@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { compareCanonicalPaths } from "./canonical-path-order";
 import {
   createVercelPrebuiltArtifactManifest,
   loadVercelPrebuiltArtifactManifest,
@@ -183,5 +184,94 @@ describe("vercel-prebuilt-artifact", () => {
         result.manifestSha256,
       ),
     ).resolves.toEqual(result);
+  });
+
+  it("produces and validates manifests in locale-independent bytewise order", async () => {
+    const root = await createWorkspace();
+    const outputDirectory = path.join(root, ".vercel", "output");
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(path.join(outputDirectory, "Z-entry"), "uppercase");
+    await writeFile(path.join(outputDirectory, "a-entry"), "lowercase");
+
+    const result = await createVercelPrebuiltArtifactManifest({
+      repositoryRoot: root,
+      sourceCommitSha: "a".repeat(40),
+      candidateManifestSha256: "b".repeat(64),
+    });
+    const canonicalPaths = [
+      ".vercel/output/Z-entry",
+      ".vercel/output/a-entry",
+    ];
+
+    expect(
+      [...canonicalPaths].sort(compareCanonicalPaths),
+    ).toEqual(canonicalPaths);
+    for (const locale of ["en", "sv", "tr"]) {
+      expect(
+        [...canonicalPaths].sort(new Intl.Collator(locale).compare),
+      ).toEqual([...canonicalPaths].reverse());
+    }
+    expect(result.manifest.files.map((file) => file.path)).toEqual(
+      canonicalPaths,
+    );
+
+    const manifestPath = await writeVercelPrebuiltArtifactManifest(result, {
+      repositoryRoot: root,
+    });
+    await expect(
+      loadVercelPrebuiltArtifactManifest(
+        manifestPath,
+        result.manifestSha256,
+      ),
+    ).resolves.toEqual(result);
+
+    const localeOrderedPath = path.join(root, "locale-ordered.json");
+    await writeFile(
+      localeOrderedPath,
+      `${JSON.stringify(
+        {
+          ...result.manifest,
+          files: [...result.manifest.files].reverse(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await expect(
+      loadVercelPrebuiltArtifactManifest(localeOrderedPath),
+    ).rejects.toThrow(/manifest is invalid/i);
+  });
+
+  it("rejects a single malformed manifest path at the artifact boundary", async () => {
+    const root = await createWorkspace();
+    const outputDirectory = path.join(root, ".vercel", "output");
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(path.join(outputDirectory, "config.json"), "{}");
+    const result = await createVercelPrebuiltArtifactManifest({
+      repositoryRoot: root,
+      sourceCommitSha: "a".repeat(40),
+      candidateManifestSha256: "b".repeat(64),
+    });
+    const malformedPath = path.join(root, "malformed.json");
+    await writeFile(
+      malformedPath,
+      `${JSON.stringify(
+        {
+          ...result.manifest,
+          files: [
+            {
+              ...result.manifest.files[0],
+              path: ".vercel/output/\ud800",
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await expect(
+      loadVercelPrebuiltArtifactManifest(malformedPath),
+    ).rejects.toThrow(/manifest is invalid/i);
   });
 });
